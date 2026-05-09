@@ -1,0 +1,106 @@
+services:
+  qdrant:
+    image: qdrant/qdrant:latest
+    ports: ["6333:6333"]
+    volumes: [qdrant_data:/qdrant/storage]
+    healthcheck:
+      test: ["CMD-SHELL", "bash -c ':> /dev/tcp/127.0.0.1/6333' || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  postgres:
+    image: postgres:16
+    environment:
+      POSTGRES_USER: evalrag
+      POSTGRES_PASSWORD: pw
+      POSTGRES_DB: evalrag
+    ports: ["5434:5432"]
+    volumes: [pg_data:/var/lib/postgresql/data]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U evalrag -d evalrag"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  redis:
+    image: redis:7
+    ports: ["6381:6379"]
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+
+  langfuse:
+    image: langfuse/langfuse:latest
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgresql://evalrag:pw@postgres:5432/evalrag
+      NEXTAUTH_SECRET: devsecret
+      NEXTAUTH_URL: http://localhost:3100
+      SALT: devsalt
+    ports: ["3100:3000"]
+
+  backend:
+    build:
+      context: ../backend
+      dockerfile: Dockerfile
+    env_file:
+      - ../.env
+    environment:
+      # Container-internal URLs (override anything env_file might set):
+      # services talk to each other via Compose DNS, not localhost.
+      QDRANT_URL: http://qdrant:6333
+      POSTGRES_URL: postgresql+psycopg://evalrag:pw@postgres:5432/evalrag
+      REDIS_URL: redis://redis:6379/0
+      LANGFUSE_HOST: http://langfuse:3000
+      # Inside the container, "localhost" is the container; host-gateway reaches the laptop.
+      OLLAMA_HOST: http://host.docker.internal:11434
+      # Everything else (API keys, GENERATOR_PROVIDER, OLLAMA_MODEL, OPENAI_GENERATOR_MODEL,
+      # WANDB_*, LANGFUSE_*) comes from env_file (../.env). Don't list them here —
+      # `environment:` overrides env_file, so empty `${VAR:-}` defaults would silently
+      # zero out values supplied in .env.
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    dns:
+      - 8.8.8.8
+      - 1.1.1.1
+    volumes:
+      - ../backend/app:/app/app
+      - ../scripts:/scripts
+      - ../data:/data
+      # Bind-mounted from the host so the embedding model can be pre-downloaded
+      # outside the container — works around Docker Desktop DNS hiccups.
+      - ../.hf_cache:/root/.cache/huggingface
+    ports: ["8011:8000"]
+    depends_on:
+      qdrant:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  frontend:
+    build:
+      context: ../frontend
+      dockerfile: Dockerfile
+    environment:
+      VITE_BACKEND_URL: http://backend:8000
+    volumes:
+      - ../frontend/src:/app/src
+      - ../frontend/index.html:/app/index.html
+      - ../frontend/vite.config.ts:/app/vite.config.ts
+      - ../frontend/tsconfig.json:/app/tsconfig.json
+      - ../frontend/tailwind.config.js:/app/tailwind.config.js
+      - ../frontend/postcss.config.js:/app/postcss.config.js
+    ports: ["5173:5173"]
+    depends_on:
+      - backend
+
+volumes:
+  qdrant_data:
+  pg_data:

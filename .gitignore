@@ -1,0 +1,51 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.venv/
+venv/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+*.egg-info/
+
+# Node / frontend
+node_modules/
+dist/
+build/
+.vite/
+
+# Secrets & local config
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.crt
+*_rsa
+*_dsa
+*_ed25519
+.aws/
+.gcloud/
+
+# IDE / editor
+.vscode/
+.idea/
+*.swp
+*.swo
+.DS_Store
+Thumbs.db
+
+# Local Claude / agent state
+.claude/
+
+# Runtime data (generated locally)
+.hf_cache/
+data/eval_runs/
+data/human_ratings/
+*.log
+
+# OS / misc
+*.bak
+*.tmp

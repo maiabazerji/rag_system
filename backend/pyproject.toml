@@ -1,0 +1,53 @@
+[project]
+name = "evalrag"
+version = "0.1.0"
+description = "Production LLM Evaluation & Advanced RAG Platform"
+requires-python = ">=3.11"
+dependencies = [
+    "fastapi>=0.115",
+    "uvicorn[standard]>=0.30",
+    "pydantic>=2.8",
+    "pydantic-settings>=2.4",
+    "httpx>=0.27",
+    "anthropic>=0.39",
+    "openai>=1.50",
+    "qdrant-client>=1.12",
+    "rank-bm25>=0.2.2",
+    "sentence-transformers>=3.0",
+    "unstructured>=0.15",
+    "pypdf>=4.3",
+    "sqlalchemy>=2.0",
+    "alembic>=1.13",
+    "psycopg[binary]>=3.2",
+    "redis>=5.0",
+    "rq>=1.16",
+    "ragas>=0.2",
+    "langfuse>=2.50",
+    "instructor>=1.5",
+    "python-multipart>=0.0.9",
+    "wandb>=0.18",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.3",
+    "pytest-asyncio>=0.24",
+    "ruff>=0.6",
+    "mypy>=1.11",
+    "httpx>=0.27",
+]
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["app*"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"

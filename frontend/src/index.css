@@ -1,0 +1,65 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  html, body, #root { height: 100%; }
+  body {
+    @apply bg-bg text-zinc-200 font-sans antialiased;
+    font-feature-settings: "ss01", "cv11";
+  }
+  h1, h2, h3 {
+    font-feature-settings: "ss01";
+    letter-spacing: -0.01em;
+  }
+  ::selection { @apply bg-accent/30 text-white; }
+  ::-webkit-scrollbar { width: 10px; height: 10px; }
+  ::-webkit-scrollbar-thumb { @apply bg-bg-border rounded-full; }
+  ::-webkit-scrollbar-thumb:hover { @apply bg-zinc-600; }
+}
+
+@layer components {
+  .card {
+    @apply bg-bg-surface border border-bg-border rounded-xl p-6;
+  }
+  .btn {
+    @apply inline-flex items-center justify-center gap-2 px-4 py-2 rounded-lg font-medium
+           transition-colors disabled:opacity-50 disabled:cursor-not-allowed select-none;
+  }
+  .btn-primary {
+    @apply btn bg-accent text-bg hover:bg-accent-hover active:scale-[0.98];
+  }
+  .btn-ghost {
+    @apply btn text-zinc-300 hover:bg-bg-elevated hover:text-white border border-bg-border;
+  }
+  .input {
+    @apply w-full bg-bg-elevated border border-bg-border rounded-lg px-4 py-3
+           text-zinc-100 placeholder:text-zinc-500
+           focus:outline-none focus:border-accent/60 focus:ring-1 focus:ring-accent/30
+           transition-colors;
+  }
+  .chip {
+    @apply inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium
+           bg-bg-elevated border border-bg-border text-zinc-300;
+  }
+  .nav-link {
+    @apply flex items-center gap-3 px-3 py-2 rounded-lg text-sm font-medium
+           text-zinc-400 hover:text-white hover:bg-bg-elevated transition-colors;
+  }
+  .nav-link.active {
+    @apply text-white bg-bg-elevated;
+  }
+  .nav-link.active::before {
+    content: "";
+    @apply w-1 h-4 -ml-1 mr-1 bg-accent rounded-full;
+  }
+  .skeleton {
+    background: linear-gradient(90deg, #1c1e23 0%, #262932 50%, #1c1e23 100%);
+    background-size: 200% 100%;
+    @apply animate-shimmer rounded-md;
+  }
+  .display {
+    @apply font-display tracking-tight;
+    font-variation-settings: "opsz" 96, "SOFT" 50;
+  }
+}
