@@ -1,10 +1,10 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from app.api import ask, compare, eval_routes, ingest, traces
+from app.api import ask, compare, eval_routes, graph, ingest, traces
 from app.config import settings
 
-app = FastAPI(title="EvalRAG", version="0.1.0")
+app = FastAPI(title="EvalRAG", version="0.2.0")
 
 app.add_middleware(
     CORSMiddleware,
@@ -16,6 +16,7 @@ app.add_middleware(
 app.include_router(ingest.router, prefix="/ingest", tags=["ingest"])
 app.include_router(ask.router, prefix="/ask", tags=["ask"])
 app.include_router(compare.router, prefix="/compare", tags=["compare"])
+app.include_router(graph.router, prefix="/graph", tags=["graph"])
 app.include_router(eval_routes.router, prefix="/eval", tags=["eval"])
 app.include_router(traces.router, prefix="/traces", tags=["traces"])
 

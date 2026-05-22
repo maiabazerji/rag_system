@@ -48,6 +48,7 @@ services:
     build:
       context: ../backend
       dockerfile: Dockerfile
+      network: host
     env_file:
       - ../.env
     environment:
@@ -59,15 +60,16 @@ services:
       LANGFUSE_HOST: http://langfuse:3000
       # Inside the container, "localhost" is the container; host-gateway reaches the laptop.
       OLLAMA_HOST: http://host.docker.internal:11434
+      # Model is pre-downloaded into the bind-mounted cache below — skip HF's online
+      # "check for updates" call, which intermittently dies with closed-httpx-client.
+      HF_HUB_OFFLINE: "1"
+      TRANSFORMERS_OFFLINE: "1"
       # Everything else (API keys, GENERATOR_PROVIDER, OLLAMA_MODEL, OPENAI_GENERATOR_MODEL,
       # WANDB_*, LANGFUSE_*) comes from env_file (../.env). Don't list them here —
       # `environment:` overrides env_file, so empty `${VAR:-}` defaults would silently
       # zero out values supplied in .env.
     extra_hosts:
       - "host.docker.internal:host-gateway"
-    dns:
-      - 8.8.8.8
-      - 1.1.1.1
     volumes:
       - ../backend/app:/app/app
       - ../scripts:/scripts

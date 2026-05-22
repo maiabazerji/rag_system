@@ -15,9 +15,17 @@ type Answer = {
 
 type Turn = { question: string; answer?: Answer; error?: string; loading?: boolean };
 
+type Strategy = "classic" | "graph" | "agentic";
+const STRATEGIES: { id: Strategy; label: string; hint: string }[] = [
+  { id: "classic", label: "Classic", hint: "vector search → rerank → answer" },
+  { id: "graph", label: "Graph", hint: "entity walk on a Claude-built knowledge graph" },
+  { id: "agentic", label: "Agentic", hint: "Claude loops over search/fetch tools" },
+];
+
 export default function Ask() {
   const [q, setQ] = useState("");
   const [turns, setTurns] = useState<Turn[]>([]);
+  const [strategy, setStrategy] = useState<Strategy>("classic");
   const inputRef = useRef<HTMLTextAreaElement>(null);
 
   async function submit() {
@@ -27,7 +35,7 @@ export default function Ask() {
     setTurns((t) => [...t, { question, loading: true }]);
     setQ("");
     try {
-      const a = await post<Answer>("/ask", { question });
+      const a = await post<Answer>("/ask", { question, strategy });
       setTurns((t) => t.map((x, i) => (i === idx ? { question, answer: a } : x)));
     } catch (e: any) {
       setTurns((t) => t.map((x, i) => (i === idx ? { question, error: String(e.message || e) } : x)));
@@ -54,7 +62,30 @@ export default function Ask() {
         ))}
       </div>
 
-      <div className="sticky bottom-4 mt-2">
+      <div className="sticky bottom-4 mt-2 space-y-2">
+        <div className="flex flex-wrap items-center gap-1.5 text-xs">
+          <span className="text-zinc-500 uppercase tracking-wider mr-1">Strategy</span>
+          {STRATEGIES.map((s) => {
+            const active = strategy === s.id;
+            return (
+              <button
+                key={s.id}
+                onClick={() => setStrategy(s.id)}
+                title={s.hint}
+                className={`chip transition-colors ${
+                  active
+                    ? "!text-white !bg-accent/20 !border-accent/50"
+                    : "hover:!text-white"
+                }`}
+              >
+                {s.label}
+              </button>
+            );
+          })}
+          <span className="text-zinc-500 ml-1 hidden sm:inline">
+            · {STRATEGIES.find((s) => s.id === strategy)?.hint}
+          </span>
+        </div>
         <div className="card !p-2 flex items-end gap-2 ring-1 ring-bg-border focus-within:ring-accent/40 transition-shadow">
           <textarea
             ref={inputRef}

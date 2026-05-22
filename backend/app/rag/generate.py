@@ -1,12 +1,20 @@
+"""Orchestrator: takes a question and routes it to a RAG strategy.
+
+The strategy does the actual work; this file just:
+- picks a default provider/model when the caller didn't,
+- starts a trace,
+- catches provider errors uniformly,
+- times the call (latency_ms) for the comparison UI,
+- adapts the strategy's `StrategyResult` to the public `Answer` shape.
+"""
 from __future__ import annotations
 
+import time
+
 from app.config import settings
-from app.prompts import load_prompt
 from app.rag.providers import MissingKeyError, ProviderError
-from app.rag.providers import generate as provider_generate
-from app.rag.rerank import compress_context, rerank
-from app.rag.retrieve import hybrid_search
 from app.rag.store import count as store_count
+from app.rag.strategies import get_strategy
 from app.schemas import Answer, Source
 from app.tracing import start_trace
 
@@ -29,11 +37,13 @@ def _refusal(
     )
 
 
-def _default_model(provider: str) -> str:
+def _default_model(provider: str, strategy: str) -> str:
     if provider == "local":
         return settings.ollama_model
     if provider == "openai":
         return settings.openai_generator_model
+    if strategy == "agentic":
+        return settings.agentic_model
     return settings.generator_model
 
 
@@ -43,53 +53,93 @@ async def answer_question(
     provider: str | None = None,
     model: str | None = None,
     prompt_version: str | None = None,
+    strategy: str = "classic",
 ) -> Answer:
-    provider = provider or settings.generator_provider
-    model = model or _default_model(provider)
-    prompt = load_prompt(prompt_version or "default")
+    # The three new strategies all rely on Anthropic features (tool use, cheap
+    # graph extraction). We ignore `provider` for graph/agentic and always use
+    # Anthropic — surface that to the caller via the returned `provider` field.
+    if strategy in ("graph", "agentic"):
+        effective_provider = "anthropic"
+    else:
+        effective_provider = provider or settings.generator_provider
+    model = model or _default_model(effective_provider, strategy)
+    prompt_version = prompt_version or "default"
+
+    if store_count() == 0:
+        return _refusal(
+            question,
+            "No documents indexed yet. Upload files in the Ingest tab to start asking questions.",
+            provider=effective_provider,
+            model=model,
+        )
 
     with start_trace(
-        name="ask",
-        inputs={"question": question, "provider": provider, "model": model},
+        name=f"ask:{strategy}",
+        inputs={"question": question, "strategy": strategy, "provider": effective_provider, "model": model},
     ) as trace:
-        candidates = hybrid_search(question, top_k=settings.retrieval_top_k)
-        reranked = rerank(question, candidates, top_k=top_k)
-        context = compress_context(question, reranked)
-        trace.log("retrieval", {"candidates": len(candidates), "final": len(context)})
-
-        if not context:
-            indexed = store_count()
-            msg = (
-                "No documents indexed yet. Upload files in the Ingest tab to start asking questions."
-                if indexed == 0
-                else "I couldn't find anything relevant in the indexed documents."
-            )
-            return _refusal(question, msg, provider=provider, model=model)
-
-        ctx_block = "\n\n".join(f"[{c.id}]\n{c.text}" for c in context)
-        user_msg = prompt.template.replace("{question}", question).replace("{context}", ctx_block)
-
         try:
-            text = await provider_generate(
-                provider, model=model, prompt=user_msg, max_tokens=1024
+            strat = get_strategy(strategy)
+        except ValueError as e:
+            return _refusal(question, str(e), provider=effective_provider, model=model)
+
+        t0 = time.perf_counter()
+        try:
+            result = await strat.run(
+                question,
+                top_k=top_k,
+                model=model,
+                prompt_version=prompt_version,
             )
         except (MissingKeyError, ProviderError) as e:
-            return _refusal(
-                question,
-                str(e),
-                [Source(chunk_id=c.id, quote=c.text[:240]) for c in context[:3]],
-                provider=provider,
-                model=model,
-            )
+            return _refusal(question, str(e), provider=effective_provider, model=model)
+        latency_ms = int((time.perf_counter() - t0) * 1000)
+        result.latency_ms = latency_ms
 
-        trace.log("generation", {"provider": provider, "model": model, "chars": len(text)})
+        for event in result.trace:
+            trace.log(event.get("step", "step"), event)
+        trace.log(
+            "result",
+            {
+                "latency_ms": latency_ms,
+                "input_tokens": result.input_tokens,
+                "output_tokens": result.output_tokens,
+                "iterations": result.iterations,
+            },
+        )
 
         return Answer(
             question=question,
-            answer=text or "(empty response)",
-            sources=[Source(chunk_id=c.id, quote=c.text[:280]) for c in context[:5]],
-            confidence=0.85,
-            refusal=False,
-            provider=provider,
+            answer=result.answer,
+            sources=result.sources,
+            confidence=result.confidence,
+            refusal=result.refusal,
+            provider=effective_provider,
             model=model,
         )
+
+
+async def run_strategy_raw(
+    question: str,
+    *,
+    strategy: str,
+    model: str | None = None,
+    top_k: int = 8,
+    prompt_version: str = "default",
+):
+    """Internal: returns the full `StrategyResult` + telemetry (used by /compare/strategies)."""
+    model = model or _default_model("anthropic", strategy)
+    if store_count() == 0:
+        return None, "No documents indexed yet."
+    try:
+        strat = get_strategy(strategy)
+    except ValueError as e:
+        return None, str(e)
+    t0 = time.perf_counter()
+    try:
+        result = await strat.run(
+            question, top_k=top_k, model=model, prompt_version=prompt_version
+        )
+    except (MissingKeyError, ProviderError) as e:
+        return None, str(e)
+    result.latency_ms = int((time.perf_counter() - t0) * 1000)
+    return result, None

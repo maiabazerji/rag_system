@@ -32,11 +32,18 @@ class AskRequest(BaseModel):
     provider: str | None = None
     model: str | None = None
     prompt_version: str | None = None
+    strategy: str = "classic"  # classic | graph | agentic
 
 
 class CompareRequest(BaseModel):
     question: str
     variants: list[dict]  # [{provider, model, prompt_version}, ...]
+
+
+class CompareStrategiesRequest(BaseModel):
+    question: str
+    strategies: list[str] = ["classic", "graph", "agentic"]
+    model: str | None = None
 
 
 class EvalRunRequest(BaseModel):

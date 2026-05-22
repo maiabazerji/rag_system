@@ -24,18 +24,23 @@ class Settings(BaseSettings):
 
     embedding_model: str = "BAAI/bge-small-en-v1.5"
 
-    generator_provider: str = "local"
+    generator_provider: str = "anthropic"
     generator_model: str = "claude-sonnet-4-6"
     openai_generator_model: str = "gpt-4o-mini"
     ollama_host: str = "http://localhost:11434"
     ollama_model: str = "llama3.1:8b"
 
-    judge_model: str = "claude-opus-4-6"
+    judge_model: str = "claude-opus-4-7"
+    graph_extraction_model: str = "claude-haiku-4-5-20251001"
+    agentic_model: str = "claude-sonnet-4-6"
 
     chunk_size_tokens: int = 600
     chunk_overlap_tokens: int = 80
     retrieval_top_k: int = 50
     rerank_top_k: int = 8
+
+    agentic_max_iters: int = 6
+    graph_data_dir: str = "data/graph"
 
 
 settings = Settings()

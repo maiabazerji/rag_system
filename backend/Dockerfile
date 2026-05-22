@@ -2,12 +2,18 @@ FROM python:3.11-slim
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
-    PIP_NO_CACHE_DIR=1
+    PIP_NO_CACHE_DIR=1 \
+    PIP_DEFAULT_TIMEOUT=180 \
+    PIP_RETRIES=10
 
 WORKDIR /app
 
 COPY pyproject.toml ./
-RUN pip install --upgrade pip && pip install -e .[dev]
+# Install CPU-only torch first to avoid pulling ~2GB of CUDA wheels that
+# sentence-transformers' default torch dependency would otherwise drag in.
+RUN pip install --upgrade pip && \
+    pip install --index-url https://download.pytorch.org/whl/cpu torch && \
+    pip install -e .[dev]
 
 COPY app ./app
 COPY tests ./tests

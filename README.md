@@ -2,7 +2,24 @@
 
 A hands-on platform for building a **RAG** (retrieval-augmented generation) system *and* the **evaluation harness** that keeps it honest in production. See [EvalRAG.md](./EvalRAG.md) for the full A→Z blueprint.
 
+> 🎓 **New here? Read [`LEARN.md`](./LEARN.md) first.** It walks through the three
+> RAG strategies this project ships — **Classic**, **Graph**, and **Agentic** — with
+> the *why* behind each one, the exact files that implement them, and how to play
+> with all three side by side. All powered by the Anthropic API (Claude).
+
 This README is the **onboarding guide** — it explains what the project is, how the pieces fit together, and where to look in the code.
+
+## Three RAG strategies, one corpus
+
+| Strategy    | Retrieval logic                          | Implementation                                                | Best at                          |
+|-------------|------------------------------------------|---------------------------------------------------------------|----------------------------------|
+| **Classic** | embed → vector search → rerank → answer  | [`backend/app/rag/strategies/classic.py`](backend/app/rag/strategies/classic.py) | single-fact lookups              |
+| **Graph**   | entity walk on a Claude-built knowledge graph | [`backend/app/rag/strategies/graph.py`](backend/app/rag/strategies/graph.py) + [`graph_store.py`](backend/app/rag/graph_store.py) + [`graph_extract.py`](backend/app/rag/graph_extract.py) | "how is X related to Y" multi-hop |
+| **Agentic** | Claude drives `search`/`fetch`/`finish` tools in a loop | [`backend/app/rag/strategies/agentic.py`](backend/app/rag/strategies/agentic.py) + [`tool_use_loop`](backend/app/rag/providers/anthropic_provider.py) | ambiguous, multi-step questions  |
+
+The **Compare page** (`/compare` in the UI, `POST /compare/strategies` on the API) fans
+the same question out to all three strategies in parallel and renders the answers,
+sources, latency, token cost, and reasoning trace side by side.
 
 ---
 
@@ -30,17 +47,18 @@ Backing stores (run via Docker): **Qdrant** (vectors), **Postgres** (docs, eval 
 
 ## What happens when you ask a question
 
-Follow the trace below to learn the codebase in the order the bytes flow:
+A question now flows through a **dispatcher** that picks the strategy:
 
-1. **`POST /ask`** → [`backend/app/api/ask.py`](backend/app/api/ask.py) — thin FastAPI route, delegates to `answer_question`.
-2. **`answer_question`** → [`backend/app/rag/generate.py`](backend/app/rag/generate.py) — the orchestrator. Opens a trace span, then:
-3. **`hybrid_search`** → [`backend/app/rag/retrieve.py`](backend/app/rag/retrieve.py) — embeds the query and asks Qdrant for the top-K similar chunks.
-4. **`embed_query`** → [`backend/app/rag/embed.py`](backend/app/rag/embed.py) — turns text into a vector.
-5. **`rerank`** → [`backend/app/rag/rerank.py`](backend/app/rag/rerank.py) — a cross-encoder re-scores the top-K more precisely. *(Currently a pass-through stub.)*
-6. **`compress_context`** → same file — trim each chunk down to spans that actually matter to the query. *(Stub.)*
-7. **Prompt assembly** → [`backend/app/prompts/`](backend/app/prompts/) holds versioned prompt templates; `generate.py` fills in `{question}` and `{context}`.
-8. **LLM call** → `AsyncAnthropic` sends the filled prompt to Claude, returns the answer.
-9. **Trace close** → events recorded under an in-memory trace id you can fetch from `/traces/{id}`.
+1. **`POST /ask`** with `{"question": "...", "strategy": "classic" | "graph" | "agentic"}` → [`backend/app/api/ask.py`](backend/app/api/ask.py).
+2. **`answer_question`** → [`backend/app/rag/generate.py`](backend/app/rag/generate.py) — picks defaults, opens a trace, calls `get_strategy(strategy).run(...)`.
+3. The chosen strategy (in [`backend/app/rag/strategies/`](backend/app/rag/strategies/)) does its retrieval differently — but they all return the same `StrategyResult` shape (answer, sources, latency, tokens, trace).
+4. **LLM call** → all three strategies generate via `AsyncAnthropic` ([`anthropic_provider.py`](backend/app/rag/providers/anthropic_provider.py)). The agentic strategy uses the `tool_use_loop` helper instead of plain `generate`.
+5. **Trace close** → in-memory events you can fetch from `/traces/{id}`.
+
+The shared backbone (chunk → embed → vector search → rerank) lives at
+[`embed.py`](backend/app/rag/embed.py), [`store.py`](backend/app/rag/store.py),
+[`retrieve.py`](backend/app/rag/retrieve.py), [`rerank.py`](backend/app/rag/rerank.py) —
+every strategy uses it.
 
 The shape returned by every endpoint is defined in [`backend/app/schemas/`](backend/app/schemas/) — Pydantic models like `Answer`, `Source`, `AskRequest`. These also enforce structured outputs from the LLM (the "N" section of the blueprint).
 

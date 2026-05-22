@@ -14,4 +14,5 @@ async def ask(req: AskRequest) -> Answer:
         provider=req.provider,
         model=req.model,
         prompt_version=req.prompt_version,
+        strategy=req.strategy,
     )
