@@ -141,7 +141,7 @@ docker compose -f infra/docker-compose.yml up -d --build
 
 `up` creates the containers, `-d` runs them detached (background), `--build` rebuilds the local `backend` and `frontend` images from their Dockerfiles. First run downloads ~2 GB of base images; subsequent runs are seconds.
 
-### 3 · Open the appsdo
+### 3 · Open the apps
 
 | App      | URL                              | Notes                              |
 |----------|----------------------------------|------------------------------------|
