@@ -107,7 +107,7 @@ class GraphRAG(Strategy):
             }
         )
 
-        vector_chunks = hybrid_search(question, top_k=settings.retrieval_top_k)
+        vector_chunks = await hybrid_search(question, top_k=settings.retrieval_top_k)
         vector_ids = {c.id for c in vector_chunks}
         trace.append({"step": "vector_search", "chunks_from_vectors": len(vector_chunks)})
 

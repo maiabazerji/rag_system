@@ -47,7 +47,7 @@ async def build(limit: int | None = None, concurrency: int = 4) -> dict:
     call /graph/reset first if you want a clean rebuild."""
     # Pull all chunks back from Qdrant via a wide probe.
     probe = embed_query(" ")
-    hits = vector_search(probe, top_k=limit or 2048)
+    hits = await vector_search(probe, top_k=limit or 2048)
     chunks = [
         {
             "chunk_id": h.payload["chunk_id"],
@@ -62,18 +62,20 @@ async def build(limit: int | None = None, concurrency: int = 4) -> dict:
     pending = [c for c in chunks if c["chunk_id"] not in already_done]
 
     sem = asyncio.Semaphore(concurrency)
-    total_triples = 0
+    total_added = 0
+    total_skipped = 0
     failures: list[str] = []
 
     async def _work(c: dict) -> None:
-        nonlocal total_triples
+        nonlocal total_added, total_skipped
         async with sem:
             try:
                 triples = await extract_triples(
                     chunk_id=c["chunk_id"], doc_id=c["doc_id"], text=c["text"]
                 )
-                graph_store.append(triples)
-                total_triples += len(triples)
+                result = graph_store.append(triples)
+                total_added += result["added"]
+                total_skipped += result["skipped"]
             except Exception as e:
                 failures.append(f"{c['chunk_id']}: {type(e).__name__}: {e}")
 
@@ -82,7 +84,8 @@ async def build(limit: int | None = None, concurrency: int = 4) -> dict:
     return {
         "processed_chunks": len(pending),
         "skipped_chunks": len(chunks) - len(pending),
-        "new_triples": total_triples,
+        "new_triples": total_added,
+        "duplicate_triples": total_skipped,
         "failures": failures[:10],
         **graph_store.stats(),
     }

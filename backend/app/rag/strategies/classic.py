@@ -39,7 +39,7 @@ class ClassicRAG(Strategy):
     ) -> StrategyResult:
         prompt = load_prompt(prompt_version)
 
-        candidates = hybrid_search(question, top_k=settings.retrieval_top_k)
+        candidates = await hybrid_search(question, top_k=settings.retrieval_top_k)
         reranked = rerank(question, candidates, top_k=top_k)
         context = compress_context(question, reranked)
 

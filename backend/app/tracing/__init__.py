@@ -1,11 +1,13 @@
 from __future__ import annotations
 
 import uuid
+from collections import OrderedDict
 from contextlib import contextmanager
 from dataclasses import dataclass, field
 from typing import Any
 
-_TRACES: dict[str, dict] = {}
+_TRACES: OrderedDict[str, dict] = OrderedDict()
+_MAX_TRACES = 1000
 
 
 @dataclass
@@ -26,6 +28,8 @@ def start_trace(name: str, inputs: dict):
         yield t
     finally:
         _TRACES[t.id] = {"id": t.id, "name": t.name, "inputs": t.inputs, "events": t.events}
+        if len(_TRACES) > _MAX_TRACES:
+            _TRACES.popitem(last=False)
 
 
 def get_trace(trace_id: str) -> dict | None:

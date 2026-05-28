@@ -4,7 +4,7 @@ from pydantic import BaseModel, Field
 class Source(BaseModel):
     chunk_id: str
     quote: str
-    score: float | None = None
+    score: float | None = Field(default=None, ge=0, le=1)
 
 
 class Answer(BaseModel):
@@ -21,14 +21,14 @@ class Chunk(BaseModel):
     id: str
     doc_id: str
     text: str
-    tokens: int
+    tokens: int = Field(ge=0)
     section: str | None = None
     metadata: dict = Field(default_factory=dict)
 
 
 class AskRequest(BaseModel):
     question: str
-    top_k: int = 8
+    top_k: int = Field(default=8, ge=1, le=100)
     provider: str | None = None
     model: str | None = None
     prompt_version: str | None = None
@@ -73,3 +73,18 @@ class HumanRatingRequest(BaseModel):
 class HumanRating(HumanRatingRequest):
     id: str
     created_at: str
+
+
+class StrategyComparison(BaseModel):
+    strategy: str
+    question: str
+    answer: str
+    sources: list[Source]
+    confidence: float = Field(ge=0, le=1)
+    refusal: bool = False
+    latency_ms: int = Field(ge=0)
+    input_tokens: int = Field(ge=0)
+    output_tokens: int = Field(ge=0)
+    iterations: int = Field(ge=0)
+    trace: list[dict] = Field(default_factory=list)
+    extra: dict = Field(default_factory=dict)
