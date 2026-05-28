@@ -34,7 +34,7 @@ def chunk_text(text: str, size: int = 600, overlap: int = 80) -> list[str]:
     return chunks
 
 
-def enqueue_document(filename: str, content: bytes) -> dict:
+async def enqueue_document(filename: str, content: bytes) -> dict:
     doc_id = _hash(filename + str(len(content)))
     text = load_document(filename, content)
     chunks = [
@@ -49,5 +49,5 @@ def enqueue_document(filename: str, content: bytes) -> dict:
     ]
     if chunks:
         vectors = embed_texts([c.text for c in chunks])
-        upsert(chunks, vectors)
+        await upsert(chunks, vectors)
     return {"doc_id": doc_id, "filename": filename, "chunks": len(chunks)}

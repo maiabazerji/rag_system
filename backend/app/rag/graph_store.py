@@ -59,14 +59,20 @@ class GraphIndex:
     entity_to_edges: dict[str, list[tuple[str, str, str]]] = field(
         default_factory=lambda: defaultdict(list)
     )
+    _triple_ids: set[tuple[str, str, str, str]] = field(default_factory=set)
 
-    def add(self, t: Triple) -> None:
+    def add(self, t: Triple) -> bool:
+        tid = (t.subject, t.predicate, t.object, t.chunk_id)
+        if tid in self._triple_ids:
+            return False
+        self._triple_ids.add(tid)
         self.triples.append(t)
         s, o = _norm(t.subject), _norm(t.object)
         self.entity_to_chunks[s].add(t.chunk_id)
         self.entity_to_chunks[o].add(t.chunk_id)
         self.entity_to_edges[s].append((t.predicate, t.object, t.chunk_id))
         self.entity_to_edges[o].append((f"inv:{t.predicate}", t.subject, t.chunk_id))
+        return True
 
     @property
     def entities(self) -> list[str]:
@@ -102,17 +108,21 @@ def load() -> GraphIndex:
         return idx
 
 
-def append(triples: list[Triple]) -> None:
+def append(triples: list[Triple]) -> dict:
+    """Append triples, deduplicating. Returns {added: int, skipped: int}."""
     if not triples:
-        return
+        return {"added": 0, "skipped": 0}
     path = _triples_path()
+    idx = load()
+    added, skipped = 0, 0
     with _LOCK, path.open("a", encoding="utf-8") as f:
         for t in triples:
-            f.write(t.to_json() + "\n")
-        # Also update in-memory index so the next query sees the new triples.
-        if _INDEX is not None:
-            for t in triples:
-                _INDEX.add(t)
+            if idx.add(t):
+                f.write(t.to_json() + "\n")
+                added += 1
+            else:
+                skipped += 1
+    return {"added": added, "skipped": skipped}
 
 
 def reset() -> None:

@@ -9,10 +9,12 @@ router = APIRouter()
 @router.post("")
 async def ingest_document(file: UploadFile) -> dict:
     content = await file.read()
-    result = enqueue_document(filename=file.filename or "upload", content=content)
-    return {**result, "indexed_total": store_count()}
+    result = await enqueue_document(filename=file.filename or "upload", content=content)
+    total = await store_count()
+    return {**result, "indexed_total": total}
 
 
 @router.get("/stats")
 async def stats() -> dict:
-    return {"indexed_chunks": store_count()}
+    indexed = await store_count()
+    return {"indexed_chunks": indexed}

@@ -65,7 +65,7 @@ async def answer_question(
     model = model or _default_model(effective_provider, strategy)
     prompt_version = prompt_version or "default"
 
-    if store_count() == 0:
+    if await store_count() == 0:
         return _refusal(
             question,
             "No documents indexed yet. Upload files in the Ingest tab to start asking questions.",
@@ -128,7 +128,7 @@ async def run_strategy_raw(
 ):
     """Internal: returns the full `StrategyResult` + telemetry (used by /compare/strategies)."""
     model = model or _default_model("anthropic", strategy)
-    if store_count() == 0:
+    if await store_count() == 0:
         return None, "No documents indexed yet."
     try:
         strat = get_strategy(strategy)

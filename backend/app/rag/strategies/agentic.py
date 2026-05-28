@@ -116,7 +116,7 @@ class AgenticRAG(Strategy):
             q = args["query"]
             k = int(args.get("top_k", 5))
             vec = embed_query(q)
-            hits = vector_search(vec, top_k=k)
+            hits = await vector_search(vec, top_k=k)
             previews = []
             for h in hits:
                 cid = h.payload["chunk_id"]
@@ -132,7 +132,7 @@ class AgenticRAG(Strategy):
                 return cached["text"]
             # cache miss → search by id via a wide probe
             vec = embed_query(" ")
-            hits = vector_search(vec, top_k=512)
+            hits = await vector_search(vec, top_k=512)
             for h in hits:
                 if h.payload.get("chunk_id") == cid:
                     seen_chunks[cid] = {"doc_id": h.payload["doc_id"], "text": h.payload["text"]}

@@ -1,27 +1,30 @@
 from __future__ import annotations
 
 import hashlib
-from functools import lru_cache
 
-from qdrant_client import QdrantClient
+from qdrant_client.async_client import AsyncQdrantClient
 from qdrant_client.http import models as qm
 
 from app.config import settings
 from app.rag.embed import embedding_dim
 
-
-@lru_cache(maxsize=1)
-def client() -> QdrantClient:
-    c = QdrantClient(url=settings.qdrant_url)
-    _ensure_collection(c)
-    return c
+_client: AsyncQdrantClient | None = None
 
 
-def _ensure_collection(c: QdrantClient) -> None:
+async def client() -> AsyncQdrantClient:
+    global _client
+    if _client is None:
+        _client = AsyncQdrantClient(url=settings.qdrant_url)
+        await _ensure_collection(_client)
+    return _client
+
+
+async def _ensure_collection(c: AsyncQdrantClient) -> None:
     dim = embedding_dim()
-    existing = {col.name for col in c.get_collections().collections}
+    collections = await c.get_collections()
+    existing = {col.name for col in collections.collections}
     if settings.qdrant_collection in existing:
-        info = c.get_collection(settings.qdrant_collection)
+        info = await c.get_collection(settings.qdrant_collection)
         current = info.config.params.vectors.size
         if current != dim:
             raise RuntimeError(
@@ -30,7 +33,7 @@ def _ensure_collection(c: QdrantClient) -> None:
                 "Recreate the collection (delete it via Qdrant API or wipe the volume)."
             )
         return
-    c.create_collection(
+    await c.create_collection(
         collection_name=settings.qdrant_collection,
         vectors_config=qm.VectorParams(size=dim, distance=qm.Distance.COSINE),
     )
@@ -40,7 +43,7 @@ def _point_id(chunk_id: str) -> int:
     return int(hashlib.sha256(chunk_id.encode()).hexdigest()[:15], 16)
 
 
-def upsert(chunks, vectors) -> None:
+async def upsert(chunks, vectors) -> None:
     if not chunks:
         return
     points = [
@@ -56,16 +59,19 @@ def upsert(chunks, vectors) -> None:
         )
         for chunk, vec in zip(chunks, vectors)
     ]
-    client().upsert(collection_name=settings.qdrant_collection, points=points)
+    c = await client()
+    await c.upsert(collection_name=settings.qdrant_collection, points=points)
 
 
-def search(vector, top_k: int = 8):
-    return client().query_points(
+async def search(vector, top_k: int = 8):
+    c = await client()
+    return (await c.query_points(
         collection_name=settings.qdrant_collection,
         query=vector,
         limit=top_k,
-    ).points
+    )).points
 
 
-def count() -> int:
-    return client().count(collection_name=settings.qdrant_collection, exact=True).count
+async def count() -> int:
+    c = await client()
+    return (await c.count(collection_name=settings.qdrant_collection, exact=True)).count
