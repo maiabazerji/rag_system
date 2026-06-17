@@ -17,7 +17,7 @@ from app.config import settings
 
 try:
     import wandb  # type: ignore
-except Exception:  # pragma: no cover
+except ImportError:  # pragma: no cover
     wandb = None  # type: ignore
 
 

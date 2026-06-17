@@ -42,5 +42,7 @@ class Settings(BaseSettings):
     agentic_max_iters: int = 6
     graph_data_dir: str = "data/graph"
 
+    cors_origins: str = "http://localhost:5173"
+
 
 settings = Settings()

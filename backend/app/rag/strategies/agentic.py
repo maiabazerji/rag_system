@@ -1,32 +1,8 @@
-"""Agentic RAG: hand the question to Claude and let it drive retrieval.
+"""Agentic RAG: Claude drives search and fetch tools in a loop.
 
-Difference vs. classic
-======================
-- *Classic* retrieves once, then asks the model to answer.
-- *Agentic* lets the model decide whether to retrieve, what query to use, when
-  to drill deeper into a specific chunk, and when to stop. Implementation uses
-  Anthropic's tool-use API (function calling).
-
-Tools we expose:
-- ``search``: vector search the indexed corpus, returns previews
-- ``fetch_chunk``: pull full text of a specific chunk_id
-- ``finish``: emit the final grounded answer + citations
-
-The model loops until it calls ``finish`` or hits ``settings.agentic_max_iters``.
-
-When this wins
-==============
-- Multi-step questions ("find X, then use X to compute Y")
-- Ambiguous questions where the first search returns junk and a refined query
-  is needed.
-- Questions where the right answer is in a deep section of one document that
-  isn't surfaced by the original wording.
-
-When it loses
-=============
-- Single-fact lookups. The agentic loop costs 3–6× more tokens for no benefit.
-- Brittle retrieval — if the corpus is sparse, the agent will keep searching
-  in circles. We cap iterations to keep that bounded.
+Exposes search (semantic), fetch_chunk (by id), and finish (answer+citations) tools.
+Model decides when to retrieve, how to refine queries, and when to stop. Costs more tokens
+but handles multi-step reasoning and ambiguous queries better than single-pass retrieval.
 """
 from __future__ import annotations
 
@@ -113,30 +89,38 @@ class AgenticRAG(Strategy):
         final: dict = {}
 
         async def _tool_search(args: dict) -> str:
-            q = args["query"]
+            q = args.get("query", "").strip()
+            if not q:
+                return json.dumps([], ensure_ascii=False)
             k = int(args.get("top_k", 5))
             vec = embed_query(q)
             hits = await vector_search(vec, top_k=k)
             previews = []
             for h in hits:
-                cid = h.payload["chunk_id"]
-                text = h.payload["text"]
-                seen_chunks[cid] = {"doc_id": h.payload["doc_id"], "text": text}
-                previews.append({"chunk_id": cid, "preview": text[:300]})
+                cid = h.payload.get("chunk_id")
+                text = h.payload.get("text")
+                doc_id = h.payload.get("doc_id")
+                if cid and text and doc_id:
+                    seen_chunks[cid] = {"doc_id": doc_id, "text": text}
+                    previews.append({"chunk_id": cid, "preview": text[:300]})
             return json.dumps(previews, ensure_ascii=False)
 
         async def _tool_fetch(args: dict) -> str:
-            cid = args["chunk_id"]
+            cid = args.get("chunk_id", "").strip()
+            if not cid:
+                return "error: chunk_id is required"
             cached = seen_chunks.get(cid)
             if cached:
                 return cached["text"]
-            # cache miss → search by id via a wide probe
             vec = embed_query(" ")
             hits = await vector_search(vec, top_k=512)
             for h in hits:
                 if h.payload.get("chunk_id") == cid:
-                    seen_chunks[cid] = {"doc_id": h.payload["doc_id"], "text": h.payload["text"]}
-                    return h.payload["text"]
+                    text = h.payload.get("text")
+                    doc_id = h.payload.get("doc_id")
+                    if text and doc_id:
+                        seen_chunks[cid] = {"doc_id": doc_id, "text": text}
+                        return text
             return f"error: chunk {cid!r} not found"
 
         async def _tool_finish(args: dict) -> str:
