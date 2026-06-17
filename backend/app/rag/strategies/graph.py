@@ -1,23 +1,8 @@
-"""Graph RAG: retrieve by walking a knowledge graph, not just by similarity.
+"""Graph RAG: retrieve by walking a knowledge graph for structural connections.
 
-How it works
-============
-1. (Offline) For each indexed chunk, Claude Haiku extracts (s, p, o) triples
-   → stored in `data/graph/triples.jsonl` and indexed in `graph_store`.
-2. At query time:
-     a. Claude Haiku pulls candidate entities out of the question.
-     b. We walk the graph 1 hop from each entity → set of related chunks.
-     c. We also do a normal vector search.
-     d. Final context = union(graph chunks, vector chunks), deduped.
-     e. The prompt is augmented with a textual rendering of the subgraph,
-        so the model can reason about *connections* and not just adjacency.
-
-Why bother?
-===========
-Classic RAG retrieves chunks that are *lexically/semantically close* to the
-question. Graph RAG also pulls in chunks that are *structurally close* — e.g.
-"how does X relate to Y" surfaces edges connecting X and Y even if no single
-chunk happens to mention them together.
+Extracts entity triples offline, walks neighbors at query time to surface related chunks
+that vector search alone would miss. Augments context with graph structure so the model
+can reason about connections between entities.
 """
 from __future__ import annotations
 
@@ -36,29 +21,26 @@ from app.schemas import Chunk, Source
 _RESERVED = {"chunk_id", "doc_id", "text"}
 
 
-def _fetch_chunks_by_id(chunk_ids: set[str]) -> list[Chunk]:
-    """Pull full chunks back from Qdrant by chunk_id (payload field)."""
+async def _fetch_chunks_by_id(chunk_ids: set[str]) -> list[Chunk]:
     if not chunk_ids:
         return []
-    # Qdrant doesn't index payload by default; cheapest path is a wide vector
-    # search and filter client-side. For demos this is fine.
     fetched: list[Chunk] = []
-    # Use the embedding of the first id as a "neutral" query — doesn't matter,
-    # we just need a vector to ride along with a filter. Simpler: re-embed a
-    # constant. We rely on hybrid_search elsewhere for actual scoring.
     probe = embed_query(" ")
-    hits = vector_search(probe, top_k=512)
+    hits = await vector_search(probe, top_k=512)
     by_id = {h.payload["chunk_id"]: h for h in hits if h.payload.get("chunk_id") in chunk_ids}
     for cid, h in by_id.items():
-        fetched.append(
-            Chunk(
-                id=cid,
-                doc_id=h.payload["doc_id"],
-                text=h.payload["text"],
-                tokens=len(h.payload["text"].split()),
-                metadata={k: v for k, v in h.payload.items() if k not in _RESERVED},
+        doc_id = h.payload.get("doc_id")
+        text = h.payload.get("text")
+        if doc_id is not None and text is not None:
+            fetched.append(
+                Chunk(
+                    id=cid,
+                    doc_id=doc_id,
+                    text=text,
+                    tokens=len(text.split()),
+                    metadata={k: v for k, v in h.payload.items() if k not in _RESERVED},
+                )
             )
-        )
     return fetched
 
 
@@ -113,7 +95,7 @@ class GraphRAG(Strategy):
 
         # Pull full chunks for graph hits that vector search missed.
         graph_only = graph_chunks - vector_ids
-        extra = _fetch_chunks_by_id(graph_only)
+        extra = await _fetch_chunks_by_id(graph_only)
         all_chunks = vector_chunks + extra
         ranked = rerank(question, all_chunks, top_k=top_k)
         trace.append({"step": "rerank", "kept": len(ranked)})

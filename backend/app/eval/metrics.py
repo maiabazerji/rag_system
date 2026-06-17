@@ -84,16 +84,18 @@ async def run_evaluation(
     return result
 
 
+def _safe_filename(s: str | None) -> str:
+    return (s or "default").replace("/", "_").replace(":", "-")
+
+
 def _persist_run(result: dict) -> None:
     RUNS_DIR.mkdir(parents=True, exist_ok=True)
     stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
-    safe = lambda s: (s or "default").replace("/", "_").replace(":", "-")
-    name = f"{stamp}-{safe(result['dataset'])}-{safe(result['prompt_version'])}.json"
+    name = f"{stamp}-{_safe_filename(result['dataset'])}-{_safe_filename(result['prompt_version'])}.json"
     (RUNS_DIR / name).write_text(json.dumps(result, indent=2), encoding="utf-8")
 
 
 def score_example(expected: dict, got: dict) -> EvalScore:
-    """Placeholder — wire RAGAS + judge here."""
     return EvalScore(
         faithfulness=0.0,
         answer_relevance=0.0,

@@ -5,8 +5,6 @@ type Source = { chunk_id: string; quote: string };
 type TraceStep = { step?: string; [k: string]: unknown };
 type StrategyOut = {
   strategy: "classic" | "graph" | "agentic";
-  ok: boolean;
-  error?: string;
   answer: string;
   sources: Source[];
   refusal: boolean;
@@ -328,7 +326,7 @@ function Skeleton() {
 }
 
 function WinnersBar({ results }: { results: StrategyOut[] }) {
-  const ok = results.filter((r) => r.ok && !r.refusal);
+  const ok = results.filter((r) => !r.refusal);
   if (ok.length < 2) return null;
   const fastest = ok.reduce((a, b) => (a.latency_ms <= b.latency_ms ? a : b));
   const cheapest = ok.reduce((a, b) =>

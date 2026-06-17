@@ -43,20 +43,15 @@ async def reset() -> dict:
 
 @router.post("/build")
 async def build(limit: int | None = None, concurrency: int = 4) -> dict:
-    """Extract triples from every indexed chunk. Re-running is safe but appends —
-    call /graph/reset first if you want a clean rebuild."""
-    # Pull all chunks back from Qdrant via a wide probe.
     probe = embed_query(" ")
     hits = await vector_search(probe, top_k=limit or 2048)
-    chunks = [
-        {
-            "chunk_id": h.payload["chunk_id"],
-            "doc_id": h.payload["doc_id"],
-            "text": h.payload["text"],
-        }
-        for h in hits
-        if h.payload.get("text")
-    ]
+    chunks = []
+    for h in hits:
+        chunk_id = h.payload.get("chunk_id")
+        doc_id = h.payload.get("doc_id")
+        text = h.payload.get("text")
+        if chunk_id and doc_id and text:
+            chunks.append({"chunk_id": chunk_id, "doc_id": doc_id, "text": text})
 
     already_done = {t.chunk_id for t in graph_store.load().triples}
     pending = [c for c in chunks if c["chunk_id"] not in already_done]
@@ -86,6 +81,6 @@ async def build(limit: int | None = None, concurrency: int = 4) -> dict:
         "skipped_chunks": len(chunks) - len(pending),
         "new_triples": total_added,
         "duplicate_triples": total_skipped,
-        "failures": failures[:10],
+        "failures": failures,
         **graph_store.stats(),
     }

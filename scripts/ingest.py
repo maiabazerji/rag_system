@@ -6,6 +6,7 @@ Picks up:
 """
 from __future__ import annotations
 
+import asyncio
 import sys
 from pathlib import Path
 
@@ -18,19 +19,22 @@ DOCS = ROOT / "data" / "docs"
 META_FILES = [ROOT / "README.md", ROOT / "EvalRAG.md"]
 
 
-def _ingest(path: Path) -> None:
-    job = enqueue_document(path.name, path.read_bytes())
-    print(f"queued {path.name} -> {job}")
+async def _ingest(path: Path) -> None:
+    result = await enqueue_document(path.name, path.read_bytes())
+    print(f"queued {path.name} -> {result}")
 
 
-def main() -> None:
+async def main() -> None:
+    tasks = []
     for p in DOCS.rglob("*"):
         if p.is_file():
-            _ingest(p)
+            tasks.append(_ingest(p))
     for p in META_FILES:
         if p.is_file():
-            _ingest(p)
+            tasks.append(_ingest(p))
+    if tasks:
+        await asyncio.gather(*tasks)
 
 
 if __name__ == "__main__":
-    main()
+    asyncio.run(main())
