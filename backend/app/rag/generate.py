@@ -13,6 +13,7 @@ import time
 
 from app.config import settings
 from app.rag.providers import MissingKeyError, ProviderError
+from app.rag.response_clean import clean_response
 from app.rag.store import count as store_count
 from app.rag.strategies import get_strategy
 from app.schemas import Answer, Source
@@ -68,7 +69,7 @@ async def answer_question(
     if await store_count() == 0:
         return _refusal(
             question,
-            "No documents indexed yet. Upload files in the Ingest tab to start asking questions.",
+            "No documents uploaded yet. Go to Ingest to upload files, then I can answer your questions.",
             provider=effective_provider,
             model=model,
         )
@@ -109,7 +110,7 @@ async def answer_question(
 
         return Answer(
             question=question,
-            answer=result.answer,
+            answer=clean_response(result.answer),
             sources=result.sources,
             confidence=result.confidence,
             refusal=result.refusal,

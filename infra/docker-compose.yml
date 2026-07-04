@@ -64,6 +64,8 @@ services:
       # "check for updates" call, which intermittently dies with closed-httpx-client.
       HF_HUB_OFFLINE: "1"
       TRANSFORMERS_OFFLINE: "1"
+      # Logging
+      LOG_LEVEL: INFO
       # Everything else (API keys, GENERATOR_PROVIDER, OLLAMA_MODEL, OPENAI_GENERATOR_MODEL,
       # WANDB_*, LANGFUSE_*) comes from env_file (../.env). Don't list them here —
       # `environment:` overrides env_file, so empty `${VAR:-}` defaults would silently
@@ -74,6 +76,7 @@ services:
       - ../backend/app:/app/app
       - ../scripts:/scripts
       - ../data:/data
+      - ./logs:/app/logs
       # Bind-mounted from the host so the embedding model can be pre-downloaded
       # outside the container — works around Docker Desktop DNS hiccups.
       - ../.hf_cache:/root/.cache/huggingface

@@ -18,8 +18,8 @@ type Turn = { question: string; answer?: Answer; error?: string; loading?: boole
 type Strategy = "classic" | "graph" | "agentic";
 const STRATEGIES: { id: Strategy; label: string; hint: string }[] = [
   { id: "classic", label: "Classic", hint: "vector search → rerank → answer" },
-  { id: "graph", label: "Graph", hint: "entity walk on a Claude-built knowledge graph" },
-  { id: "agentic", label: "Agentic", hint: "Claude loops over search/fetch tools" },
+  { id: "graph", label: "Graph", hint: "entity walk on knowledge graph" },
+  { id: "agentic", label: "Agentic", hint: "model loops over search/fetch tools" },
 ];
 
 export default function Ask() {
@@ -46,12 +46,21 @@ export default function Ask() {
 
   return (
     <div className="flex flex-col gap-6">
-      <header className="space-y-2">
-        <h1 className="display text-4xl font-semibold text-white">Ask</h1>
-        <p className="text-zinc-400 max-w-xl">
-          Question your indexed documents. Every answer comes with the chunks it stood on —
-          if the source isn't there, the answer isn't trustworthy.
-        </p>
+      <header className="flex items-end justify-between">
+        <div className="space-y-2">
+          <h1 className="display text-4xl font-semibold text-white">Ask</h1>
+          <p className="text-zinc-400 max-w-xl">
+            Question your indexed documents. Answers show sources so you can verify accuracy.
+          </p>
+        </div>
+        {turns.length > 0 && (
+          <button
+            onClick={() => setTurns([])}
+            className="btn-ghost text-xs"
+          >
+            Clear history
+          </button>
+        )}
       </header>
 
       {turns.length === 0 && <EmptyState onPick={(s) => setQ(s)} />}
@@ -130,7 +139,7 @@ function EmptyState({ onPick }: { onPick: (s: string) => void }) {
         "What is faithfulness and how is it scored?",
         "How does an LLM-as-judge avoid grading itself?",
         "What does a regression in eval metrics look like?",
-        "Faithfulness vs. answer relevance — which matters more?",
+        "Faithfulness vs. answer relevance  -  which matters more?",
       ],
     },
     {
@@ -262,7 +271,7 @@ function RatingWidget({ a }: { a: Answer }) {
   if (state === "saved") {
     return (
       <div className="border-t border-bg-border pt-3 text-xs text-emerald-300">
-        Rated {rating}/5 — thanks. Saved to data/human_ratings/ratings.jsonl.
+        Rated {rating}/5  -  thanks. Saved to data/human_ratings/ratings.jsonl.
       </div>
     );
   }

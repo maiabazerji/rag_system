@@ -27,6 +27,18 @@ async def run_evaluation(
     prompt_version: str | None = None,
 ) -> dict:
     examples = load_dataset(dataset)
+    if not examples:
+        return {
+            "dataset": dataset,
+            "provider": provider,
+            "model": model,
+            "prompt_version": prompt_version,
+            "n": 0,
+            "aggregate": None,
+            "per_example": [],
+            "error": f"No examples found in dataset '{dataset}'",
+        }
+
     per_example: list[dict] = []
 
     run_name = f"eval-{dataset}-{provider or 'default'}-{model or 'default'}-{prompt_version or 'default'}"
@@ -58,17 +70,23 @@ async def run_evaluation(
         agg = aggregate([p["score"] for p in per_example])
 
         if run is not None:
-            log_eval_table(run, [
-                {
-                    "question": p["question"],
-                    "answer": p["answer"],
-                    "ideal_answer": p["ideal_answer"],
-                    **p["score"],
-                }
-                for p in per_example
-            ])
-            if agg is not None:
-                log_metrics(run, agg.model_dump())
+            try:
+                log_eval_table(run, [
+                    {
+                        "question": p["question"],
+                        "answer": p["answer"],
+                        "ideal_answer": p["ideal_answer"],
+                        **p["score"],
+                    }
+                    for p in per_example
+                ])
+            except Exception as e:
+                print(f"Warning: Failed to log eval table to W&B: {e}")
+            try:
+                if agg is not None:
+                    log_metrics(run, agg.model_dump())
+            except Exception as e:
+                print(f"Warning: Failed to log metrics to W&B: {e}")
 
     result = {
         "dataset": dataset,

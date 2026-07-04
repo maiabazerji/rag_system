@@ -63,8 +63,8 @@ class GraphRAG(Strategy):
         if not graph.triples:
             return StrategyResult(
                 answer=(
-                    "Graph RAG is not ready yet — no triples have been extracted. "
-                    "Call POST /graph/build (after ingesting documents) to populate the graph."
+                    "Graph RAG needs setup first. Go to Compare page and click 'Build graph' "
+                    "to extract connections between concepts in your documents."
                 ),
                 sources=[Source(chunk_id="none", quote="")],
                 refusal=True,
