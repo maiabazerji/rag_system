@@ -2,7 +2,11 @@ from __future__ import annotations
 
 import hashlib
 
-from qdrant_client.async_client import AsyncQdrantClient
+try:
+    from qdrant_client.async_client import AsyncQdrantClient
+except ImportError:
+    from qdrant_client import AsyncQdrantClient
+
 from qdrant_client.http import models as qm
 
 from app.config import settings

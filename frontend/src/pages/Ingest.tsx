@@ -49,7 +49,7 @@ export default function Ingest() {
             Drop in <span className="font-mono text-zinc-300">.txt</span>,{" "}
             <span className="font-mono text-zinc-300">.md</span>, or{" "}
             <span className="font-mono text-zinc-300">.pdf</span>. They're chunked, embedded,
-            and indexed into Qdrant — ready to ground answers on the Ask page.
+            and indexed into Qdrant  -  ready to ground answers on the Ask page.
           </p>
         </div>
         {stats && (

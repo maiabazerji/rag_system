@@ -20,7 +20,7 @@ from __future__ import annotations
 from app.config import settings
 from app.prompts import load_prompt
 from app.rag.providers.anthropic_provider import generate_with_usage
-from app.rag.rerank import compress_context, rerank
+from app.rag.rerank import rerank
 from app.rag.retrieve import hybrid_search
 from app.rag.strategies.base import Strategy, StrategyResult
 from app.schemas import Source
@@ -40,8 +40,7 @@ class ClassicRAG(Strategy):
         prompt = load_prompt(prompt_version)
 
         candidates = await hybrid_search(question, top_k=settings.retrieval_top_k)
-        reranked = rerank(question, candidates, top_k=top_k)
-        context = compress_context(question, reranked)
+        context = rerank(question, candidates, top_k=top_k)
 
         if not context:
             return StrategyResult(

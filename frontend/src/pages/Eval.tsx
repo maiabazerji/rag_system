@@ -32,7 +32,7 @@ export default function EvalPage() {
         <div>
           <h1 className="display text-4xl font-semibold text-white">Evaluation</h1>
           <p className="text-zinc-400 mt-2 max-w-xl">
-            Score the system against a golden set. Faithfulness, relevance, precision, recall —
+            Score the system against a golden set. Faithfulness, relevance, precision, recall  - 
             run-over-run, so a prompt tweak can't quietly regress.
           </p>
         </div>
@@ -63,7 +63,7 @@ export default function EvalPage() {
                     <div key={m.key} className="bg-bg-elevated border border-bg-border rounded-xl p-3">
                       <div className="text-[11px] text-zinc-500 uppercase tracking-wider">{m.label}</div>
                       <div className="text-xl font-semibold text-white tabular-nums mt-1">
-                        {v == null ? "—" : v.toFixed(2)}
+                        {v == null ? " - " : v.toFixed(2)}
                       </div>
                       <div className="h-1 bg-bg-border rounded-full mt-2 overflow-hidden">
                         <div
