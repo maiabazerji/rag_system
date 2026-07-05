@@ -6,7 +6,7 @@ import re
 
 
 def clean_response(text: str) -> str:
-    """Remove JSON, code blocks, and excessive formatting from responses."""
+    """Remove JSON, code blocks, chunk IDs, and excessive formatting."""
     if not text:
         return text
 
@@ -21,13 +21,21 @@ def clean_response(text: str) -> str:
     except (json.JSONDecodeError, TypeError):
         pass
 
+    # Remove chunk ID citations like [abc123def:0]
+    text = re.sub(r"\[([a-f0-9]+:[0-9]+)\]", "", text)
+
     # Remove markdown code blocks
     text = re.sub(r"```[\w]*\n(.*?)\n```", r"\1", text, flags=re.DOTALL)
 
-    # Remove excessive headers/formatting
-    text = re.sub(r"#+\s+", "", text)
+    # Remove markdown headers (##, ###, etc)
+    text = re.sub(r"^#+\s+", "", text, flags=re.MULTILINE)
 
-    # Clean up whitespace
+    # Remove "Rated X/5" and rating-related lines
+    text = re.sub(r"Rated \d+/5.*?(?:\n|$)", "", text)
+    text = re.sub(r"Saved to.*?(?:\n|$)", "", text)
+    text = re.sub(r"Thanks for rating.*?(?:\n|$)", "", text)
+
+    # Clean up excessive whitespace
     text = re.sub(r"\n{3,}", "\n\n", text)
     text = text.strip()
 
