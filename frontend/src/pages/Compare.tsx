@@ -325,6 +325,58 @@ function Sources({ sources }: { sources: Source[] }) {
 }
 
 function FormattedAnswer({ text }: { text: string }) {
+  const renderInline = (str: string): ReactNode => {
+    const parts: ReactNode[] = [];
+    let lastIndex = 0;
+
+    // Match **bold**, *italic*, and code`
+    const regex = /\*\*(.+?)\*\*|\*(.+?)\*|`(.+?)`/g;
+    let match;
+
+    while ((match = regex.exec(str)) !== null) {
+      // Add text before match
+      if (match.index > lastIndex) {
+        parts.push(str.substring(lastIndex, match.index));
+      }
+
+      // Add styled content
+      if (match[1]) {
+        // Bold
+        parts.push(
+          <strong key={`b-${match.index}`} className="font-semibold text-zinc-100">
+            {match[1]}
+          </strong>
+        );
+      } else if (match[2]) {
+        // Italic
+        parts.push(
+          <em key={`i-${match.index}`} className="italic text-zinc-200">
+            {match[2]}
+          </em>
+        );
+      } else if (match[3]) {
+        // Code
+        parts.push(
+          <code
+            key={`c-${match.index}`}
+            className="bg-zinc-800 px-1.5 py-0.5 rounded text-[11px] font-mono text-amber-300"
+          >
+            {match[3]}
+          </code>
+        );
+      }
+
+      lastIndex = regex.lastIndex;
+    }
+
+    // Add remaining text
+    if (lastIndex < str.length) {
+      parts.push(str.substring(lastIndex));
+    }
+
+    return parts.length > 0 ? parts : str;
+  };
+
   const lines = text.split("\n");
   const elements = [];
   let inList = false;
@@ -344,7 +396,7 @@ function FormattedAnswer({ text }: { text: string }) {
       const heading = trimmed.replace(/^##\s*/, "");
       elements.push(
         <h3 key={`h3-${i}`} className="text-zinc-200 font-semibold text-sm mt-3 mb-2">
-          {heading}
+          {renderInline(heading)}
         </h3>
       );
     } else if (trimmed.startsWith("- ") || trimmed.startsWith("* ")) {
@@ -355,7 +407,7 @@ function FormattedAnswer({ text }: { text: string }) {
       const item = trimmed.substring(2);
       elements.push(
         <li key={`li-${i}`} className="text-zinc-200 text-sm list-disc ml-0">
-          {item}
+          {renderInline(item)}
         </li>
       );
     } else if (trimmed.startsWith("|")) {
@@ -369,7 +421,7 @@ function FormattedAnswer({ text }: { text: string }) {
       inList = false;
       elements.push(
         <p key={`p-${i}`} className="text-zinc-200 text-sm">
-          {trimmed}
+          {renderInline(trimmed)}
         </p>
       );
     }
