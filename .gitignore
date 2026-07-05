@@ -49,3 +49,5 @@ data/human_ratings/
 # OS / misc
 *.bak
 *.tmp
+LINKEDIN_POST.md
+MEDIUM_ARTICLE.md
