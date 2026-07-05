@@ -60,14 +60,14 @@ services:
       LANGFUSE_HOST: http://langfuse:3000
       # Inside the container, "localhost" is the container; host-gateway reaches the laptop.
       OLLAMA_HOST: http://host.docker.internal:11434
-      # Model is pre-downloaded into the bind-mounted cache below — skip HF's online
+      # Model is pre-downloaded into the bind-mounted cache below- skip HF's online
       # "check for updates" call, which intermittently dies with closed-httpx-client.
       HF_HUB_OFFLINE: "1"
       TRANSFORMERS_OFFLINE: "1"
       # Logging
       LOG_LEVEL: INFO
       # Everything else (API keys, GENERATOR_PROVIDER, OLLAMA_MODEL, OPENAI_GENERATOR_MODEL,
-      # WANDB_*, LANGFUSE_*) comes from env_file (../.env). Don't list them here —
+      # WANDB_*, LANGFUSE_*) comes from env_file (../.env). Don't list them here-
       # `environment:` overrides env_file, so empty `${VAR:-}` defaults would silently
       # zero out values supplied in .env.
     extra_hosts:
@@ -78,7 +78,7 @@ services:
       - ../data:/data
       - ./logs:/app/logs
       # Bind-mounted from the host so the embedding model can be pre-downloaded
-      # outside the container — works around Docker Desktop DNS hiccups.
+      # outside the container- works around Docker Desktop DNS hiccups.
       - ../.hf_cache:/root/.cache/huggingface
     ports: ["8011:8000"]
     depends_on:

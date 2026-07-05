@@ -58,7 +58,7 @@ async def answer_question(
 ) -> Answer:
     # The three new strategies all rely on Anthropic features (tool use, cheap
     # graph extraction). We ignore `provider` for graph/agentic and always use
-    # Anthropic — surface that to the caller via the returned `provider` field.
+    # Anthropic- surface that to the caller via the returned `provider` field.
     if strategy in ("graph", "agentic"):
         effective_provider = "anthropic"
     else:
