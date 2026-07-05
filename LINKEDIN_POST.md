@@ -2,208 +2,186 @@
 
 ## Main Post (Feed)
 
-Built EvalRAG — an open-source RAG comparison platform.
+Built EvalRAG — an open-source RAG evaluation platform that answers the question every team should be asking:
 
-Here's the problem it solves:
+**"Which retrieval strategy actually works best for my corpus?"**
 
-You're building a RAG system. You pick a retrieval strategy. You ship it. Then you wonder: "Is this actually the best approach?"
+Most teams pick one approach and ship it. They never measure whether it's optimal. EvalRAG forces you to know.
 
-Most teams never answer that question.
+**Ask one question. See three different strategies answer it side-by-side.**
 
-EvalRAG forces you to.
+📊 **Classic RAG** (vector search + rerank)
+- Fastest retrieval
+- Best for: exact semantic matches
 
-**Ask one question. See three different retrieval strategies answer it side-by-side.**
+🔗 **Graph RAG** (entity extraction + knowledge graph walk)
+- Finds hidden connections between concepts
+- Shows the reasoning path explicitly
+- Best for: relationship questions like "How does X compare to Y?"
 
-1️⃣ **Classic RAG** (embed → search → answer)
-- Fast: 200ms
-- Cheap: ~$0.001
-- Best for: simple factual lookups
+🤖 **Agentic RAG** (LLM loops over search/fetch tools)
+- Most accurate answers
+- Claude decides what to search, when to stop
+- Best for: complex multi-step reasoning
 
-2️⃣ **Graph RAG** (extract entities → walk knowledge graph → answer)
-- Finds hidden connections
-- Slower: 450ms
-- Cost: ~$0.002
-- Best for: relationship questions
+**Then it scores what actually matters:**
+✅ Faithfulness — is the answer grounded in context or hallucinated?
+✅ Answer relevance — does it actually address the question?
+✅ Context precision — are the retrieved chunks ranked well?
+✅ Context recall — was all necessary information retrieved?
 
-3️⃣ **Agentic RAG** (Claude drives search/fetch tools)
-- Most accurate
-- Slow: 3.2s
-- Cost: ~$0.006
-- Best for: complex reasoning
+Run evaluations on your golden dataset. Detect silent regressions before shipping. Compare prompt versions automatically.
 
-**Then it measures what matters:**
-✅ Faithfulness (did it hallucinate?)
-✅ Answer relevance (did it actually answer?)
-✅ Context precision & recall
-✅ Latency and token cost
+Stack: React + FastAPI + Qdrant + Claude API
 
-Pick the one that fits your constraints.
+Open source. Docker Compose. 5-minute setup.
 
-Stack: React + FastAPI + Qdrant + Claude
+Because "which RAG strategy works best" shouldn't depend on guesswork.
 
-Open source. Docker Compose. Five minute setup.
-
-Because "which RAG strategy works best" shouldn't be a guess.
-
-[Link to repo]
+[github link]
 
 ---
 
-## Shorter Post (if you want tighter)
+## Shorter Post
 
-Built EvalRAG.
+Just built EvalRAG.
 
-Ask one question. Get three RAG strategies answering it side-by-side.
+Same question → three retrieval strategies → real evaluation scores.
 
-Classic RAG: Fast, cheap, simple facts.
-Graph RAG: Finds connections, slower.
-Agentic RAG: Most accurate, burns tokens.
+Classic RAG finds semantic matches fast.
+Graph RAG uncovers hidden connections.
+Agentic RAG reasons multi-step.
 
-Which wins? Depends on your question and budget.
+Which wins? Measure it instead of guessing.
 
-Open source. Docker setup. Measure instead of guess.
+Open source. Compare strategies side-by-side. Evaluate on your real questions.
 
-[Link]
+[github link]
 
 ---
 
 ## Carousel Post (10 slides)
 
-**Slide 1:**
-Built EvalRAG
-Open-source RAG comparison engine
+**Slide 1: The Problem**
 
-Ask one question → See three strategies → Measure which wins
+You pick a RAG retrieval strategy. You ship it.
 
-Most teams guess. This one forces you to measure.
+Then you wonder: "Is this actually the best approach for MY corpus?"
 
----
-
-**Slide 2:**
-The RAG Problem
-
-You pick a retrieval strategy. You ship it. Then you wonder:
-
-"Is this actually the best approach for my corpus?"
-
-Most teams never find out.
+Most teams never answer that question.
 
 ---
 
-**Slide 3:**
-Strategy #1: Classic RAG
+**Slide 2: Three Strategies**
 
-embed query → vector search → rerank → generate answer
+Classic RAG: Fast vector search + rerank
+Graph RAG: Knowledge graph + entity walking
+Agentic RAG: LLM loops over search tools
 
-✅ Fast (200ms)
-✅ Cheap (~$0.001)
-✅ Simple
+All three work. Which one works BEST for your data?
 
-❌ Only finds similar chunks (misses connections)
-❌ Doesn't work for multi-hop reasoning
+That's the question EvalRAG answers.
 
 ---
 
-**Slide 4:**
-Strategy #2: Graph RAG
+**Slide 3: Strategy #1 — Classic RAG**
 
-Extract entity triples → build knowledge graph → walk it → answer
+embed query → vector search → rerank → generate
 
-Example:
+✅ Fastest retrieval
+✅ Simple pipeline
+✅ Works for factual lookups
+
+❌ Misses relationships
+❌ No multi-hop reasoning
+
+---
+
+**Slide 4: Strategy #2 — Graph RAG**
+
+Extract 408 entity triples from your docs → build knowledge graph → walk neighbors → answer
+
 Question: "How do BM25 and dense vectors compare?"
 
-Graph finds:
+🔗 Graph finds:
 - Papers on BM25
-- Papers on dense vectors
-- The connections between them
+- Papers on dense vectors  
+- The connections explaining the difference
 
-Classic only finds them separately.
-
----
-
-**Slide 5:**
-Graph RAG Trade-offs
-
-✅ Finds relationships
-✅ Explainable (shows reasoning)
-✅ Great for interconnected docs
-
-❌ Slower (450ms)
-❌ More expensive (~$0.002)
-❌ Requires offline extraction
+Classic RAG finds them separately. Graph shows the relationship.
 
 ---
 
-**Slide 6:**
-Strategy #3: Agentic RAG
+**Slide 5: Strategy #3 — Agentic RAG**
 
 Give Claude three tools:
 - search(query) — semantic search
-- fetch_chunk(id) — get full text
-- finish(answer) — done
+- fetch(chunk_id) — read full text
+- finish(answer) — done reasoning
 
-Claude loops until it has enough context.
+Claude loops until it has enough context to answer confidently.
 
----
-
-**Slide 7:**
-Agentic RAG In Action
-
-Question: "Difference between faithfulness and relevance?"
-
-Claude: search("faithfulness metrics")
-Gets 3 previews. One's truncated.
-
-Claude: fetch(chunk_id)
-Reads full text. Searches for "relevance"
-
-Claude: Gets 2 more chunks.
-Calls finish(answer)
-
-Result: Most accurate but 3.2s latency, 2,840 tokens
+Result: Most accurate. Higher latency + token cost.
 
 ---
 
-**Slide 8:**
-Side-by-Side Comparison
+**Slide 6: Side-by-Side Comparison**
 
-Same question, three strategies:
+Ask one question. See all three strategies answer it.
 
-| | Classic | Graph | Agentic |
-|---|---------|-------|---------|
-| Latency | 200ms | 450ms | 3.2s |
-| Tokens | 850 | 1,200 | 2,840 |
-| Cost | $0.001 | $0.002 | $0.006 |
-| Quality | 7/10 | 9/10 | 10/10 |
+Same context. Same LLM. Different retrieval.
 
-Which wins? Depends on YOUR constraints.
+You see:
+- The answer from each strategy
+- Retrieved chunks
+- Latency & token cost
+- Extracted entities (for Graph RAG)
 
 ---
 
-**Slide 9:**
-Measure Quality
+**Slide 7: Score Every Answer**
 
-Every answer is scored on:
-✅ Faithfulness (hallucinated?)
-✅ Relevance (actually answers?)
-✅ Precision (useful chunks?)
-✅ Recall (all context found?)
+✅ Faithfulness — is the answer grounded in context or hallucinating?
+✅ Answer relevance — does it actually answer the question?
+✅ Context precision — were chunks ranked well?
+✅ Context recall — was all necessary info retrieved?
 
-Run evals against your golden dataset.
-Detect regressions automatically.
+LLM-based evaluation on your golden dataset.
 
 ---
 
-**Slide 10:**
-Open Source
+**Slide 8: Detect Regressions**
 
-React + FastAPI + Qdrant + Claude
-Docker Compose
-Five minute setup
+Run evaluation once a month. Compare scores run-over-run.
 
-Measure instead of guess.
+Did your new prompt regress? You'll know immediately.
 
-[github.com/yourname/evalrag]
+Silent quality degradation = no longer silent.
+
+---
+
+**Slide 9: Built for Teams**
+
+React frontend shows comparisons visually.
+FastAPI backend scores automatically.
+Qdrant stores your indexed documents.
+Claude API judges answer quality.
+
+All open source. Docker Compose. 5 minutes to run.
+
+---
+
+**Slide 10: The Real Value**
+
+You're not guessing anymore.
+
+You have data. You can choose the right strategy for YOUR constraints.
+
+Classic for speed. Graph for relationships. Agentic for accuracy.
+
+Measure. Compare. Ship with confidence.
+
+[github.com/...]
 
 ---
 
