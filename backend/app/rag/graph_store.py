@@ -181,7 +181,7 @@ def describe_subgraph(entities: list[str], max_edges: int = 30) -> str:
             if key in seen:
                 continue
             seen.add(key)
-            lines.append(f"- {e} —[{pred}]→ {neigh}")
+            lines.append(f"- {e}-[{pred}]→ {neigh}")
             if len(lines) >= max_edges:
                 return "\n".join(lines)
     return "\n".join(lines) if lines else "(no edges found)"

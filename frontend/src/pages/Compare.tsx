@@ -586,7 +586,7 @@ function WinnersBar({ results }: { results: StrategyOut[] }) {
     <div className="card flex flex-col gap-3">
       <div className="space-y-1">
         <h3 className="display text-sm font-semibold text-white">Performance Summary</h3>
-        <p className="text-xs text-zinc-400">Which "wins" depends on your question. Read each answer — the right pick balances speed, cost, and groundedness.</p>
+        <p className="text-xs text-zinc-400">Which "wins" depends on your question. Read each answer- the right pick balances speed, cost, and groundedness.</p>
       </div>
       <div className="flex flex-col sm:flex-row gap-3">
         <div className="flex-1 p-3 rounded-md bg-sky-500/10 border border-sky-500/30">
