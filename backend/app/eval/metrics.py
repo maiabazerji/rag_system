@@ -59,7 +59,7 @@ async def run_evaluation(
                 prompt_version=prompt_version,
             )
             got = ans.model_dump()
-            score = score_example(ex, got)
+            score = await score_example(ex, got)
             per_example.append({
                 "question": ex["question"],
                 "answer": got.get("answer"),
@@ -113,12 +113,21 @@ def _persist_run(result: dict) -> None:
     (RUNS_DIR / name).write_text(json.dumps(result, indent=2), encoding="utf-8")
 
 
-def score_example(expected: dict, got: dict) -> EvalScore:
+async def score_example(expected: dict, got: dict) -> EvalScore:
+    """Score using LLM judge."""
+    from app.eval.judge import judge
+
+    question = expected.get("question", "")
+    answer = got.get("answer", "")
+    sources = got.get("sources", [])
+    context = [s.get("quote", "") for s in sources if s.get("quote")]
+
+    scores = await judge(question, answer, context)
     return EvalScore(
-        faithfulness=0.0,
-        answer_relevance=0.0,
-        context_precision=0.0,
-        context_recall=0.0,
+        faithfulness=scores.get("faithfulness", 0.0),
+        answer_relevance=scores.get("answer_relevance", 0.0),
+        context_precision=scores.get("context_precision", 0.0),
+        context_recall=scores.get("context_recall", 0.0),
     )
 
 
