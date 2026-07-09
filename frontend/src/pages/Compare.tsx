@@ -218,10 +218,21 @@ function StrategyCard({
   loading: boolean;
 }) {
   const m = META[name];
+  const [expanded, setExpanded] = useState(false);
+
+  const truncatedAnswer = (text: string, sentences = 2) => {
+    const sents = text.split(/(?<=[.!?])\s+/);
+    const truncated = sents.slice(0, sentences).join(" ");
+    return { text: truncated, isTruncated: sents.length > sentences };
+  };
+
+  const answerPreview = result && !result.refusal ? truncatedAnswer(result.answer, 2) : null;
+
   return (
-    <div className="card relative overflow-hidden flex flex-col gap-4 min-h-[300px]">
-      <div className={`absolute inset-x-0 top-0 h-24 bg-gradient-to-b ${m.accent} pointer-events-none`} />
-      <div className="relative flex flex-col gap-1">
+    <div className="card relative overflow-hidden flex flex-col gap-3 min-h-[400px]">
+      <div className={`absolute inset-x-0 top-0 h-20 bg-gradient-to-b ${m.accent} pointer-events-none`} />
+
+      <div className="relative flex flex-col gap-2">
         <div className="display text-lg font-semibold text-white">{m.title}</div>
         <div className="text-[11px] text-zinc-400 font-mono">{m.tagline}</div>
       </div>
@@ -230,25 +241,57 @@ function StrategyCard({
 
       {result && (
         <>
-          <Telemetry r={result} />
+          {/* Large metrics badges at top */}
+          <div className="grid grid-cols-2 gap-2">
+            <div className="bg-sky-500/15 border border-sky-500/40 rounded-lg p-3">
+              <div className="text-[10px] text-sky-300 font-semibold uppercase tracking-wide">⏱ Latency</div>
+              <div className="text-lg font-mono font-bold text-sky-100 mt-1">{result.latency_ms}ms</div>
+            </div>
+            <div className="bg-emerald-500/15 border border-emerald-500/40 rounded-lg p-3">
+              <div className="text-[10px] text-emerald-300 font-semibold uppercase tracking-wide">💰 Tokens</div>
+              <div className="text-lg font-mono font-bold text-emerald-100 mt-1">{(result.input_tokens + result.output_tokens).toLocaleString()}</div>
+            </div>
+          </div>
+
+          {/* Status badge */}
+          <div className={`flex items-center gap-2 rounded-lg px-3 py-2 text-sm font-semibold ${result.refusal ? "bg-amber-500/15 border border-amber-500/40 text-amber-300" : "bg-emerald-500/15 border border-emerald-500/40 text-emerald-300"}`}>
+            <span className="text-lg">{result.refusal ? "⚠" : "✓"}</span>
+            {result.refusal ? "Refused" : "Answered"}
+            {result.iterations > 1 && <span className="text-xs text-zinc-400 ml-auto">({result.iterations} iterations)</span>}
+          </div>
+
+          {/* Answer preview or full text */}
           {result.refusal ? (
-            <div className="text-amber-300 text-sm p-3 bg-amber-500/10 rounded-md border border-amber-500/20">
+            <div className="text-amber-200 text-sm p-3 bg-amber-500/10 rounded-lg border border-amber-500/30">
               {result.answer}
             </div>
           ) : (
-            <div className="text-zinc-100 text-sm leading-relaxed answer-content">
-              <FormattedAnswer text={result.answer} />
+            <div className="flex-1 flex flex-col gap-2">
+              <div className="text-zinc-100 text-sm leading-relaxed answer-content">
+                <FormattedAnswer text={expanded ? result.answer : answerPreview?.text || result.answer} />
+              </div>
+              {answerPreview?.isTruncated && (
+                <button
+                  onClick={() => setExpanded(!expanded)}
+                  className="text-xs text-accent hover:text-accent/80 font-semibold self-start"
+                >
+                  {expanded ? "Show less" : "Read full answer →"}
+                </button>
+              )}
             </div>
           )}
 
-          {result.sources.length > 0 && result.sources[0].chunk_id !== "none" && (
+          {/* Sources */}
+          {!result.refusal && result.sources.length > 0 && result.sources[0].chunk_id !== "none" && (
             <Sources sources={result.sources} />
           )}
 
+          {/* Extra details */}
           {result.extra && Object.keys(result.extra).length > 0 && (
             <ExtraDetails name={name} extra={result.extra} />
           )}
 
+          {/* Trace */}
           {result.trace.length > 0 && <TraceDetails trace={result.trace} />}
         </>
       )}
@@ -256,40 +299,6 @@ function StrategyCard({
   );
 }
 
-function Telemetry({ r }: { r: StrategyOut }) {
-  const total = r.input_tokens + r.output_tokens;
-  return (
-    <div className="grid grid-cols-2 sm:flex sm:flex-wrap gap-2 text-[10px]">
-      <div className="flex items-center gap-1 bg-sky-500/10 border border-sky-500/30 rounded px-2 py-1">
-        <span className="text-sky-300 font-semibold">⏱</span>
-        <span className="text-sky-200 font-mono">{r.latency_ms}ms</span>
-      </div>
-      <div className="flex items-center gap-1 bg-emerald-500/10 border border-emerald-500/30 rounded px-2 py-1">
-        <span className="text-emerald-300 font-semibold">💰</span>
-        <span className="text-emerald-200 font-mono">{total.toLocaleString()} tok</span>
-      </div>
-      <div className="flex items-center gap-1 bg-zinc-700/40 border border-zinc-600/40 rounded px-2 py-1 col-span-2 sm:col-span-1 text-[9px]" title="input → output tokens">
-        <span className="text-zinc-300 font-mono">{r.input_tokens.toLocaleString()} in</span>
-        <span className="text-zinc-400">•</span>
-        <span className="text-zinc-300 font-mono">{r.output_tokens.toLocaleString()} out</span>
-      </div>
-      {r.iterations > 1 && (
-        <div className="flex items-center gap-1 bg-purple-500/10 border border-purple-500/30 rounded px-2 py-1">
-          <span className="text-purple-300 font-semibold">🔄</span>
-          <span className="text-purple-200 font-mono">{r.iterations} iters</span>
-        </div>
-      )}
-      <div className={`flex items-center gap-1 rounded px-2 py-1 col-span-2 sm:col-span-1 ${r.refusal ? "bg-amber-500/10 border border-amber-500/30" : "bg-emerald-500/10 border border-emerald-500/30"}`}>
-        <span className={r.refusal ? "text-amber-300 text-lg" : "text-emerald-300 text-lg"}>
-          {r.refusal ? "⚠" : "✓"}
-        </span>
-        <span className={r.refusal ? "text-amber-200 text-[10px] font-semibold" : "text-emerald-200 text-[10px] font-semibold"}>
-          {r.refusal ? "refused" : "answered"}
-        </span>
-      </div>
-    </div>
-  );
-}
 
 function Sources({ sources }: { sources: Source[] }) {
   const [expanded, setExpanded] = useState<string | null>(null);
@@ -563,6 +572,9 @@ function WinnersBar({ results }: { results: StrategyOut[] }) {
   const cheapest = ok.reduce((a, b) =>
     a.input_tokens + a.output_tokens <= b.input_tokens + b.output_tokens ? a : b
   );
+  const secondFastest = ok.filter(r => r.strategy !== fastest.strategy).reduce((a, b) => (a.latency_ms <= b.latency_ms ? a : b), ok[0]);
+  const secondCheapest = ok.filter(r => r.strategy !== cheapest.strategy).reduce((a, b) =>
+    a.input_tokens + a.output_tokens <= b.input_tokens + b.output_tokens ? a : b, ok[0]);
 
   const strategyLabel = (s: string) => {
     const labels: Record<string, string> = {
@@ -575,33 +587,38 @@ function WinnersBar({ results }: { results: StrategyOut[] }) {
 
   const strategyColor = (s: string) => {
     const colors: Record<string, string> = {
-      classic: "bg-sky-500/20 border-sky-500/50 text-sky-300",
-      graph: "bg-violet-500/20 border-violet-500/50 text-violet-300",
-      agentic: "bg-emerald-500/20 border-emerald-500/50 text-emerald-300",
+      classic: "text-sky-300",
+      graph: "text-violet-300",
+      agentic: "text-emerald-300",
     };
-    return colors[s] || "bg-zinc-500/20 border-zinc-500/50 text-zinc-300";
+    return colors[s] || "text-zinc-300";
   };
 
+  const speedup = Math.round((secondFastest.latency_ms / fastest.latency_ms - 1) * 100);
+  const savings = Math.round((1 - (cheapest.input_tokens + cheapest.output_tokens) / (secondCheapest.input_tokens + secondCheapest.output_tokens)) * 100);
+
   return (
-    <div className="card flex flex-col gap-3">
+    <div className="card flex flex-col gap-4 border-accent/30">
       <div className="space-y-1">
-        <h3 className="display text-sm font-semibold text-white">Performance Summary</h3>
-        <p className="text-xs text-zinc-400">Which "wins" depends on your question. Read each answer- the right pick balances speed, cost, and groundedness.</p>
+        <h3 className="display text-base font-bold text-white">⚡ Winners (This Question)</h3>
+        <p className="text-xs text-zinc-400">Different strategies excel at different things. Pick based on your priority: speed, cost, or answer quality.</p>
       </div>
-      <div className="flex flex-col sm:flex-row gap-3">
-        <div className="flex-1 p-3 rounded-md bg-sky-500/10 border border-sky-500/30">
-          <div className="text-[10px] uppercase tracking-wider text-sky-400 font-semibold mb-1">⚡ Fastest</div>
-          <div className={`text-sm font-semibold border border-sky-500/50 rounded px-2 py-1.5 text-center ${strategyColor(fastest.strategy)}`}>
+      <div className="grid grid-cols-2 gap-4">
+        <div className="p-4 rounded-lg bg-sky-500/10 border border-sky-500/40">
+          <div className="text-[10px] uppercase tracking-widest text-sky-400 font-bold">Fastest</div>
+          <div className={`text-xl font-bold mt-2 ${strategyColor(fastest.strategy)}`}>
             {strategyLabel(fastest.strategy)}
           </div>
-          <div className="text-[11px] text-sky-200 text-center mt-1 font-mono">{fastest.latency_ms}ms</div>
+          <div className="text-sm font-mono text-sky-100 mt-2">{fastest.latency_ms}ms</div>
+          {speedup > 0 && <div className="text-[10px] text-sky-300 mt-1">↓ {speedup}% faster</div>}
         </div>
-        <div className="flex-1 p-3 rounded-md bg-emerald-500/10 border border-emerald-500/30">
-          <div className="text-[10px] uppercase tracking-wider text-emerald-400 font-semibold mb-1">💸 Cheapest</div>
-          <div className={`text-sm font-semibold border rounded px-2 py-1.5 text-center ${strategyColor(cheapest.strategy)}`}>
+        <div className="p-4 rounded-lg bg-emerald-500/10 border border-emerald-500/40">
+          <div className="text-[10px] uppercase tracking-widest text-emerald-400 font-bold">Cheapest</div>
+          <div className={`text-xl font-bold mt-2 ${strategyColor(cheapest.strategy)}`}>
             {strategyLabel(cheapest.strategy)}
           </div>
-          <div className="text-[11px] text-emerald-200 text-center mt-1 font-mono">{cheapest.input_tokens + cheapest.output_tokens} tokens</div>
+          <div className="text-sm font-mono text-emerald-100 mt-2">{(cheapest.input_tokens + cheapest.output_tokens).toLocaleString()} tokens</div>
+          {savings > 0 && <div className="text-[10px] text-emerald-300 mt-1">↓ {savings}% cheaper</div>}
         </div>
       </div>
     </div>
