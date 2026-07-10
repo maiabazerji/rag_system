@@ -1,7 +1,7 @@
 """Extract (subject, predicate, object) triples from a chunk of text.
 
 We ask Claude Haiku (cheap, fast) to return JSON triples. This is the *only* part
-of the system where the LLM rewrites the corpus into a knowledge graph — once
+of the system where the LLM rewrites the corpus into a knowledge graph- once
 extracted, retrieval is purely structural.
 """
 from __future__ import annotations
@@ -76,7 +76,7 @@ async def extract_triples(
 
 
 async def extract_question_entities(question: str) -> list[str]:
-    """Pull out candidate entities from a question — what to walk the graph from."""
+    """Pull out candidate entities from a question- what to walk the graph from."""
     out = await generate_with_usage(
         model=settings.graph_extraction_model,
         prompt=(

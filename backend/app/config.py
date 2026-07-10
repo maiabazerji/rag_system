@@ -39,7 +39,7 @@ class Settings(BaseSettings):
     retrieval_top_k: int = 50
     rerank_top_k: int = 8
 
-    agentic_max_iters: int = 6
+    agentic_max_iters: int = 15
     graph_data_dir: str = "data/graph"
 
     cors_origins: str = "http://localhost:5173"

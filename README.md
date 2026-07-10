@@ -1,12 +1,12 @@
 # EvalRAG
 
-A platform for comparing three production-grade RAG retrieval strategies—**Classic**, **Graph**, and **Agentic**—on the same corpus, with built-in evaluation to catch regressions. Built with the Anthropic API (Claude).
+A platform for comparing three production-grade RAG retrieval strategies:**Classic**, **Graph**, and **Agentic**:on the same corpus, with built-in evaluation to catch regressions. Built with the Anthropic API (Claude).
 
 ## Why I built this
 
 Most RAG projects pick one retrieval strategy and call it done. Here's the tension: a strategy that nails single-fact lookups can flail on multi-hop questions, and vice versa. So I built EvalRAG to answer: **which strategy actually works better on my data?**
 
-The **Compare view** (`/compare` in the UI, `POST /compare/strategies` on the API) runs the same question through all three strategies in parallel. You see answers, sources, latency, token cost, and the reasoning trace side by side. No benchmarks, no hand-waving—just empirical comparison.
+The **Compare view** (`/compare` in the UI, `POST /compare/strategies` on the API) runs the same question through all three strategies in parallel. You see answers, sources, latency, token cost, and the reasoning trace side by side. No benchmarks, no hand-waving:just empirical comparison.
 
 Paired with an **evaluation harness** that scores answers on faithfulness and relevance, plus a **regression system** that flags when a change silently breaks things on your golden dataset, the system lets you measure whether a retrieval tweak or prompt change actually helped or hurt.
 
@@ -20,7 +20,7 @@ For a file-by-file walkthrough of how each strategy works, see [LEARN.md](./LEAR
 | **Graph**   | entity walk on a Claude-built knowledge graph | [`backend/app/rag/strategies/graph.py`](backend/app/rag/strategies/graph.py) + [`graph_store.py`](backend/app/rag/graph_store.py) + [`graph_extract.py`](backend/app/rag/graph_extract.py) | "how is X related to Y" multi-hop |
 | **Agentic** | Claude drives `search`/`fetch`/`finish` tools in a loop | [`backend/app/rag/strategies/agentic.py`](backend/app/rag/strategies/agentic.py) + [`tool_use_loop`](backend/app/rag/providers/anthropic_provider.py) | ambiguous, multi-step questions  |
 
-**Classic RAG** is fast and cheap, but struggles with questions that require reasoning across multiple documents. **Graph RAG** excels at "how is X related to Y" by extracting entity relationships upfront (via Claude Haiku) and walking them at query time. **Agentic RAG** gives Claude a toolbox and lets it decide the retrieval strategy step-by-step—best for ambiguous or multi-step questions, but higher latency and token cost.
+**Classic RAG** is fast and cheap, but struggles with questions that require reasoning across multiple documents. **Graph RAG** excels at "how is X related to Y" by extracting entity relationships upfront (via Claude Haiku) and walking them at query time. **Agentic RAG** gives Claude a toolbox and lets it decide the retrieval strategy step-by-step:best for ambiguous or multi-step questions, but higher latency and token cost.
 
 ---
 
@@ -176,128 +176,6 @@ docker compose ps
 **`HOST:CONTAINER`** is how `docker compose` publishes ports. Containers always talk to each other over the **container ports** on the internal `infra_default` Docker network (e.g. `redis:6379`, `postgres:5432`- note the service name as DNS, not `localhost`). The **host ports** above are only how *you* reach the services from your laptop. The backend env vars in `infra/docker-compose.yml` use the container ports for exactly this reason.
 
 Code in `backend/app/` and `frontend/src/` is **bind-mounted**- edits on your host instantly appear inside the containers, and uvicorn `--reload` / Vite HMR pick them up automatically. Named volumes (`qdrant_data`, `pg_data`) persist data across `down` but are wiped by `down -v`.
-
----
-
-## Troubleshooting
-
-### A. `no configuration file provided: not found`
-
-```
-$ docker compose down
-no configuration file provided: not found
-```
-
-You ran `docker compose` from a directory that has no `docker-compose.yml` (probably the project root). The file is at `infra/docker-compose.yml`. Fix any of three ways:
-
-```bash
-docker compose -f infra/docker-compose.yml down       # 1. point at it explicitly
-cd infra && docker compose down                       # 2. run from the folder it lives in
-$env:COMPOSE_FILE = "infra/docker-compose.yml"        # 3. PowerShell- sticky for the session
-docker compose down
-```
-
-### B. `Bind for 0.0.0.0:<port> failed: port is already allocated`
-
-Another process on your machine is already **listening** on that host port. Docker can't give the same TCP port to two listeners- only one process can hold a `(host, port)` pair at a time. Diagnose:
-
-```powershell
-# Windows / PowerShell- find the owner
-netstat -ano | findstr :6380           # last column is the PID
-docker ps --format "table {{.Names}}\t{{.Ports}}" | findstr 6380
-tasklist /FI "PID eq <pid>"            # what process is that PID?
-```
-
-```bash
-# macOS / Linux
-lsof -iTCP:6380 -sTCP:LISTEN
-docker ps --format "table {{.Names}}\t{{.Ports}}" | grep 6380
-```
-
-Then pick a fix:
-
-```bash
-# 1. Stop the other container if you don't need it
-docker stop <other-container-name>
-
-# 2. Remap THIS project's host port- edit infra/docker-compose.yml,
-#    change "6380:6379" to e.g. "6381:6379", then:
-docker compose -f infra/docker-compose.yml up -d --build
-
-# 3. If a non-Docker process holds it, kill it at the OS level
-taskkill /PID <pid> /F                 # Windows
-kill -9 <pid>                          # macOS / Linux
-```
-
-The repo already ships with non-conflicting host ports (`5434`, `6381`, `8011`, `3100`) chosen to coexist with other common local stacks. If you still collide on those, edit the offending `ports:` line in `infra/docker-compose.yml` and re-run `up -d`.
-
-### C. Container exits immediately after `up`
-
-```bash
-docker compose -f infra/docker-compose.yml ps         # see exit codes
-docker compose -f infra/docker-compose.yml logs backend   # last error before crash
-```
-
-Common causes: `.env` missing, a required env var malformed, a Postgres volume from an older schema (`down -v` to reset), or a healthcheck timeout. The `backend` waits for qdrant + postgres + redis to be `healthy`- if one of them is stuck `(starting)`, fix it first.
-
-### D. `Ollama at http://localhost:11434 is unreachable` (from inside the app)
-
-The error message comes from the **backend container**, not your terminal. Inside a container, `localhost` is the container itself- not your laptop. Ollama runs on your laptop, so `localhost:11434` resolves to nothing in the container.
-
-The Compose file already wires the backend to use Docker's special `host.docker.internal` hostname (the host gateway), with a fallback `extra_hosts` entry for Linux portability:
-
-```yaml
-backend:
-  environment:
-    OLLAMA_HOST: ${OLLAMA_HOST:-http://host.docker.internal:11434}
-  extra_hosts:
-    - "host.docker.internal:host-gateway"
-```
-
-If you still see the error after a fresh `up -d --build`:
-
-1. Confirm Ollama is actually running on the host: `curl http://localhost:11434/api/tags` from your terminal.
-2. From inside the container, confirm the host is reachable:
-   ```bash
-   docker compose -f infra/docker-compose.yml exec backend curl -s http://host.docker.internal:11434/api/tags
-   ```
-3. If your `.env` sets `OLLAMA_HOST=http://localhost:11434` (the old default), either delete that line or set it to `http://host.docker.internal:11434`.
-4. On Windows + WSL2 specifically, make sure Ollama is running on the Windows side (not inside WSL)- the host-gateway IP points at the Windows host.
-
-### E. Hot reload not picking up edits
-
-Bind mounts only work if the container actually started with the mount in place. If you edited `docker-compose.yml`, you need `up -d --build` (recreate), not just `restart`. Verify the mount with:
-
-```bash
-docker compose -f infra/docker-compose.yml config | grep -A2 volumes
-```
-
-### Local (non-Docker) dev
-
-```bash
-# Services only
-docker compose -f infra/docker-compose.yml up -d qdrant postgres redis langfuse
-
-# Backend- Windows PowerShell
-copy .env.example .env       # one-time, from project root
-cd backend
-python -m venv .venv
-.venv\Scripts\Activate.ps1
-pip install -e ".[dev]"
-uvicorn app.main:app --reload
-
-# Backend- macOS / Linux
-cp .env.example .env         # one-time, from project root
-cd backend
-python -m venv .venv && source .venv/bin/activate
-pip install -e ".[dev]"
-uvicorn app.main:app --reload
-
-# Frontend (new terminal)
-cd frontend
-npm install
-npm run dev                    # http://localhost:5173
-```
 
 ---
 

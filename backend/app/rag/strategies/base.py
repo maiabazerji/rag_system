@@ -14,7 +14,7 @@ class StrategyResult:
     sources: list[Source]
     refusal: bool = False
     confidence: float = 0.85
-    # Telemetry — what makes the comparison page interesting.
+    # Telemetry- what makes the comparison page interesting.
     latency_ms: int = 0
     input_tokens: int = 0
     output_tokens: int = 0

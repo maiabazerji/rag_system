@@ -1,4 +1,4 @@
-"""RAG strategies — three different ways to answer a question from documents.
+"""RAG strategies- three different ways to answer a question from documents.
 
 - classic:  retrieve top-k by similarity → stuff into prompt → generate
 - graph:    pull entities from the question, walk an entity→entity→chunk graph

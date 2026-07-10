@@ -49,8 +49,8 @@ export default function Ask() {
       <header className="flex items-end justify-between">
         <div className="space-y-2">
           <h1 className="display text-4xl font-semibold text-white">Ask</h1>
-          <p className="text-zinc-400 max-w-xl">
-            Question your indexed documents. Answers show sources so you can verify accuracy.
+          <p className="text-sm text-zinc-400">
+            Question indexed documents. Sources let you verify accuracy.
           </p>
         </div>
         {turns.length > 0 && (
@@ -58,7 +58,7 @@ export default function Ask() {
             onClick={() => setTurns([])}
             className="btn-ghost text-xs"
           >
-            Clear history
+            Clear
           </button>
         )}
       </header>
@@ -123,32 +123,30 @@ export default function Ask() {
 function EmptyState({ onPick }: { onPick: (s: string) => void }) {
   const groups: { label: string; questions: string[] }[] = [
     {
-      label: "Retrieval",
+      label: "Retrieval Strategy & Tradeoffs",
       questions: [
-        "How does hybrid retrieval beat dense-only?",
-        "What does a cross-encoder reranker actually do?",
-        "When should I rebuild embeddings vs. just re-rank?",
-        "What is BM25 and why pair it with dense vectors?",
-        "How do I pick a chunk size and overlap?",
+        "How does entity extraction in Graph RAG reduce hallucination compared to Classic RAG?",
+        "When should you use dense retrieval over hybrid, and what are the latency-quality tradeoffs?",
+        "Why might Agentic RAG overshoot on simple queries while excelling on complex reasoning?",
+        "How does reranking affect both precision and recall in multi-hop retrieval scenarios?",
       ],
     },
     {
-      label: "Evaluation",
+      label: "System Design & Architecture",
       questions: [
-        "Why do we need a golden dataset?",
-        "What is faithfulness and how is it scored?",
-        "How does an LLM-as-judge avoid grading itself?",
-        "What does a regression in eval metrics look like?",
-        "Faithfulness vs. answer relevance  -  which matters more?",
+        "What's the relationship between chunk size, embedding model, and retrieval quality?",
+        "How do you design a RAG pipeline to handle both factual and synthesis queries efficiently?",
+        "How does knowledge graph construction from documents affect retrieval coverage vs. hallucination?",
+        "What are the failure modes of dense-only retrieval with structurally ambiguous documents?",
       ],
     },
     {
-      label: "System",
+      label: "Evaluation & Production",
       questions: [
-        "What's the difference between RAG and fine-tuning?",
-        "How do citations reduce hallucination in practice?",
-        "Why use structured outputs for LLM responses?",
-        "What does Langfuse give me that logs don't?",
+        "What's the distinction between context precision and context recall, and how do they interact?",
+        "How would you optimize a RAG pipeline for both speed and accuracy with heterogeneous documents?",
+        "Why does Agentic RAG use more tokens than Classic on the same corpus, and when is that justified?",
+        "How do you detect and prevent retrieval drift as your corpus grows over time?",
       ],
     },
   ];
@@ -207,10 +205,26 @@ function Skeleton() {
   );
 }
 
+function cleanAnswer(text: string): string {
+  return text
+    .split("\n")
+    .filter(line => !line.match(/^#+\s/) && !line.match(/^>\s/) && line.trim() !== "---" && line.trim() !== "|" && line.trim() !== "")
+    .map(line => {
+      return line
+        .replace(/\*\*(.+?)\*\*/g, "$1")
+        .replace(/\*(.+?)\*/g, "$1")
+        .replace(/`(.+?)`/g, "$1")
+        .replace(/\[(.+?)\]\(.+?\)/g, "$1")
+        .replace(/According to \[[\w:]+\]\s*,?\s*/g, "");
+    })
+    .join("\n")
+    .trim();
+}
+
 function AnswerView({ a }: { a: Answer }) {
   const pct = Math.round(a.confidence * 100);
   return (
-    <div className="space-y-4">
+    <div className="space-y-3">
       <div className="flex items-center gap-2 flex-wrap">
         <span className={`chip ${a.refusal ? "!text-amber-300 !border-amber-500/40 !bg-amber-500/10" : "!text-emerald-300 !border-emerald-500/40 !bg-emerald-500/10"}`}>
           {a.refusal ? "Refused" : "Answered"}
@@ -219,23 +233,7 @@ function AnswerView({ a }: { a: Answer }) {
         <ConfidenceBar pct={pct} refused={a.refusal} />
       </div>
 
-      <p className="text-zinc-100 whitespace-pre-wrap leading-relaxed">{a.answer}</p>
-
-      {a.sources.length > 0 && a.sources[0].chunk_id !== "none" && (
-        <div>
-          <div className="text-xs uppercase tracking-wider text-zinc-500 mb-2">Sources</div>
-          <div className="grid gap-2">
-            {a.sources.map((s) => (
-              <div key={s.chunk_id} className="bg-bg-elevated border border-bg-border rounded-xl p-3">
-                <div className="flex items-center gap-2 text-xs text-zinc-400 font-mono mb-1">
-                  <span className="text-accent">●</span> {s.chunk_id}
-                </div>
-                <p className="text-zinc-300 text-sm leading-relaxed">{s.quote}</p>
-              </div>
-            ))}
-          </div>
-        </div>
-      )}
+      <p className="text-zinc-200 leading-relaxed">{cleanAnswer(a.answer)}</p>
 
       {!a.refusal && <RatingWidget a={a} />}
     </div>

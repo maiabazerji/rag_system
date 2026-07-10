@@ -1,10 +1,10 @@
 """HTTP routes for the Graph RAG knowledge graph.
 
-POST /graph/build   — extract triples from already-ingested chunks (idempotent
+POST /graph/build  - extract triples from already-ingested chunks (idempotent
                       per (chunk_id, triple); call after /ingest).
-GET  /graph/stats   — counts of triples, entities, indexed chunks.
-GET  /graph/entities?q=foo — search entities by substring.
-POST /graph/reset   — wipe the graph (does not touch Qdrant).
+GET  /graph/stats  - counts of triples, entities, indexed chunks.
+GET  /graph/entities?q=foo- search entities by substring.
+POST /graph/reset  - wipe the graph (does not touch Qdrant).
 """
 from __future__ import annotations
 

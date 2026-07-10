@@ -24,9 +24,9 @@ _SYSTEM = (
     "  1. Call `search` with a focused query. Read the previews.\n"
     "  2. If a preview looks promising but is truncated, call `fetch_chunk` for the full text.\n"
     "  3. If your first search misses, try a different phrasing (synonyms, related concepts).\n"
-    "  4. When you have enough evidence, call `finish` with the answer and the chunk_ids you used.\n"
-    "  5. If the corpus genuinely doesn't cover the question, call `finish` with refusal=true and a brief reason.\n\n"
-    f"Hard limit: {settings.agentic_max_iters} tool calls total. Be efficient."
+    "  4. When you have found relevant chunks that answer the question, call `finish` with refusal=false, the answer, and chunk_ids.\n"
+    "  5. ONLY call `finish` with refusal=true if you've tried multiple searches and the corpus genuinely has NO relevant information.\n\n"
+    f"Hard limit: {settings.agentic_max_iters} tool calls total. Be efficient. Default to refusal=false when you have evidence."
 )
 
 _TOOLS = [
@@ -160,13 +160,14 @@ class AgenticRAG(Strategy):
                 extra={"chunks_explored": list(seen_chunks.keys())},
             )
 
-        # Agent never called finish — return what we have.
+        # Agent never called finish but has substantial output
+        has_answer = out["text"] and len(out["text"].strip()) > 50
         return StrategyResult(
             answer=out["text"] or "(agent stopped without finishing)",
             sources=[Source(chunk_id=c, quote=v["text"][:280]) for c, v in list(seen_chunks.items())[:5]]
             or [Source(chunk_id="none", quote="")],
-            refusal=True,
-            confidence=0.3,
+            refusal=not has_answer,
+            confidence=0.8 if has_answer else 0.3,
             input_tokens=out["input_tokens"],
             output_tokens=out["output_tokens"],
             iterations=out["iterations"],

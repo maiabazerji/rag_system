@@ -7,10 +7,12 @@ import Compare from "./pages/Compare";
 import EvalPage from "./pages/Eval";
 import Regressions from "./pages/Regressions";
 import Ingest from "./pages/Ingest";
+import Data from "./pages/Data";
 import {
   BeakerIcon,
   ChatIcon,
   CompareIcon,
+  DatabaseIcon,
   TrendIcon,
   UploadIcon,
 } from "./components/Icons";
@@ -22,6 +24,7 @@ const NAV = [
   { to: "/", label: "Ask", Icon: ChatIcon, end: true },
   { to: "/ingest", label: "Ingest", Icon: UploadIcon },
   { to: "/compare", label: "Compare", Icon: CompareIcon },
+  { to: "/data", label: "Data", Icon: DatabaseIcon },
   { to: "/eval", label: "Evaluation", Icon: BeakerIcon },
   { to: "/regressions", label: "Regressions", Icon: TrendIcon },
 ];
@@ -128,6 +131,7 @@ ReactDOM.createRoot(document.getElementById("root")!).render(
             <Route path="/" element={<Ask />} />
             <Route path="/ingest" element={<Ingest />} />
             <Route path="/compare" element={<Compare />} />
+            <Route path="/data" element={<Data />} />
             <Route path="/eval" element={<EvalPage />} />
             <Route path="/regressions" element={<Regressions />} />
           </Routes>

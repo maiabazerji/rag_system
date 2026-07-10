@@ -1,6 +1,6 @@
 # Reranking and Context Compression
 
-Bi-encoders — used at retrieval time — embed queries and documents
+Bi-encoders- used at retrieval time- embed queries and documents
 independently, which is fast but limits precision. A cross-encoder takes the
 query and a candidate document together and outputs a single relevance score.
 Because it can attend jointly over the pair, a cross-encoder is significantly
