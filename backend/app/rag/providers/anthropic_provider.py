@@ -27,6 +27,7 @@ async def generate(*, model: str, prompt: str, max_tokens: int = 1024) -> str:
 async def generate_with_usage(
     *, model: str, prompt: str, max_tokens: int = 1024, system: str | None = None
 ) -> dict:
+    import httpx
     kwargs: dict[str, Any] = {
         "model": model,
         "max_tokens": max_tokens,
@@ -34,14 +35,17 @@ async def generate_with_usage(
     }
     if system:
         kwargs["system"] = system
-    async with AsyncAnthropic(api_key=_require_key()) as client:
-        resp = await client.messages.create(**kwargs)
-    text = "".join(b.text for b in resp.content if getattr(b, "type", None) == "text").strip()
-    return {
-        "text": text,
-        "input_tokens": resp.usage.input_tokens,
-        "output_tokens": resp.usage.output_tokens,
-    }
+    try:
+        async with AsyncAnthropic(api_key=_require_key(), timeout=60.0) as client:
+            resp = await client.messages.create(**kwargs)
+        text = "".join(b.text for b in resp.content if getattr(b, "type", None) == "text").strip()
+        return {
+            "text": text,
+            "input_tokens": resp.usage.input_tokens,
+            "output_tokens": resp.usage.output_tokens,
+        }
+    except (httpx.ConnectTimeout, httpx.ReadTimeout, TimeoutError) as e:
+        raise TimeoutError(f"API request timed out: {str(e)}") from e
 
 
 async def tool_use_loop(
@@ -55,11 +59,12 @@ async def tool_use_loop(
     max_tokens: int = 1024,
 ) -> dict:
     """Run a Claude tool-use loop. tool_handlers maps name -> async callable(input_dict)."""
+    import httpx
     messages: list[dict] = [{"role": "user", "content": user_message}]
     trace: list[dict] = []
     total_in = total_out = 0
 
-    async with AsyncAnthropic(api_key=_require_key()) as client:
+    async with AsyncAnthropic(api_key=_require_key(), timeout=90.0) as client:
         for step in range(max_iters):
             resp = await client.messages.create(
                 model=model,

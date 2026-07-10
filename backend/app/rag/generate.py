@@ -66,13 +66,18 @@ async def answer_question(
     model = model or _default_model(effective_provider, strategy)
     prompt_version = prompt_version or "default"
 
-    if await store_count() == 0:
-        return _refusal(
-            question,
-            "No documents uploaded yet. Go to Ingest to upload files, then I can answer your questions.",
-            provider=effective_provider,
-            model=model,
-        )
+    try:
+        doc_count = await store_count()
+        if doc_count == 0:
+            return _refusal(
+                question,
+                "No documents uploaded yet. Go to Ingest to upload files, then I can answer your questions.",
+                provider=effective_provider,
+                model=model,
+            )
+    except Exception:
+        # Qdrant might be slow or unreachable; proceed anyway and let the strategy handle it
+        pass
 
     with start_trace(
         name=f"ask:{strategy}",
@@ -129,8 +134,13 @@ async def run_strategy_raw(
 ):
     """Internal: returns the full `StrategyResult` + telemetry (used by /compare/strategies)."""
     model = model or _default_model("anthropic", strategy)
-    if await store_count() == 0:
-        return None, "No documents indexed yet."
+    try:
+        doc_count = await store_count()
+        if doc_count == 0:
+            return None, "No documents indexed yet."
+    except Exception:
+        # Qdrant might be slow; proceed anyway
+        pass
     try:
         strat = get_strategy(strategy)
     except ValueError as e:

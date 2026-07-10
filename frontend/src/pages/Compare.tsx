@@ -42,9 +42,9 @@ const META: Record<
 };
 
 const SAMPLES = [
-  "How does hybrid retrieval beat dense-only?",
-  "What connects BM25, dense vectors, and reranking?",
-  "Compare faithfulness and answer relevance. Which matters more?",
+  "How does entity extraction in Graph RAG reduce hallucination compared to dense-only retrieval?",
+  "When should you prioritize Agentic RAG's reasoning over Classic RAG's speed?",
+  "What happens to retrieval quality when you use smaller chunks with dense embeddings?",
 ];
 
 export default function Compare() {
@@ -101,17 +101,13 @@ export default function Compare() {
   return (
     <div className="flex flex-col gap-6">
       <header className="space-y-2">
-        <h1 className="display text-4xl font-semibold text-white">Compare strategies</h1>
-        <p className="text-zinc-400 max-w-2xl">
-          Same question, three RAG flavors  - {" "}
-          <span className="text-sky-300">Classic</span>,{" "}
-          <span className="text-violet-300">Graph</span>, and{" "}
-          <span className="text-emerald-300">Agentic</span>. All grounded in your indexed
-          documents, all answered by the LLM.
+        <h1 className="display text-4xl font-semibold text-white">Compare</h1>
+        <p className="text-sm text-zinc-400">
+          <span className="text-sky-300">Classic</span> • <span className="text-violet-300">Graph</span> • <span className="text-emerald-300">Agentic</span>
         </p>
       </header>
 
-      <div className="card flex flex-col gap-3">
+      <div className="card flex flex-col gap-1.5 p-2">
         <textarea
           value={q}
           onChange={(e) => setQ(e.target.value)}
@@ -123,21 +119,21 @@ export default function Compare() {
           }}
           rows={2}
           placeholder="Ask something… ⏎ to run"
-          className="input resize-none"
+          className="input resize-none text-sm"
         />
-        <div className="flex flex-wrap items-center justify-between gap-3">
-          <div className="flex flex-wrap gap-1.5">
+        <div className="flex items-center justify-between gap-2">
+          <div className="flex flex-wrap gap-1">
             {SAMPLES.map((s) => (
               <button
                 key={s}
                 onClick={() => setQ(s)}
-                className="chip hover:text-white hover:border-accent/40"
+                className="chip text-xs hover:text-white hover:border-accent/40"
               >
                 {s}
               </button>
             ))}
           </div>
-          <div className="flex items-center gap-2">
+          <div className="flex items-center gap-1.5">
             <GraphStatus
               stats={graphStats}
               busy={buildingGraph}
@@ -146,22 +142,22 @@ export default function Compare() {
             <button
               onClick={run}
               disabled={!q.trim() || busy}
-              className="btn-primary"
+              className="btn-primary text-sm px-3 py-2"
             >
-              {busy ? "Running…" : "Compare 3 strategies"}
+              {busy ? "Running…" : "Compare"}
             </button>
           </div>
         </div>
-        {err && <div className="text-rose-400 text-sm">{err}</div>}
+        {err && <div className="text-rose-400 text-xs">{err}</div>}
       </div>
 
-      <div className="grid lg:grid-cols-3 gap-4">
+      {res && <WinnersBar results={res.results} />}
+
+      <div className="grid lg:grid-cols-3 gap-2">
         {STRATEGIES.map((s) => (
           <StrategyCard key={s} name={s} result={byName(s)} loading={busy} />
         ))}
       </div>
-
-      {res && <WinnersBar results={res.results} />}
     </div>
   );
 }
@@ -229,76 +225,96 @@ function StrategyCard({
   const answerPreview = result && !result.refusal ? truncatedAnswer(result.answer, 2) : null;
 
   return (
-    <div className="card relative overflow-hidden flex flex-col gap-3 min-h-[400px]">
-      <div className={`absolute inset-x-0 top-0 h-20 bg-gradient-to-b ${m.accent} pointer-events-none`} />
+    <div className="card relative overflow-hidden flex flex-col gap-1.5 min-h-[280px] p-2">
+      <div className={`absolute inset-x-0 top-0 h-12 bg-gradient-to-b ${m.accent} pointer-events-none`} />
 
-      <div className="relative flex flex-col gap-2">
-        <div className="display text-lg font-semibold text-white">{m.title}</div>
-        <div className="text-[11px] text-zinc-400 font-mono">{m.tagline}</div>
+      <div className="relative flex flex-col gap-0.5">
+        <div className="text-sm font-bold text-white">{m.title}</div>
+        <div className="text-[8px] text-zinc-500 font-mono">{m.tagline}</div>
       </div>
 
       {loading && !result && <Skeleton />}
 
       {result && (
         <>
-          {/* Large metrics badges at top */}
+          {/* Compact metrics badges */}
           <div className="grid grid-cols-2 gap-2">
-            <div className="bg-sky-500/15 border border-sky-500/40 rounded-lg p-3">
-              <div className="text-[10px] text-sky-300 font-semibold uppercase tracking-wide">⏱ Latency</div>
-              <div className="text-lg font-mono font-bold text-sky-100 mt-1">{result.latency_ms}ms</div>
+            <div className="bg-sky-500/20 border border-sky-500/40 rounded p-2">
+              <div className="text-[8px] text-sky-300 font-bold uppercase">⏱ Latency</div>
+              <div className="text-lg font-mono font-bold text-sky-100 mt-0.5">{result.latency_ms}ms</div>
             </div>
-            <div className="bg-emerald-500/15 border border-emerald-500/40 rounded-lg p-3">
-              <div className="text-[10px] text-emerald-300 font-semibold uppercase tracking-wide">💰 Tokens</div>
-              <div className="text-lg font-mono font-bold text-emerald-100 mt-1">{(result.input_tokens + result.output_tokens).toLocaleString()}</div>
+            <div className="bg-emerald-500/20 border border-emerald-500/40 rounded p-2">
+              <div className="text-[8px] text-emerald-300 font-bold uppercase">💰 Tokens</div>
+              <div className="text-lg font-mono font-bold text-emerald-100 mt-0.5">{(result.input_tokens + result.output_tokens).toLocaleString()}</div>
             </div>
           </div>
 
           {/* Status badge */}
-          <div className={`flex items-center gap-2 rounded-lg px-3 py-2 text-sm font-semibold ${result.refusal ? "bg-amber-500/15 border border-amber-500/40 text-amber-300" : "bg-emerald-500/15 border border-emerald-500/40 text-emerald-300"}`}>
-            <span className="text-lg">{result.refusal ? "⚠" : "✓"}</span>
+          <div className={`flex items-center gap-1.5 rounded px-2 py-1.5 text-xs font-semibold ${result.refusal ? "bg-amber-500/15 border border-amber-500/40 text-amber-300" : "bg-emerald-500/15 border border-emerald-500/40 text-emerald-300"}`}>
+            <span>{result.refusal ? "⚠" : "✓"}</span>
             {result.refusal ? "Refused" : "Answered"}
-            {result.iterations > 1 && <span className="text-xs text-zinc-400 ml-auto">({result.iterations} iterations)</span>}
+            {result.iterations > 1 && <span className="text-[10px] text-zinc-400 ml-auto">({result.iterations}x)</span>}
           </div>
 
           {/* Answer preview or full text */}
           {result.refusal ? (
-            <div className="text-amber-200 text-sm p-3 bg-amber-500/10 rounded-lg border border-amber-500/30">
+            <div className="text-amber-200 text-xs p-2 bg-amber-500/10 rounded border border-amber-500/30">
               {result.answer}
             </div>
           ) : (
-            <div className="flex-1 flex flex-col gap-2">
-              <div className="text-zinc-100 text-sm leading-relaxed answer-content">
+            <div className="flex-1 flex flex-col gap-1">
+              <div className={`text-zinc-200 text-xs leading-relaxed answer-content ${!expanded ? "line-clamp-4" : ""}`}>
                 <FormattedAnswer text={expanded ? result.answer : answerPreview?.text || result.answer} />
               </div>
               {answerPreview?.isTruncated && (
                 <button
                   onClick={() => setExpanded(!expanded)}
-                  className="text-xs text-accent hover:text-accent/80 font-semibold self-start"
+                  className="text-[10px] text-accent hover:text-accent/80 font-semibold self-start"
                 >
-                  {expanded ? "Show less" : "Read full answer →"}
+                  {expanded ? "Show less" : "Read more →"}
                 </button>
               )}
             </div>
           )}
 
-          {/* Sources */}
+          {/* Sources (collapsed by default) */}
           {!result.refusal && result.sources.length > 0 && result.sources[0].chunk_id !== "none" && (
-            <Sources sources={result.sources} />
+            <div className="text-[9px] text-zinc-500">
+              <details>
+                <summary className="cursor-pointer font-semibold hover:text-zinc-300">Sources ({result.sources.length})</summary>
+                <div className="mt-1 space-y-1">
+                  {result.sources.slice(0, 3).map((s, i) => (
+                    <div key={i} className="text-[8px] text-zinc-400 font-mono truncate">
+                      [{i + 1}] {s.chunk_id}
+                    </div>
+                  ))}
+                  {result.sources.length > 3 && <div className="text-[8px] text-zinc-500">+{result.sources.length - 3} more</div>}
+                </div>
+              </details>
+            </div>
           )}
-
-          {/* Extra details */}
-          {result.extra && Object.keys(result.extra).length > 0 && (
-            <ExtraDetails name={name} extra={result.extra} />
-          )}
-
-          {/* Trace */}
-          {result.trace.length > 0 && <TraceDetails trace={result.trace} />}
         </>
       )}
     </div>
   );
 }
 
+
+function stripMarkdown(text: string): string {
+  return text
+    .split("\n")
+    .filter(line => !line.match(/^#+\s/) && !line.match(/^>\s/) && line.trim() !== "---" && line.trim() !== "|" && line.trim() !== "")
+    .map(line => {
+      return line
+        .replace(/\*\*(.+?)\*\*/g, "$1")
+        .replace(/\*(.+?)\*/g, "$1")
+        .replace(/`(.+?)`/g, "$1")
+        .replace(/\[(.+?)\]\(.+?\)/g, "$1")
+        .replace(/According to \[[\w:]+\]\s*,?\s*/g, "");
+    })
+    .join("\n")
+    .trim();
+}
 
 function Sources({ sources }: { sources: Source[] }) {
   const [expanded, setExpanded] = useState<string | null>(null);
@@ -321,7 +337,7 @@ function Sources({ sources }: { sources: Source[] }) {
                 <div className="text-[10px] text-zinc-400 font-mono truncate">{s.chunk_id}</div>
                 {expanded === s.chunk_id && (
                   <div className="text-[11px] text-zinc-300 mt-1.5 leading-relaxed max-h-24 overflow-y-auto border-t border-zinc-700/50 pt-1.5">
-                    {s.quote || "(empty quote)"}
+                    {stripMarkdown(s.quote) || "(empty quote)"}
                   </div>
                 )}
               </div>
@@ -338,33 +354,28 @@ function FormattedAnswer({ text }: { text: string }) {
     const parts: ReactNode[] = [];
     let lastIndex = 0;
 
-    // Match **bold**, *italic*, and code`
+    // Match **bold**, *italic*, and `code`
     const regex = /\*\*(.+?)\*\*|\*(.+?)\*|`(.+?)`/g;
     let match;
 
     while ((match = regex.exec(str)) !== null) {
-      // Add text before match
       if (match.index > lastIndex) {
         parts.push(str.substring(lastIndex, match.index));
       }
 
-      // Add styled content
       if (match[1]) {
-        // Bold
         parts.push(
           <strong key={`b-${match.index}`} className="font-semibold text-zinc-100">
             {match[1]}
           </strong>
         );
       } else if (match[2]) {
-        // Italic
         parts.push(
           <em key={`i-${match.index}`} className="italic text-zinc-200">
             {match[2]}
           </em>
         );
       } else if (match[3]) {
-        // Code
         parts.push(
           <code
             key={`c-${match.index}`}
@@ -378,7 +389,6 @@ function FormattedAnswer({ text }: { text: string }) {
       lastIndex = regex.lastIndex;
     }
 
-    // Add remaining text
     if (lastIndex < str.length) {
       parts.push(str.substring(lastIndex));
     }
@@ -389,15 +399,58 @@ function FormattedAnswer({ text }: { text: string }) {
   const lines = text.split("\n");
   const elements = [];
   let inList = false;
+  let tableLines: string[] = [];
+
+  const flushTable = () => {
+    if (tableLines.length > 0) {
+      const rows = tableLines.map(l => l.split("|").map(c => c.trim()).filter(c => c));
+      if (rows.length > 1) {
+        elements.push(
+          <table key={`table-${elements.length}`} className="text-xs border-collapse border border-zinc-600 my-2">
+            <thead>
+              <tr className="bg-zinc-800">
+                {rows[0].map((cell, i) => (
+                  <th key={i} className="border border-zinc-600 px-2 py-1 text-zinc-200 font-semibold">
+                    {cell}
+                  </th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {rows.slice(2).map((row, ri) => (
+                <tr key={ri} className="hover:bg-zinc-800/50">
+                  {row.map((cell, ci) => (
+                    <td key={ci} className="border border-zinc-600 px-2 py-1 text-zinc-300">
+                      {cell}
+                    </td>
+                  ))}
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        );
+      }
+      tableLines = [];
+    }
+  };
 
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i];
     const trimmed = line.trim();
 
     if (!trimmed) {
+      flushTable();
       elements.push(<div key={`br-${i}`} className="h-2" />);
       inList = false;
       continue;
+    }
+
+    if (trimmed.startsWith("|")) {
+      inList = false;
+      tableLines.push(trimmed);
+      continue;
+    } else {
+      flushTable();
     }
 
     if (trimmed.startsWith("##")) {
@@ -411,20 +464,12 @@ function FormattedAnswer({ text }: { text: string }) {
     } else if (trimmed.startsWith("- ") || trimmed.startsWith("* ")) {
       if (!inList) {
         inList = true;
-        elements.push(<ul key={`ul-${i}`} className="space-y-1 ml-4 mt-1 mb-2" />);
       }
       const item = trimmed.substring(2);
       elements.push(
-        <li key={`li-${i}`} className="text-zinc-200 text-sm list-disc ml-0">
+        <li key={`li-${i}`} className="text-zinc-200 text-sm list-disc ml-4 mt-1">
           {renderInline(item)}
         </li>
-      );
-    } else if (trimmed.startsWith("|")) {
-      inList = false;
-      elements.push(
-        <div key={`table-${i}`} className="text-[11px] font-mono text-zinc-300 overflow-x-auto">
-          {trimmed}
-        </div>
       );
     } else {
       inList = false;
@@ -436,6 +481,7 @@ function FormattedAnswer({ text }: { text: string }) {
     }
   }
 
+  flushTable();
   return <div className="space-y-2">{elements}</div>;
 }
 
@@ -598,27 +644,24 @@ function WinnersBar({ results }: { results: StrategyOut[] }) {
   const savings = Math.round((1 - (cheapest.input_tokens + cheapest.output_tokens) / (secondCheapest.input_tokens + secondCheapest.output_tokens)) * 100);
 
   return (
-    <div className="card flex flex-col gap-4 border-accent/30">
-      <div className="space-y-1">
-        <h3 className="display text-base font-bold text-white">⚡ Winners (This Question)</h3>
-        <p className="text-xs text-zinc-400">Different strategies excel at different things. Pick based on your priority: speed, cost, or answer quality.</p>
-      </div>
-      <div className="grid grid-cols-2 gap-4">
-        <div className="p-4 rounded-lg bg-sky-500/10 border border-sky-500/40">
-          <div className="text-[10px] uppercase tracking-widest text-sky-400 font-bold">Fastest</div>
-          <div className={`text-xl font-bold mt-2 ${strategyColor(fastest.strategy)}`}>
-            {strategyLabel(fastest.strategy)}
+    <div className="card flex flex-col gap-2 border-accent/30 p-3">
+      <h3 className="text-sm font-bold text-white">⚡ Winners</h3>
+      <div className="grid grid-cols-2 gap-2">
+        <div className="p-2 rounded bg-sky-500/15 border border-sky-500/40">
+          <div className="text-[8px] uppercase tracking-wide text-sky-300 font-bold">Fastest</div>
+          <div className={`text-lg font-bold mt-1 ${strategyColor(fastest.strategy)}`}>
+            {strategyLabel(fastest.strategy).split(" ")[0]}
           </div>
-          <div className="text-sm font-mono text-sky-100 mt-2">{fastest.latency_ms}ms</div>
-          {speedup > 0 && <div className="text-[10px] text-sky-300 mt-1">↓ {speedup}% faster</div>}
+          <div className="text-sm font-mono text-sky-100 mt-0.5">{fastest.latency_ms}ms</div>
+          {speedup > 0 && <div className="text-[9px] font-semibold text-sky-200 mt-1">↓ {speedup}% faster</div>}
         </div>
-        <div className="p-4 rounded-lg bg-emerald-500/10 border border-emerald-500/40">
-          <div className="text-[10px] uppercase tracking-widest text-emerald-400 font-bold">Cheapest</div>
-          <div className={`text-xl font-bold mt-2 ${strategyColor(cheapest.strategy)}`}>
-            {strategyLabel(cheapest.strategy)}
+        <div className="p-2 rounded bg-emerald-500/15 border border-emerald-500/40">
+          <div className="text-[8px] uppercase tracking-wide text-emerald-300 font-bold">Cheapest</div>
+          <div className={`text-lg font-bold mt-1 ${strategyColor(cheapest.strategy)}`}>
+            {strategyLabel(cheapest.strategy).split(" ")[0]}
           </div>
-          <div className="text-sm font-mono text-emerald-100 mt-2">{(cheapest.input_tokens + cheapest.output_tokens).toLocaleString()} tokens</div>
-          {savings > 0 && <div className="text-[10px] text-emerald-300 mt-1">↓ {savings}% cheaper</div>}
+          <div className="text-sm font-mono text-emerald-100 mt-0.5">{(cheapest.input_tokens + cheapest.output_tokens).toLocaleString()} tok</div>
+          {savings > 0 && <div className="text-[9px] font-semibold text-emerald-200 mt-1">↓ {savings}% cheaper</div>}
         </div>
       </div>
     </div>

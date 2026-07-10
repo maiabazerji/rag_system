@@ -1,7 +1,7 @@
-# LEARN — Three flavors of RAG, side by side
+# LEARN- Three flavors of RAG, side by side
 
 > A practical, file-by-file tour of how this project does **Classic RAG**, **Graph RAG**,
-> and **Agentic RAG** — all powered by the **Anthropic API** (Claude).
+> and **Agentic RAG**- all powered by the **Anthropic API** (Claude).
 
 This is the document I wish existed when I first learned RAG. Every concept is mapped
 to the exact file and function that implements it. Read it top-to-bottom or jump to
@@ -20,7 +20,7 @@ A **Retrieval-Augmented Generation** system answers a question by:
 The LLM (Claude) never trained on your documents. But by handing it the right
 passages at runtime, you get the model's reasoning skill **grounded** in your data.
 
-The three flavors differ only in **step 1 — how we find the right pieces**:
+The three flavors differ only in **step 1- how we find the right pieces**:
 
 | Flavor      | Retrieval = "find by…"           | Best at                          | Worst at                |
 |-------------|----------------------------------|----------------------------------|-------------------------|
@@ -46,12 +46,12 @@ data/ ─► ingest ─► chunk ─► embed ─► Qdrant (vector DB)
 | **Embeddings**     | `backend/app/rag/embed.py`                          | Uses `BAAI/bge-small-en-v1.5` (a free local model) to turn text into a 384-dim vector. Nearby vectors = similar meaning. |
 | **Vector store**   | `backend/app/rag/store.py`                          | Qdrant (a vector DB). One vector per chunk + the original text as payload. |
 | **Vector search**  | `backend/app/rag/retrieve.py:hybrid_search`         | Embed the question → return top-50 chunks by cosine similarity. |
-| **Rerank**         | `backend/app/rag/rerank.py:rerank`                  | Re-orders the top-50 down to top-8 with a more expensive model (currently a stub — swap in `bge-reranker-large`). |
+| **Rerank**         | `backend/app/rag/rerank.py:rerank`                  | Re-orders the top-50 down to top-8 with a more expensive model (currently a stub- swap in `bge-reranker-large`). |
 | **Provider layer** | `backend/app/rag/providers/anthropic_provider.py`   | Three functions: `generate` (plain text), `generate_with_usage` (returns tokens too), and `tool_use_loop` (the agentic core). |
 
 ---
 
-## 2. Strategy #1 — Classic RAG
+## 2. Strategy #1- Classic RAG
 
 **File:** `backend/app/rag/strategies/classic.py`
 
@@ -89,11 +89,11 @@ out = await generate_with_usage(model=model, prompt=user_msg, max_tokens=1024)
 **Why each step is there**
 - *Why top-50 then rerank to top-8?* Recall vs precision. Embeddings are great at recall
   (don't miss anything) but mediocre at precision. A cross-encoder reranker reads
-  (query, chunk) pairs together and is far more precise — but quadratically more expensive,
+  (query, chunk) pairs together and is far more precise- but quadratically more expensive,
   so we only let it look at 50, not the whole corpus.
 - *Why include `[chunk_id]` markers in the prompt?* So the model can cite a specific
   chunk by id, making the answer auditable.
-- *Why a system prompt with strict rules?* See `backend/app/prompts/default.md` —
+- *Why a system prompt with strict rules?* See `backend/app/prompts/default.md`-
   forbids outside knowledge, requires citations, hardens against prompt-injection in
   retrieved content.
 
@@ -107,13 +107,13 @@ out = await generate_with_usage(model=model, prompt=user_msg, max_tokens=1024)
 
 ---
 
-## 3. Strategy #2 — Graph RAG
+## 3. Strategy #2- Graph RAG
 
 **Files:**
-- `backend/app/rag/graph_store.py` — the on-disk graph (a JSONL file + in-memory index)
-- `backend/app/rag/graph_extract.py` — Claude Haiku turns chunks into triples
-- `backend/app/rag/strategies/graph.py` — the query-time strategy
-- `backend/app/api/graph.py` — HTTP routes (`/graph/build`, `/graph/stats`, …)
+- `backend/app/rag/graph_store.py`- the on-disk graph (a JSONL file + in-memory index)
+- `backend/app/rag/graph_extract.py`- Claude Haiku turns chunks into triples
+- `backend/app/rag/strategies/graph.py`- the query-time strategy
+- `backend/app/api/graph.py`- HTTP routes (`/graph/build`, `/graph/stats`, …)
 
 ### The intuition
 
@@ -143,7 +143,7 @@ Each triple records *what concept goes with what concept*, and importantly *whic
 said so*. The graph is the entities, edges = the relations, and a back-pointer to the
 chunks that justify each edge.
 
-Open `data/graph/triples.jsonl` after building — it's plain JSONL, designed to be human-readable.
+Open `data/graph/triples.jsonl` after building- it's plain JSONL, designed to be human-readable.
 
 ### How a question gets answered
 
@@ -157,7 +157,7 @@ for e in entities:
     chunks, neighbors = graph_store.neighbors(e, hops=1)
     graph_chunks |= chunks
 
-# 3. Also do a regular vector search — entities aren't everything
+# 3. Also do a regular vector search- entities aren't everything
 vector_chunks = hybrid_search(question)
 
 # 4. Union, rerank, build a context that *also* includes a text rendering of the subgraph
@@ -186,7 +186,7 @@ about *connections*, not just summarizing nearby text.
 
 ---
 
-## 4. Strategy #3 — Agentic RAG
+## 4. Strategy #3- Agentic RAG
 
 **File:** `backend/app/rag/strategies/agentic.py`
 **Engine:** `backend/app/rag/providers/anthropic_provider.py:tool_use_loop`
@@ -194,7 +194,7 @@ about *connections*, not just summarizing nearby text.
 ### The intuition
 
 Classic and Graph RAG do retrieval **once**, before the LLM speaks. Agentic RAG hands
-the steering wheel to Claude. The model gets a **toolbox** and decides — turn by turn —
+the steering wheel to Claude. The model gets a **toolbox** and decides- turn by turn-
 what to search, what to read in full, when it has enough, and how to phrase the answer.
 
 This is built on **Anthropic tool use** (a.k.a. function calling). Claude returns
@@ -248,7 +248,7 @@ disclosure in the Compare UI.
 | Best for multi-step / ambiguous questions         | 3–6× the tokens of Classic for trivial questions |
 | Adapts retrieval on the fly                       | Higher latency (multiple round-trips to Claude)  |
 | Catches retrieval misses by re-querying           | Can spin in circles on sparse corpora            |
-| Naturally produces "show your work" traces        | Harder to reproduce — same question may take different paths |
+| Naturally produces "show your work" traces        | Harder to reproduce- same question may take different paths |
 
 ---
 
@@ -266,10 +266,10 @@ results = await asyncio.gather(*[_one(s) for s in ["classic", "graph", "agentic"
 ```
 
 So all three strategies run in parallel. The response contains, for each strategy:
-- `answer`, `sources`, `refusal`, `confidence` — what the user asked for
-- `latency_ms`, `input_tokens`, `output_tokens`, `iterations` — telemetry
-- `trace` — the per-strategy reasoning steps
-- `extra` — strategy-specific debug info (entities + subgraph for Graph; explored chunks for Agentic)
+- `answer`, `sources`, `refusal`, `confidence`- what the user asked for
+- `latency_ms`, `input_tokens`, `output_tokens`, `iterations`- telemetry
+- `trace`- the per-strategy reasoning steps
+- `extra`- strategy-specific debug info (entities + subgraph for Graph; explored chunks for Agentic)
 
 The frontend (`frontend/src/pages/Compare.tsx`) renders these as three side-by-side cards
 with a "Winners" bar at the bottom that tags the fastest and cheapest result.
@@ -281,19 +281,19 @@ with a "Winners" bar at the bottom that tags the fastest and cheapest result.
 You'll see three patterns in this codebase:
 
 ```python
-# 1. PLAIN COMPLETION  (Classic, Graph — final generation step)
+# 1. PLAIN COMPLETION  (Classic, Graph- final generation step)
 client.messages.create(model=..., max_tokens=..., messages=[{"role":"user","content":...}])
 
 # 2. COMPLETION + USAGE  (so we can report cost in the Compare UI)
 resp.usage.input_tokens, resp.usage.output_tokens
 
-# 3. TOOL USE  (Agentic — Claude decides what to do next)
+# 3. TOOL USE  (Agentic- Claude decides what to do next)
 client.messages.create(..., tools=[{name, description, input_schema}, ...])
 # resp.content may include `tool_use` blocks; you reply with `tool_result` blocks
 # and call again. Loop until stop_reason != "tool_use".
 ```
 
-All three patterns are in `backend/app/rag/providers/anthropic_provider.py` — read that
+All three patterns are in `backend/app/rag/providers/anthropic_provider.py`- read that
 file once and you've seen 90% of what real production code does with Claude.
 
 ---
@@ -321,13 +321,13 @@ Frontend: http://localhost:5173 · Backend: http://localhost:8011/health
 
 ### 7.3 The flow
 
-1. **Ingest** — upload a few `.md` or `.pdf` files on the Ingest page.
-2. **Build the graph** — open Compare, click **Build graph**. This loops through the
+1. **Ingest**- upload a few `.md` or `.pdf` files on the Ingest page.
+2. **Build the graph**- open Compare, click **Build graph**. This loops through the
    chunks Qdrant just stored and asks Claude Haiku to extract triples. Open
    `data/graph/triples.jsonl` to see what came out.
-3. **Ask** — go to Compare, type a question, hit *Compare 3 strategies*. Three cards
+3. **Ask**- go to Compare, type a question, hit *Compare 3 strategies*. Three cards
    appear. Click *Reasoning trace* on each to see how each one found its evidence.
-4. **Tinker** — try the same question with each strategy on the Ask page and compare
+4. **Tinker**- try the same question with each strategy on the Ask page and compare
    the answers (and the citations).
 
 ### 7.4 Good demo questions
@@ -341,19 +341,19 @@ Frontend: http://localhost:5173 · Backend: http://localhost:8011/health
 
 ## 8. A reading order for the code
 
-If you want to *really* understand it, open these in this order — each builds on the last:
+If you want to *really* understand it, open these in this order- each builds on the last:
 
-1. `backend/app/config.py` — what's tunable
-2. `backend/app/schemas/__init__.py` — request/response shapes
-3. `backend/app/rag/embed.py`, `store.py`, `retrieve.py` — vector layer
-4. `backend/app/prompts/default.md` — the grounded-answer contract
-5. `backend/app/rag/providers/anthropic_provider.py` — every way we talk to Claude
-6. `backend/app/rag/strategies/classic.py` — the baseline
+1. `backend/app/config.py`- what's tunable
+2. `backend/app/schemas/__init__.py`- request/response shapes
+3. `backend/app/rag/embed.py`, `store.py`, `retrieve.py`- vector layer
+4. `backend/app/prompts/default.md`- the grounded-answer contract
+5. `backend/app/rag/providers/anthropic_provider.py`- every way we talk to Claude
+6. `backend/app/rag/strategies/classic.py`- the baseline
 7. `backend/app/rag/graph_store.py` → `graph_extract.py` → `strategies/graph.py`
 8. `backend/app/rag/strategies/agentic.py`
-9. `backend/app/rag/generate.py` — the dispatcher
-10. `backend/app/api/compare.py` — the 3-way fan-out
-11. `frontend/src/pages/Compare.tsx` — the UI that makes the comparison legible
+9. `backend/app/rag/generate.py`- the dispatcher
+10. `backend/app/api/compare.py`- the 3-way fan-out
+11. `frontend/src/pages/Compare.tsx`- the UI that makes the comparison legible
 
 ---
 
@@ -369,22 +369,22 @@ to RAG, all running against the same indexed corpus, all using the Anthropic API
 - A built-in **evaluation harness** (faithfulness, answer relevance, context precision/recall)
   so improvements can be measured, not asserted.
 
-That last point matters — most "I built a RAG" projects skip evaluation. The whole reason
+That last point matters- most "I built a RAG" projects skip evaluation. The whole reason
 EvalRAG exists is that *a RAG system is only as good as the eval that catches it drifting.*
 
 ---
 
 ## 10. Glossary (skim this if a term threw you off)
 
-- **Chunk** — a small slice of a document, typically ~600 tokens.
-- **Embedding** — a vector of floats that represents the meaning of a chunk.
-- **Vector DB (Qdrant)** — stores embeddings and finds nearest neighbors fast.
-- **Hybrid retrieval** — combine vector (semantic) + keyword (BM25) scores. Our current
+- **Chunk**- a small slice of a document, typically ~600 tokens.
+- **Embedding**- a vector of floats that represents the meaning of a chunk.
+- **Vector DB (Qdrant)**- stores embeddings and finds nearest neighbors fast.
+- **Hybrid retrieval**- combine vector (semantic) + keyword (BM25) scores. Our current
   retrieve.py is dense-only; the name is aspirational and a great next exercise.
-- **Reranker** — a model that scores (query, chunk) pairs together. More accurate than
-  embeddings, more expensive — used on the shortlist only.
-- **Triple** — `(subject, predicate, object)`, the atomic unit of a knowledge graph.
-- **Tool use / function calling** — model returns a structured request to run a function;
+- **Reranker**- a model that scores (query, chunk) pairs together. More accurate than
+  embeddings, more expensive- used on the shortlist only.
+- **Triple**- `(subject, predicate, object)`, the atomic unit of a knowledge graph.
+- **Tool use / function calling**- model returns a structured request to run a function;
   you run it and pass the result back. The basis of "agentic" behavior.
-- **Faithfulness** — does the answer say only things actually supported by the cited chunks?
-- **Refusal** — when the system says "I don't know from the corpus" instead of hallucinating.
+- **Faithfulness**- does the answer say only things actually supported by the cited chunks?
+- **Refusal**- when the system says "I don't know from the corpus" instead of hallucinating.

@@ -1,6 +1,6 @@
 # Structured Outputs
 
-Structured outputs constrain an LLM to emit data that conforms to a schema —
+Structured outputs constrain an LLM to emit data that conforms to a schema-
 typically a JSON object validated against a Pydantic model. This turns an
 otherwise free-form response into something the rest of the system can parse
 and act on deterministically.
@@ -21,4 +21,4 @@ and act on deterministically.
 A RAG answer schema typically includes the answer text, a list of citation
 sources with chunk IDs and quoted spans, a confidence score, and a refusal
 flag. Enforcing the schema makes citations machine-checkable against the
-retrieved context — the basis for faithfulness evaluation.
+retrieved context- the basis for faithfulness evaluation.
