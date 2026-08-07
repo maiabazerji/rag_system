@@ -1,12 +1,22 @@
 from __future__ import annotations
 
 import json
+import logging
 from datetime import datetime, timezone
 from pathlib import Path
+
+from ragas.metrics import (
+    answer_relevance as ragas_answer_relevance,
+    context_precision as ragas_context_precision,
+    context_recall as ragas_context_recall,
+    faithfulness as ragas_faithfulness,
+)
 
 from app.rag.generate import answer_question
 from app.schemas import EvalScore
 from app.tracing.wandb_tracer import log_eval_table, log_metrics, wandb_run
+
+logger = logging.getLogger(__name__)
 
 ROOT = Path(__file__).resolve().parents[3]
 GOLDEN_DIR = ROOT / "data" / "golden"
@@ -129,6 +139,136 @@ async def score_example(expected: dict, got: dict) -> EvalScore:
         context_precision=scores.get("context_precision", 0.0),
         context_recall=scores.get("context_recall", 0.0),
     )
+
+
+async def faithfulness_score(answer: str, context: list[str]) -> float:
+    """Score faithfulness using RAGAS metric.
+
+    Measures what fraction of claims in the answer are grounded in the context.
+
+    Args:
+        answer: The generated answer
+        context: List of context chunks
+
+    Returns:
+        Faithfulness score (0-1)
+    """
+    try:
+        if not context or not answer:
+            return 0.0
+
+        from ragas import Sample
+
+        sample = Sample(
+            question="",  # RAGAS faithfulness doesn't require question
+            answer=answer,
+            contexts=context,
+        )
+
+        # Run the metric with configured LLM (Anthropic)
+        score = await ragas_faithfulness.ascore(sample=sample)
+        return max(0.0, min(1.0, float(score)))
+    except Exception as e:
+        logger.warning(f"RAGAS faithfulness error: {e}")
+        return 0.5
+
+
+async def answer_relevance_score(question: str, answer: str) -> float:
+    """Score answer relevance using RAGAS metric.
+
+    Measures how well the answer addresses the user's question.
+
+    Args:
+        question: The user's question
+        answer: The generated answer
+
+    Returns:
+        Answer relevance score (0-1)
+    """
+    try:
+        if not question or not answer:
+            return 0.0
+
+        from ragas import Sample
+
+        sample = Sample(
+            question=question,
+            answer=answer,
+            contexts=[],  # Answer relevance doesn't require context
+        )
+
+        # Run the metric
+        score = await ragas_answer_relevance.ascore(sample=sample)
+        return max(0.0, min(1.0, float(score)))
+    except Exception as e:
+        logger.warning(f"RAGAS answer_relevance error: {e}")
+        return 0.5
+
+
+async def context_recall_score(expected: str | list[str], retrieved: list[str]) -> float:
+    """Score context recall using RAGAS metric.
+
+    Measures what percentage of ground truth information is in retrieved context.
+
+    Args:
+        expected: Ground truth answer or list of expected information
+        retrieved: List of retrieved context chunks
+
+    Returns:
+        Context recall score (0-1)
+    """
+    try:
+        if not retrieved or not expected:
+            return 0.0
+
+        from ragas import Sample
+
+        expected_str = expected if isinstance(expected, str) else " ".join(expected)
+        sample = Sample(
+            question="",  # RAGAS context_recall doesn't require question
+            answer=expected_str,
+            contexts=retrieved,
+        )
+
+        # Run the metric
+        score = await ragas_context_recall.ascore(sample=sample)
+        return max(0.0, min(1.0, float(score)))
+    except Exception as e:
+        logger.warning(f"RAGAS context_recall error: {e}")
+        return 0.5
+
+
+async def context_precision_score(question: str, context: list[str], answer: str) -> float:
+    """Score context precision using RAGAS metric.
+
+    Measures what percentage of retrieved context is relevant to answering the question.
+
+    Args:
+        question: The user's question
+        context: List of retrieved context chunks
+        answer: The generated answer (used to infer relevance)
+
+    Returns:
+        Context precision score (0-1)
+    """
+    try:
+        if not context or not question:
+            return 0.0
+
+        from ragas import Sample
+
+        sample = Sample(
+            question=question,
+            answer=answer or "",
+            contexts=context,
+        )
+
+        # Run the metric
+        score = await ragas_context_precision.ascore(sample=sample)
+        return max(0.0, min(1.0, float(score)))
+    except Exception as e:
+        logger.warning(f"RAGAS context_precision error: {e}")
+        return 0.5
 
 
 def aggregate(scores: list[dict]) -> EvalScore | None:

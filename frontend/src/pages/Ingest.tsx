@@ -1,6 +1,9 @@
 import { useEffect, useRef, useState } from "react";
 import { get, upload } from "../api/client";
 import { UploadIcon } from "../components/Icons";
+import LoadingSpinner from "../components/LoadingSpinner";
+import ErrorAlert from "../components/ErrorAlert";
+import { formatTokens } from "../utils/formatting";
 
 type IngestResult = { doc_id: string; filename: string; chunks: number; indexed_total: number };
 
@@ -75,23 +78,40 @@ export default function Ingest() {
           drag ? "border-accent bg-accent/5" : "hover:border-zinc-600"
         }`}
       >
-        <div className="inline-flex w-11 h-11 rounded-lg border border-bg-border text-zinc-400 items-center justify-center mb-4">
-          <UploadIcon className="w-5 h-5" />
-        </div>
-        <h2 className="display text-xl font-semibold text-white">Drop files here</h2>
-        <p className="text-zinc-500 text-sm mt-1">or click below to browse</p>
-        <input
-          ref={fileRef}
-          type="file"
-          multiple
-          accept=".txt,.md,.pdf"
-          className="hidden"
-          onChange={(e) => e.target.files && uploadFiles(e.target.files)}
-        />
-        <button onClick={() => fileRef.current?.click()} disabled={busy} className="btn-primary mt-5">
-          {busy ? "Uploading…" : "Choose files"}
-        </button>
-        {err && <p className="text-rose-400 text-sm mt-4">{err}</p>}
+        {busy ? (
+          <LoadingSpinner message="Processing and indexing files..." />
+        ) : (
+          <>
+            <div className="inline-flex w-11 h-11 rounded-lg border border-bg-border text-zinc-400 items-center justify-center mb-4">
+              <UploadIcon className="w-5 h-5" aria-hidden="true" />
+            </div>
+            <h2 className="display text-xl font-semibold text-white">Drop files here</h2>
+            <p className="text-zinc-500 text-sm mt-1">or click below to browse</p>
+            <input
+              ref={fileRef}
+              type="file"
+              multiple
+              accept=".txt,.md,.pdf"
+              className="hidden"
+              onChange={(e) => e.target.files && uploadFiles(e.target.files)}
+            />
+            <button onClick={() => fileRef.current?.click()} disabled={busy} className="btn-primary mt-5 min-h-[48px]">
+              Choose files
+            </button>
+          </>
+        )}
+        {err && (
+          <div className="mt-4">
+            <ErrorAlert
+              error={err}
+              onRetry={() => {
+                setErr(null);
+                fileRef.current?.click();
+              }}
+              onDismiss={() => setErr(null)}
+            />
+          </div>
+        )}
       </div>
 
       {items.length > 0 && (
@@ -99,13 +119,18 @@ export default function Ingest() {
           <div className="text-xs uppercase tracking-wider text-zinc-500 mb-2">Recently uploaded</div>
           <div className="grid gap-2">
             {items.map((it, i) => (
-              <div key={i} className="card !p-4 flex items-center justify-between">
-                <div className="min-w-0">
+              <div key={i} className="card !p-4 flex items-center justify-between gap-4 flex-wrap sm:flex-nowrap">
+                <div className="min-w-0 flex-1">
                   <div className="text-zinc-100 font-medium truncate">{it.filename}</div>
-                  <div className="text-xs text-zinc-500 font-mono mt-0.5">{it.doc_id}</div>
+                  <div className="text-xs text-zinc-500 font-mono mt-0.5 truncate">{it.doc_id}</div>
                 </div>
-                <div className="chip !text-emerald-300 !border-emerald-500/40 !bg-emerald-500/10 shrink-0">
-                  +{it.chunks} chunks
+                <div className="flex items-center gap-2 shrink-0 flex-wrap sm:flex-nowrap">
+                  <div className="chip !text-emerald-300 !border-emerald-500/40 !bg-emerald-500/10 min-h-[44px] sm:min-h-auto">
+                    +{it.chunks} chunks
+                  </div>
+                  <div className="chip text-xs min-h-[44px] sm:min-h-auto">
+                    {it.indexed_total.toLocaleString()} total
+                  </div>
                 </div>
               </div>
             ))}

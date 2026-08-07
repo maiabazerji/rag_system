@@ -1,90 +1,370 @@
+"""Pydantic schemas for EvalRAG API requests and responses.
+
+These models define the contract between frontend and backend, enforce validation,
+and provide structured documentation for the API.
+"""
+
 from pydantic import BaseModel, Field
 
 
 class Source(BaseModel):
-    chunk_id: str
-    quote: str
-    score: float | None = Field(default=None, ge=0, le=1)
+    """A source chunk used to ground an answer.
+
+    Attributes:
+        chunk_id: Unique identifier for the retrieved chunk.
+        quote: The exact text from the chunk that supports the answer.
+        score: Retrieval score (0-1) indicating relevance confidence.
+               None if score is not applicable for this strategy.
+
+    Example:
+        {
+            "chunk_id": "doc_123_chunk_5",
+            "quote": "Claude is an AI assistant made by Anthropic.",
+            "score": 0.92
+        }
+    """
+
+    chunk_id: str = Field(description="Unique chunk identifier")
+    quote: str = Field(description="Exact text from the chunk supporting the answer")
+    score: float | None = Field(
+        default=None, ge=0, le=1, description="Relevance score (0-1)"
+    )
 
 
 class Answer(BaseModel):
-    question: str
-    answer: str
-    sources: list[Source] = Field(min_length=1)
-    confidence: float = Field(ge=0, le=1)
-    refusal: bool = False
-    provider: str | None = None
-    model: str | None = None
+    """A generated answer with sources and confidence.
+
+    Attributes:
+        question: The question that was asked.
+        answer: The generated answer text.
+        sources: List of chunks grounding the answer.
+        confidence: Model's confidence in the answer (0-1).
+        refusal: Whether the model refused to answer.
+        provider: The LLM provider used (anthropic, openai, local).
+        model: The specific model ID used for generation.
+
+    Example:
+        {
+            "question": "Who built Claude?",
+            "answer": "Claude was built by Anthropic, an AI safety company.",
+            "sources": [
+                {
+                    "chunk_id": "doc_1_chunk_0",
+                    "quote": "Claude is an AI assistant made by Anthropic.",
+                    "score": 0.95
+                }
+            ],
+            "confidence": 0.89,
+            "refusal": false,
+            "provider": "anthropic",
+            "model": "claude-opus-4-7"
+        }
+    """
+
+    question: str = Field(description="The question asked")
+    answer: str = Field(description="The generated answer text")
+    sources: list[Source] = Field(
+        min_length=1, description="Chunks supporting this answer"
+    )
+    confidence: float = Field(
+        ge=0, le=1, description="Model confidence in the answer (0-1)"
+    )
+    refusal: bool = Field(
+        default=False, description="Whether the model refused to answer"
+    )
+    provider: str | None = Field(
+        default=None, description="LLM provider (anthropic, openai, local)"
+    )
+    model: str | None = Field(
+        default=None, description="Specific model ID used (e.g. claude-opus-4-7)"
+    )
 
 
 class Chunk(BaseModel):
-    id: str
-    doc_id: str
-    text: str
-    tokens: int = Field(ge=0)
-    section: str | None = None
-    metadata: dict = Field(default_factory=dict)
+    """A document chunk in the vector store.
+
+    Attributes:
+        id: Unique identifier for this chunk.
+        doc_id: ID of the source document.
+        text: The chunk text content.
+        tokens: Approximate token count.
+        section: Optional section/heading within the document.
+        metadata: Additional metadata (source, page_number, etc.).
+
+    Example:
+        {
+            "id": "doc_123_chunk_5",
+            "doc_id": "doc_123",
+            "text": "Claude is an AI assistant made by Anthropic...",
+            "tokens": 150,
+            "section": "About",
+            "metadata": {
+                "source": "blog.md",
+                "page_number": 2
+            }
+        }
+    """
+
+    id: str = Field(description="Unique chunk identifier")
+    doc_id: str = Field(description="Parent document ID")
+    text: str = Field(description="Chunk content text")
+    tokens: int = Field(ge=0, description="Approximate token count")
+    section: str | None = Field(
+        default=None, description="Section/heading within document"
+    )
+    metadata: dict = Field(
+        default_factory=dict, description="Additional metadata (source, page, etc.)"
+    )
 
 
 class AskRequest(BaseModel):
-    question: str
-    top_k: int = Field(default=8, ge=1, le=100)
-    provider: str | None = None
-    model: str | None = None
-    prompt_version: str | None = None
-    strategy: str = "classic"  # classic | graph | agentic
+    """Request to ask a question and get an answer.
+
+    Attributes:
+        question: The question to answer.
+        top_k: Number of chunks to retrieve (1-100, default 8).
+        provider: Override default LLM provider (anthropic, openai, local).
+        model: Override default model ID.
+        prompt_version: Optional prompt variant identifier.
+        strategy: RAG strategy to use (classic, graph, agentic).
+
+    Example:
+        {
+            "question": "How does Claude handle security?",
+            "top_k": 10,
+            "strategy": "classic",
+            "model": "claude-opus-4-7"
+        }
+    """
+
+    question: str = Field(description="Question to answer")
+    top_k: int = Field(
+        default=8, ge=1, le=100, description="Number of chunks to retrieve"
+    )
+    provider: str | None = Field(
+        default=None, description="Override LLM provider"
+    )
+    model: str | None = Field(default=None, description="Override model ID")
+    prompt_version: str | None = Field(
+        default=None, description="Optional prompt variant"
+    )
+    strategy: str = Field(
+        default="classic",
+        description="RAG strategy: classic, graph, or agentic",
+    )
 
 
 class CompareRequest(BaseModel):
-    question: str
-    variants: list[dict]  # [{provider, model, prompt_version}, ...]
+    """Request to compare multiple model/provider combinations.
+
+    Attributes:
+        question: The question to compare on.
+        variants: List of configurations to compare
+                 (provider, model, prompt_version, etc.).
+
+    Example:
+        {
+            "question": "What is RAG?",
+            "variants": [
+                {"provider": "anthropic", "model": "claude-opus-4-7"},
+                {"provider": "openai", "model": "gpt-4o-mini"}
+            ]
+        }
+    """
+
+    question: str = Field(description="Question to compare on")
+    variants: list[dict] = Field(
+        description="List of model/provider configurations to compare"
+    )
 
 
 class CompareStrategiesRequest(BaseModel):
-    question: str
-    strategies: list[str] = ["classic", "graph", "agentic"]
-    model: str | None = None
+    """Request to compare RAG strategies on the same question.
+
+    Attributes:
+        question: The question to run through all strategies.
+        strategies: List of strategies to compare (classic, graph, agentic).
+        model: Optional model override for all strategies.
+
+    Example:
+        {
+            "question": "How are embeddings used in RAG?",
+            "strategies": ["classic", "graph", "agentic"],
+            "model": "claude-opus-4-7"
+        }
+    """
+
+    question: str = Field(description="Question to compare strategies on")
+    strategies: list[str] = Field(
+        default=["classic", "graph", "agentic"],
+        description="Strategies to compare: classic, graph, agentic",
+    )
+    model: str | None = Field(default=None, description="Optional model override")
 
 
 class EvalRunRequest(BaseModel):
-    dataset: str = "golden_v1"
-    provider: str | None = None
-    model: str | None = None
-    prompt_version: str | None = None
+    """Request to run evaluation on a dataset.
+
+    Attributes:
+        dataset: Golden dataset to evaluate against (e.g., golden_v1).
+        provider: Override default LLM provider.
+        model: Override default model ID.
+        prompt_version: Optional prompt variant identifier.
+
+    Example:
+        {
+            "dataset": "golden_v1",
+            "model": "claude-opus-4-7"
+        }
+    """
+
+    dataset: str = Field(
+        default="golden_v1", description="Golden dataset name"
+    )
+    provider: str | None = Field(
+        default=None, description="Override LLM provider"
+    )
+    model: str | None = Field(default=None, description="Override model ID")
+    prompt_version: str | None = Field(
+        default=None, description="Optional prompt variant"
+    )
 
 
 class EvalScore(BaseModel):
-    faithfulness: float
-    answer_relevance: float
-    context_precision: float
-    context_recall: float
+    """Evaluation scores for an answer.
+
+    Attributes:
+        faithfulness: How much the answer sticks to retrieved context (0-1).
+        answer_relevance: How relevant the answer is to the question (0-1).
+        context_precision: Fraction of retrieved context that supports the answer (0-1).
+        context_recall: Fraction of relevant context that was retrieved (0-1).
+
+    Example:
+        {
+            "faithfulness": 0.95,
+            "answer_relevance": 0.88,
+            "context_precision": 0.92,
+            "context_recall": 0.85
+        }
+    """
+
+    faithfulness: float = Field(
+        description="How faithful to retrieved context (0-1)"
+    )
+    answer_relevance: float = Field(
+        description="Relevance of answer to question (0-1)"
+    )
+    context_precision: float = Field(
+        description="Precision of retrieved context (0-1)"
+    )
+    context_recall: float = Field(description="Recall of relevant context (0-1)")
 
 
 class HumanRatingRequest(BaseModel):
-    question: str
-    answer: str
-    rating: int = Field(ge=1, le=5)
-    comment: str | None = None
-    provider: str | None = None
-    model: str | None = None
-    prompt_version: str | None = None
+    """Request to rate an answer manually.
+
+    Attributes:
+        question: The question that was answered.
+        answer: The answer text.
+        rating: Human rating (1-5 stars).
+        comment: Optional comment explaining the rating.
+        provider: LLM provider used.
+        model: Model ID used.
+        prompt_version: Prompt variant used.
+
+    Example:
+        {
+            "question": "What is machine learning?",
+            "answer": "Machine learning is a subset of AI...",
+            "rating": 5,
+            "comment": "Accurate and comprehensive.",
+            "model": "claude-opus-4-7"
+        }
+    """
+
+    question: str = Field(description="The question")
+    answer: str = Field(description="The answer text")
+    rating: int = Field(ge=1, le=5, description="Rating (1-5 stars)")
+    comment: str | None = Field(
+        default=None, description="Optional comment on the rating"
+    )
+    provider: str | None = Field(default=None, description="LLM provider")
+    model: str | None = Field(default=None, description="Model ID")
+    prompt_version: str | None = Field(default=None, description="Prompt variant")
 
 
 class HumanRating(HumanRatingRequest):
-    id: str
-    created_at: str
+    """A recorded human rating with metadata.
+
+    Extends HumanRatingRequest with storage metadata.
+
+    Attributes:
+        id: Unique rating identifier.
+        created_at: ISO 8601 timestamp when rating was created.
+
+    Example:
+        {
+            "question": "What is machine learning?",
+            "answer": "Machine learning is a subset of AI...",
+            "rating": 5,
+            "comment": "Accurate and comprehensive.",
+            "model": "claude-opus-4-7",
+            "id": "rating_12345",
+            "created_at": "2024-08-07T14:30:00Z"
+        }
+    """
+
+    id: str = Field(description="Unique rating ID")
+    created_at: str = Field(description="ISO 8601 creation timestamp")
 
 
 class StrategyComparison(BaseModel):
-    strategy: str
-    question: str
-    answer: str
-    sources: list[Source]
-    confidence: float = Field(ge=0, le=1)
-    refusal: bool = False
-    latency_ms: int = Field(ge=0)
-    input_tokens: int = Field(ge=0)
-    output_tokens: int = Field(ge=0)
-    iterations: int = Field(ge=0)
-    trace: list[dict] = Field(default_factory=list)
-    extra: dict = Field(default_factory=dict)
+    """Result of running one strategy on a question.
+
+    Used internally to compare strategies side-by-side.
+
+    Attributes:
+        strategy: Strategy name (classic, graph, agentic).
+        question: The question answered.
+        answer: The generated answer.
+        sources: Retrieved sources supporting the answer.
+        confidence: Model confidence (0-1).
+        refusal: Whether the model refused.
+        latency_ms: Response time in milliseconds.
+        input_tokens: Tokens sent to the model.
+        output_tokens: Tokens received from the model.
+        iterations: For agentic strategy, tool calls made.
+        trace: Structured trace events for debugging.
+        extra: Additional metadata.
+
+    Example:
+        {
+            "strategy": "classic",
+            "question": "What is RAG?",
+            "answer": "RAG combines retrieval and generation...",
+            "sources": [...],
+            "confidence": 0.92,
+            "refusal": false,
+            "latency_ms": 1240,
+            "input_tokens": 450,
+            "output_tokens": 125,
+            "iterations": 1,
+            "trace": [...],
+            "extra": {}
+        }
+    """
+
+    strategy: str = Field(description="Strategy name (classic, graph, agentic)")
+    question: str = Field(description="The question")
+    answer: str = Field(description="The answer")
+    sources: list[Source] = Field(description="Retrieved sources")
+    confidence: float = Field(ge=0, le=1, description="Confidence (0-1)")
+    refusal: bool = Field(default=False, description="Whether model refused")
+    latency_ms: int = Field(ge=0, description="Response time (ms)")
+    input_tokens: int = Field(ge=0, description="Tokens sent to model")
+    output_tokens: int = Field(ge=0, description="Tokens from model")
+    iterations: int = Field(ge=0, description="Tool calls (agentic only)")
+    trace: list[dict] = Field(
+        default_factory=list, description="Structured trace events"
+    )
+    extra: dict = Field(default_factory=dict, description="Additional metadata")

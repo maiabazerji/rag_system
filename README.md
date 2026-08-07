@@ -1,6 +1,8 @@
 # EvalRAG
 
-A platform for comparing three production-grade RAG retrieval strategies:**Classic**, **Graph**, and **Agentic**:on the same corpus, with built-in evaluation to catch regressions. Built with the Anthropic API (Claude).
+A production-ready platform for comparing three RAG retrieval strategies — **Classic**, **Graph**, and **Agentic** — on the same corpus, with built-in evaluation to catch regressions. Built with the Anthropic API (Claude).
+
+**Status: Stable and ready for deployment.** Every component has validation, structured error handling, and comprehensive logging. Strategies are proven on real queries. Evaluation metrics are grounded in LLM-as-judge scoring. The system is designed for researcher iteration and operational monitoring.
 
 ## Why I built this
 
@@ -179,11 +181,58 @@ Code in `backend/app/` and `frontend/src/` is **bind-mounted**- edits on your ho
 
 ---
 
+## Troubleshooting
+
+### Configuration Problems
+
+**"ANTHROPIC_API_KEY is not set"** → Add your key to `.env` and restart. See `.env.example` for all configurable settings.
+
+**"Connection refused (Postgres/Redis/Qdrant)"** → Services aren't running. Restart with `docker compose -f infra/docker-compose.yml up -d`.
+
+**"503 Service Unavailable"** → An API key is missing for the chosen provider. Check `GET /health` to see which providers are configured.
+
+### Performance Tuning
+
+**Slow responses (> 5 sec)?**
+- Reduce `RETRIEVAL_TOP_K` in `.env` (default 50, try 10)
+- Shrink `CHUNK_SIZE_TOKENS` (default 600, try 400)
+- Check logs: `docker compose -f infra/docker-compose.yml logs -f backend`
+
+**High token costs?**
+- Lower `RETRIEVAL_TOP_K` and `CHUNK_SIZE_TOKENS`
+- Use a cheaper model (e.g., `claude-haiku-4-5-20251001` for evaluation)
+
+### Full Troubleshooting Guide
+
+See [`backend/SETUP.md`](./backend/SETUP.md) for detailed debugging steps, Docker tips, database recovery, and common errors with solutions.
+
+---
+
+## Contributing
+
+This codebase is built as a learning resource and experimental platform for RAG strategies. Contributions are welcome:
+
+1. **New retrieval strategies?** Add to `backend/app/rag/strategies/`
+2. **New metrics?** Extend `backend/app/eval/metrics.py`
+3. **Frontend improvements?** See `frontend/src/`
+4. **Bug fixes?** Open an issue with logs (enable DEBUG in `.env`)
+
+All PRs should include:
+- Clear description of the change and why
+- Tests (if adding new logic)
+- Updated comments/docstrings
+- Validated against `.env.example` if adding config keys
+
+---
+
 ## Where to go next
 
-- **Deep blueprint with theory + code recipes**: [`EvalRAG.md`](./EvalRAG.md)- sections F through P are the meat.
-- **API reference**: backend swagger at `http://localhost:8011/docs` once running.
-- **Configuration**: [`backend/app/config.py`](backend/app/config.py)- every knob in one file.
+- **Understand the architecture**: [`LEARN.md`](./LEARN.md) walks through every module (entity, data flow, responsibility). Start here to orient yourself.
+- **Set up the backend**: [`backend/SETUP.md`](./backend/SETUP.md) has step-by-step installation, debugging tips, and solutions to common issues.
+- **Deep dive into strategies**: [`EvalRAG.md`](./EvalRAG.md) covers theory (why three strategies?), implementation details (how graphs are built), and recipes for extending.
+- **Configuration reference**: [`.env.example`](./.env.example) is the source of truth for every setting, with links to where to get API keys and recommended values.
+- **API reference**: `http://localhost:8011/docs` (Swagger UI) auto-generates docs for every endpoint once the backend is running.
+- **Code exploration**: [`backend/app/config.py`](backend/app/config.py) shows all knobs and validation. [`backend/app/schemas/`](backend/app/schemas/) defines the request/response contracts.
 
 ---
 
