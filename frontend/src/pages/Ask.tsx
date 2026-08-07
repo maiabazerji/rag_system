@@ -1,6 +1,11 @@
 import { useRef, useState } from "react";
 import { post } from "../api/client";
 import { SendIcon } from "../components/Icons";
+import LoadingSpinner from "../components/LoadingSpinner";
+import ErrorAlert from "../components/ErrorAlert";
+import Tooltip from "../components/Tooltip";
+import MetadataRow from "../components/MetadataRow";
+import { formatConfidence } from "../utils/formatting";
 
 type Source = { chunk_id: string; quote: string };
 type Answer = {
@@ -81,7 +86,9 @@ export default function Ask() {
                 key={s.id}
                 onClick={() => setStrategy(s.id)}
                 title={s.hint}
-                className={`chip transition-colors ${
+                aria-label={`${s.label} strategy: ${s.hint}`}
+                aria-pressed={active}
+                className={`chip transition-colors min-h-[44px] sm:min-h-auto ${
                   active
                     ? "!text-white !bg-accent/20 !border-accent/50"
                     : "hover:!text-white"
@@ -186,8 +193,13 @@ function TurnView({ turn }: { turn: Turn }) {
       </div>
 
       <div className="card animate-fade-in">
-        {turn.loading && <Skeleton />}
-        {turn.error && <p className="text-rose-400 text-sm">{turn.error}</p>}
+        {turn.loading && <LoadingSpinner message="Retrieving and generating answer..." />}
+        {turn.error && (
+          <ErrorAlert
+            error={turn.error}
+            onDismiss={() => {}}
+          />
+        )}
         {turn.answer && <AnswerView a={turn.answer} />}
       </div>
     </div>
@@ -227,10 +239,12 @@ function AnswerView({ a }: { a: Answer }) {
     <div className="space-y-3">
       <div className="flex items-center gap-2 flex-wrap">
         <span className={`chip ${a.refusal ? "!text-amber-300 !border-amber-500/40 !bg-amber-500/10" : "!text-emerald-300 !border-emerald-500/40 !bg-emerald-500/10"}`}>
-          {a.refusal ? "Refused" : "Answered"}
+          {a.refusal ? "⚠ Refused" : "✓ Answered"}
         </span>
         {a.provider && <span className="chip">{a.provider}{a.model ? ` · ${a.model}` : ""}</span>}
-        <ConfidenceBar pct={pct} refused={a.refusal} />
+        <Tooltip label="How much the model trusts its answer (0-1 scale). Higher = more confident it's grounded in sources.">
+          <ConfidenceBar pct={pct} refused={a.refusal} />
+        </Tooltip>
       </div>
 
       <p className="text-zinc-200 leading-relaxed">{cleanAnswer(a.answer)}</p>
@@ -321,9 +335,14 @@ function ConfidenceBar({ pct, refused }: { pct: number; refused: boolean }) {
         <div
           className={`h-full rounded-full transition-all ${refused ? "bg-amber-500" : "bg-gradient-to-r from-accent to-emerald-400"}`}
           style={{ width: `${Math.max(2, pct)}%` }}
+          role="progressbar"
+          aria-valuenow={pct}
+          aria-valuemin={0}
+          aria-valuemax={100}
+          aria-label="Confidence score"
         />
       </div>
-      <span className="text-xs text-zinc-400 font-mono tabular-nums w-10 text-right">{pct}%</span>
+      <span className="text-xs text-zinc-400 font-mono tabular-nums w-10 text-right" aria-label={`${pct} percent confidence`}>{pct}%</span>
     </div>
   );
 }

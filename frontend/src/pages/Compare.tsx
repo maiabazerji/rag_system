@@ -1,5 +1,10 @@
 import { useEffect, useState, ReactNode } from "react";
 import { get, post } from "../api/client";
+import LoadingSpinner from "../components/LoadingSpinner";
+import ErrorAlert from "../components/ErrorAlert";
+import MetadataRow from "../components/MetadataRow";
+import Tooltip from "../components/Tooltip";
+import { formatLatency, formatTokens } from "../utils/formatting";
 
 type Source = { chunk_id: string; quote: string };
 type TraceStep = { step?: string; [k: string]: unknown };
@@ -121,19 +126,19 @@ export default function Compare() {
           placeholder="Ask something… ⏎ to run"
           className="input resize-none text-sm"
         />
-        <div className="flex items-center justify-between gap-2">
-          <div className="flex flex-wrap gap-1">
+        <div className="flex items-center justify-between gap-2 flex-wrap sm:flex-nowrap">
+          <div className="flex flex-wrap gap-1 w-full sm:w-auto">
             {SAMPLES.map((s) => (
               <button
                 key={s}
                 onClick={() => setQ(s)}
-                className="chip text-xs hover:text-white hover:border-accent/40"
+                className="chip text-xs hover:text-white hover:border-accent/40 min-h-[44px] sm:min-h-auto"
               >
                 {s}
               </button>
             ))}
           </div>
-          <div className="flex items-center gap-1.5">
+          <div className="flex items-center gap-1.5 w-full sm:w-auto flex-wrap sm:flex-nowrap">
             <GraphStatus
               stats={graphStats}
               busy={buildingGraph}
@@ -142,18 +147,27 @@ export default function Compare() {
             <button
               onClick={run}
               disabled={!q.trim() || busy}
-              className="btn-primary text-sm px-3 py-2"
+              className="btn-primary text-sm px-3 py-2 min-h-[48px] sm:min-h-auto"
             >
               {busy ? "Running…" : "Compare"}
             </button>
           </div>
         </div>
-        {err && <div className="text-rose-400 text-xs">{err}</div>}
+        {err && (
+          <ErrorAlert
+            error={err}
+            onRetry={() => {
+              setErr(null);
+              if (q.trim()) run();
+            }}
+            onDismiss={() => setErr(null)}
+          />
+        )}
       </div>
 
       {res && <WinnersBar results={res.results} />}
 
-      <div className="grid lg:grid-cols-3 gap-2">
+      <div className="grid md:grid-cols-2 lg:grid-cols-3 gap-2">
         {STRATEGIES.map((s) => (
           <StrategyCard key={s} name={s} result={byName(s)} loading={busy} />
         ))}
@@ -174,29 +188,31 @@ function GraphStatus({
   const ready = !!stats && stats.triples > 0;
   return (
     <div className="flex items-center gap-2">
-      <div className={`text-xs font-mono px-2.5 py-1.5 rounded border flex items-center gap-2 ${
-        ready
-          ? "bg-violet-500/10 border-violet-500/40 text-violet-300"
-          : "bg-amber-500/10 border-amber-500/40 text-amber-300"
-      }`}>
-        <span className={`w-2 h-2 rounded-full ${ready ? "bg-violet-400" : "bg-amber-400"}`} />
-        {stats ? (
-          <span>
-            <span className="font-semibold">{stats.triples}</span> triples
-          </span>
-        ) : (
-          <span>Graph not built</span>
-        )}
-      </div>
+      <Tooltip label="Knowledge graph: extracted entities and relationships from documents" side="top">
+        <div className={`text-xs font-mono px-2.5 py-1.5 rounded border flex items-center gap-2 cursor-help ${
+          ready
+            ? "bg-violet-500/10 border-violet-500/40 text-violet-300"
+            : "bg-amber-500/10 border-amber-500/40 text-amber-300"
+        }`}>
+          <span className={`w-2 h-2 rounded-full ${ready ? "bg-violet-400" : "bg-amber-400"}`} aria-hidden="true" />
+          {stats ? (
+            <span>
+              <span className="font-semibold">{stats.triples}</span> triples
+            </span>
+          ) : (
+            <span>Graph not built</span>
+          )}
+        </div>
+      </Tooltip>
       <button
         onClick={onBuild}
         disabled={busy}
-        className={`text-xs px-3 py-1.5 rounded font-medium transition-colors ${
+        className={`text-xs px-3 py-1.5 rounded font-medium transition-colors min-h-[44px] flex items-center ${
           busy
             ? "bg-zinc-700/40 text-zinc-500 cursor-not-allowed"
             : "bg-violet-500/20 border border-violet-500/40 text-violet-300 hover:bg-violet-500/30 hover:border-violet-500/60"
         }`}
-        title="Extract entity relationships from indexed documents"
+        aria-label="Extract entity relationships from indexed documents"
       >
         {busy ? "Building…" : ready ? "Rebuild" : "Build graph"}
       </button>
@@ -233,27 +249,35 @@ function StrategyCard({
         <div className="text-[8px] text-zinc-500 font-mono">{m.tagline}</div>
       </div>
 
-      {loading && !result && <Skeleton />}
+      {loading && !result && <LoadingSpinner />}
 
       {result && (
         <>
           {/* Compact metrics badges */}
           <div className="grid grid-cols-2 gap-2">
-            <div className="bg-sky-500/20 border border-sky-500/40 rounded p-2">
-              <div className="text-[8px] text-sky-300 font-bold uppercase">⏱ Latency</div>
-              <div className="text-lg font-mono font-bold text-sky-100 mt-0.5">{result.latency_ms}ms</div>
-            </div>
-            <div className="bg-emerald-500/20 border border-emerald-500/40 rounded p-2">
-              <div className="text-[8px] text-emerald-300 font-bold uppercase">💰 Tokens</div>
-              <div className="text-lg font-mono font-bold text-emerald-100 mt-0.5">{(result.input_tokens + result.output_tokens).toLocaleString()}</div>
-            </div>
+            <Tooltip label="Time from request to response" side="top">
+              <div className="bg-sky-500/20 border border-sky-500/40 rounded p-2 cursor-help">
+                <div className="text-[8px] text-sky-300 font-bold uppercase">⏱ Latency</div>
+                <div className="text-lg font-mono font-bold text-sky-100 mt-0.5">{formatLatency(result.latency_ms)}</div>
+              </div>
+            </Tooltip>
+            <Tooltip label="Input + output tokens used (cost indicator)" side="top">
+              <div className="bg-emerald-500/20 border border-emerald-500/40 rounded p-2 cursor-help">
+                <div className="text-[8px] text-emerald-300 font-bold uppercase">💰 Tokens</div>
+                <div className="text-lg font-mono font-bold text-emerald-100 mt-0.5">{formatTokens(result.input_tokens + result.output_tokens)}</div>
+              </div>
+            </Tooltip>
           </div>
 
           {/* Status badge */}
-          <div className={`flex items-center gap-1.5 rounded px-2 py-1.5 text-xs font-semibold ${result.refusal ? "bg-amber-500/15 border border-amber-500/40 text-amber-300" : "bg-emerald-500/15 border border-emerald-500/40 text-emerald-300"}`}>
-            <span>{result.refusal ? "⚠" : "✓"}</span>
-            {result.refusal ? "Refused" : "Answered"}
-            {result.iterations > 1 && <span className="text-[10px] text-zinc-400 ml-auto">({result.iterations}x)</span>}
+          <div className={`flex items-center gap-1.5 rounded px-2 py-1.5 text-xs font-semibold min-h-[44px] flex-wrap sm:min-h-auto ${result.refusal ? "bg-amber-500/15 border border-amber-500/40 text-amber-300" : "bg-emerald-500/15 border border-emerald-500/40 text-emerald-300"}`}>
+            <span aria-hidden="true">{result.refusal ? "⚠" : "✓"}</span>
+            <span>{result.refusal ? "Refused" : "Answered"}</span>
+            {result.iterations > 1 && (
+              <Tooltip label="Number of reasoning iterations (loops)" side="top">
+                <span className="text-[10px] text-zinc-400 ml-auto cursor-help">🔄 {result.iterations}x</span>
+              </Tooltip>
+            )}
           </div>
 
           {/* Answer preview or full text */}
@@ -646,21 +670,21 @@ function WinnersBar({ results }: { results: StrategyOut[] }) {
   return (
     <div className="card flex flex-col gap-2 border-accent/30 p-3">
       <h3 className="text-sm font-bold text-white">⚡ Winners</h3>
-      <div className="grid grid-cols-2 gap-2">
-        <div className="p-2 rounded bg-sky-500/15 border border-sky-500/40">
+      <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+        <div className="p-2 rounded bg-sky-500/15 border border-sky-500/40 min-h-[100px]">
           <div className="text-[8px] uppercase tracking-wide text-sky-300 font-bold">Fastest</div>
           <div className={`text-lg font-bold mt-1 ${strategyColor(fastest.strategy)}`}>
             {strategyLabel(fastest.strategy).split(" ")[0]}
           </div>
-          <div className="text-sm font-mono text-sky-100 mt-0.5">{fastest.latency_ms}ms</div>
+          <div className="text-sm font-mono text-sky-100 mt-0.5">{formatLatency(fastest.latency_ms)}</div>
           {speedup > 0 && <div className="text-[9px] font-semibold text-sky-200 mt-1">↓ {speedup}% faster</div>}
         </div>
-        <div className="p-2 rounded bg-emerald-500/15 border border-emerald-500/40">
+        <div className="p-2 rounded bg-emerald-500/15 border border-emerald-500/40 min-h-[100px]">
           <div className="text-[8px] uppercase tracking-wide text-emerald-300 font-bold">Cheapest</div>
           <div className={`text-lg font-bold mt-1 ${strategyColor(cheapest.strategy)}`}>
             {strategyLabel(cheapest.strategy).split(" ")[0]}
           </div>
-          <div className="text-sm font-mono text-emerald-100 mt-0.5">{(cheapest.input_tokens + cheapest.output_tokens).toLocaleString()} tok</div>
+          <div className="text-sm font-mono text-emerald-100 mt-0.5">{formatTokens(cheapest.input_tokens + cheapest.output_tokens)}</div>
           {savings > 0 && <div className="text-[9px] font-semibold text-emerald-200 mt-1">↓ {savings}% cheaper</div>}
         </div>
       </div>
