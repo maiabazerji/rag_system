@@ -3,7 +3,6 @@ import { get, upload } from "../api/client";
 import { UploadIcon } from "../components/Icons";
 import LoadingSpinner from "../components/LoadingSpinner";
 import ErrorAlert from "../components/ErrorAlert";
-import { formatTokens } from "../utils/formatting";
 
 type IngestResult = { doc_id: string; filename: string; chunks: number; indexed_total: number };
 

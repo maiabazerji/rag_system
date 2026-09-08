@@ -12,9 +12,7 @@ The actual retrieval and generation logic lives in strategy subclasses.
 """
 from __future__ import annotations
 
-import logging
 import time
-from typing import Optional
 
 from app.config import settings
 from app.logging_config import get_structured_logger
@@ -22,6 +20,7 @@ from app.rag.providers import MissingKeyError, ProviderError
 from app.rag.response_clean import clean_response
 from app.rag.store import count as store_count
 from app.rag.strategies import get_strategy
+from app.rag.strategies.base import StrategyResult
 from app.schemas import Answer, Source
 from app.tracing import start_trace
 
@@ -31,9 +30,9 @@ logger = get_structured_logger(__name__)
 def _refusal(
     question: str,
     message: str,
-    sources: Optional[list[Source]] = None,
-    provider: Optional[str] = None,
-    model: Optional[str] = None,
+    sources: list[Source] | None = None,
+    provider: str | None = None,
+    model: str | None = None,
 ) -> Answer:
     """Create a refusal Answer for error cases.
 
@@ -46,7 +45,7 @@ def _refusal(
         sources: List of sources (empty for refusals). Defaults to
             [Source(chunk_id="none", quote="")].
         provider: Provider name (e.g., "anthropic", "openai"). Defaults to None.
-        model: Model ID used (e.g., "claude-opus-4-7"). Defaults to None.
+        model: Model ID used (e.g., "claude-sonnet-5"). Defaults to None.
 
     Returns:
         Answer with refusal=True, confidence=0.0, and the provided message.
@@ -93,10 +92,10 @@ def _default_model(provider: str, strategy: str) -> str:
 
 async def answer_question(
     question: str,
-    top_k: int = 8,
-    provider: Optional[str] = None,
-    model: Optional[str] = None,
-    prompt_version: Optional[str] = None,
+    top_k: int | None = None,
+    provider: str | None = None,
+    model: str | None = None,
+    prompt_version: str | None = None,
     strategy: str = "classic",
 ) -> Answer:
     """Answer a question using the specified RAG strategy.
@@ -121,7 +120,7 @@ async def answer_question(
             (model controls retrieval).
         provider: Provider to use ("anthropic", "openai", "local"). If None, uses
             settings.generator_provider. Ignored for graph/agentic (always Anthropic).
-        model: Model ID to use (e.g., "claude-opus-4-7", "gpt-4o-mini"). If None,
+        model: Model ID to use (e.g., "claude-sonnet-5", "gpt-4o-mini"). If None,
             uses defaults based on provider and strategy.
         prompt_version: Prompt template version (e.g., "default", "v2-structured").
             If None, defaults to "default". Ignored by agentic RAG.
@@ -140,7 +139,7 @@ async def answer_question(
         >>> result = await answer_question(
         ...     "What is the capital of France?",
         ...     strategy="classic",
-        ...     model="claude-opus-4-7",
+        ...     model="claude-sonnet-5",
         ... )
         >>> print(result.answer)
         >>> print(f"Confidence: {result.confidence}")
@@ -153,6 +152,7 @@ async def answer_question(
         effective_provider = provider or settings.generator_provider
     model = model or _default_model(effective_provider, strategy)
     prompt_version = prompt_version or "default"
+    top_k = settings.rerank_top_k if top_k is None else top_k
 
     try:
         doc_count = await store_count()
@@ -224,24 +224,23 @@ async def answer_question(
                 },
             )
             return _refusal(question, str(e), provider=effective_provider, model=model)
-        except RuntimeError as e:
-            # Handle circuit breaker and service unavailable errors
-            if "circuit breaker open" in str(e).lower() or "unavailable" in str(e).lower():
-                logger.warning(
-                    "Service unavailable",
-                    extra_fields={
-                        "error_type": "service_unavailable",
-                        "provider": effective_provider,
-                        "strategy": strategy,
-                    },
-                )
-                return _refusal(
-                    question,
-                    f"The {effective_provider} service is temporarily unavailable. Please try again shortly.",
-                    provider=effective_provider,
-                    model=model,
-                )
-            raise
+        except Exception as e:
+            logger.exception(
+                f"Strategy '{strategy}' failed: {type(e).__name__}: {e}",
+                extra_fields={
+                    "error_type": type(e).__name__,
+                    "strategy": strategy,
+                    "provider": effective_provider,
+                    "model": model,
+                },
+            )
+            return _refusal(
+                question,
+                "Something went wrong answering this question. "
+                "The details are in the backend logs.",
+                provider=effective_provider,
+                model=model,
+            )
         latency_ms = int((time.perf_counter() - t0) * 1000)
         result.latency_ms = latency_ms
 
@@ -280,6 +279,9 @@ async def answer_question(
             refusal=result.refusal,
             provider=effective_provider,
             model=model,
+            latency_ms=latency_ms,
+            input_tokens=result.input_tokens,
+            output_tokens=result.output_tokens,
         )
 
 
@@ -287,10 +289,10 @@ async def run_strategy_raw(
     question: str,
     *,
     strategy: str,
-    model: Optional[str] = None,
-    top_k: int = 8,
+    model: str | None = None,
+    top_k: int | None = None,
     prompt_version: str = "default",
-) -> tuple[Optional[any], Optional[str]]:
+) -> tuple[StrategyResult | None, str | None]:
     """Execute a strategy and return raw StrategyResult + telemetry.
 
     Internal function used by the /compare/strategies endpoint to run multiple
@@ -323,6 +325,7 @@ async def run_strategy_raw(
         ...     print(f"Trace: {result.trace}")
     """
     model = model or _default_model("anthropic", strategy)
+    top_k = settings.rerank_top_k if top_k is None else top_k
     try:
         doc_count = await store_count()
         if doc_count == 0:
@@ -379,19 +382,17 @@ async def run_strategy_raw(
             },
         )
         return None, str(e)
-    except RuntimeError as e:
-        # Handle circuit breaker and service unavailable errors
-        if "circuit breaker open" in str(e).lower() or "unavailable" in str(e).lower():
-            logger.warning(
-                "Service unavailable in strategy comparison",
-                extra_fields={
-                    "error_type": "service_unavailable",
-                    "strategy": strategy,
-                    "context": "strategy_comparison",
-                },
-            )
-            return None, f"Service temporarily unavailable: {str(e)}"
-        return None, str(e)
+    except Exception as e:
+        logger.exception(
+            f"Strategy '{strategy}' failed during comparison: {type(e).__name__}: {e}",
+            extra_fields={
+                "error_type": type(e).__name__,
+                "strategy": strategy,
+                "context": "strategy_comparison",
+            },
+        )
+        return None, f"This strategy failed ({type(e).__name__}). See the backend logs."
+
     result.latency_ms = int((time.perf_counter() - t0) * 1000)
 
     logger.info(

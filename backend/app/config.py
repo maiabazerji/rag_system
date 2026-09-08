@@ -6,13 +6,18 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 logger = logging.getLogger(__name__)
 
-# Anthropic Claude models that support tool use and are production-ready
+# Anthropic models this project has been exercised against. Selecting a model
+# outside this set is a warning, not an error -- new models ship faster than
+# this list is updated. Retired IDs are deliberately absent.
 VALID_ANTHROPIC_MODELS = {
+    "claude-fable-5-1",
+    "claude-opus-5",
+    "claude-opus-4-8",
     "claude-opus-4-7",
-    "claude-opus-4-1-20250805",
+    "claude-opus-4-6",
+    "claude-sonnet-5",
     "claude-sonnet-4-6",
-    "claude-sonnet-4-20250514",
-    "claude-haiku-4-5-20251001",
+    "claude-haiku-4-5",
 }
 
 # OpenAI models
@@ -22,9 +27,6 @@ VALID_OPENAI_MODELS = {
     "gpt-4-turbo",
     "gpt-4",
 }
-
-# Ollama models (user-installable, can't validate exhaustively)
-VALID_OLLAMA_MODELS = {"llama3.1:8b", "llama2:13b", "mistral:latest"}
 
 # Valid generator providers
 VALID_PROVIDERS = {"anthropic", "openai", "local"}
@@ -36,11 +38,52 @@ VALID_STRATEGIES = {"classic", "graph", "agentic"}
 VALID_WANDB_MODES = {"online", "offline", "disabled"}
 
 
-class Settings(BaseSettings):
-    """EvalRAG configuration with comprehensive validation.
+def _validate_url(value: str, name: str, *, schemes: tuple[str, ...] | None = None) -> str:
+    """Validate that a string is a usable URL.
 
-    All settings can be overridden via environment variables (.env file).
-    URL and model fields are validated on startup to catch configuration errors early.
+    Args:
+        value: The URL string.
+        name: Setting name, used in error messages.
+        schemes: If given, the scheme must be one of these.
+
+    Raises:
+        ValueError: If the URL is empty, malformed, or uses a disallowed scheme.
+    """
+    if not value:
+        raise ValueError(f"{name} cannot be empty")
+    parsed = urlparse(value)
+    if not parsed.scheme:
+        raise ValueError(f"{name} must include a scheme (e.g. http://)")
+    if schemes and parsed.scheme not in schemes:
+        raise ValueError(f"{name} must use one of {schemes}, got '{parsed.scheme}'")
+    if not parsed.netloc:
+        raise ValueError(f"{name} must include a host")
+    return value
+
+
+def _warn_unknown_model(value: str, name: str, known: set[str]) -> str:
+    """Warn (but do not fail) when a model ID is outside the known set."""
+    if not value:
+        raise ValueError(f"{name} cannot be empty")
+    if value not in known:
+        logger.warning(
+            "%s is set to '%s', which is not in the known-good list for this "
+            "project (%s). This is fine for a newly released model; double-check "
+            "the spelling if calls start failing with a 404.",
+            name,
+            value,
+            ", ".join(sorted(known)),
+        )
+    return value
+
+
+class Settings(BaseSettings):
+    """EvalRAG configuration.
+
+    All settings can be overridden by environment variables or a `.env` file.
+    Field validation runs at construction time; cross-field runtime checks live
+    in :meth:`validate_startup`, which the app calls from its lifespan handler
+    so that importing this module never requires a configured environment.
     """
 
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
@@ -48,21 +91,17 @@ class Settings(BaseSettings):
     # LLM Provider API Keys
     anthropic_api_key: str = Field(
         default="",
-        description="Anthropic API key for Claude models. Required for production use.",
+        description="Anthropic API key for Claude models. Required to generate answers.",
     )
     openai_api_key: str = Field(
         default="",
-        description="OpenAI API key for GPT models. Optional, used if generator_provider=openai.",
-    )
-    cohere_api_key: str = Field(
-        default="",
-        description="Cohere API key. Optional, for future embedding/reranking support.",
+        description="OpenAI API key. Optional, used if generator_provider=openai.",
     )
 
     # Vector Database (Qdrant)
     qdrant_url: str = Field(
         default="http://localhost:6333",
-        description="Qdrant vector database URL (http://host:port). Must be a valid URL.",
+        description="Qdrant vector database URL (http://host:port).",
     )
     qdrant_collection: str = Field(
         default="evalrag",
@@ -70,50 +109,41 @@ class Settings(BaseSettings):
         description="Qdrant collection name for storing document embeddings.",
     )
 
-    # SQL Database (Postgres)
+    # SQL Database (Postgres) -- backs API keys and usage accounting
     postgres_url: str = Field(
         default="postgresql+psycopg://evalrag:pw@localhost:5432/evalrag",
-        description="PostgreSQL connection string. Must be a valid psycopg URL.",
-    )
-
-    # Cache (Redis)
-    redis_url: str = Field(
-        default="redis://localhost:6379/0",
-        description="Redis connection URL. Used for caching and queues.",
+        description="PostgreSQL connection string.",
     )
 
     # Tracing Backend (Langfuse)
     langfuse_host: str = Field(
-        default="http://localhost:3000",
-        description="Langfuse tracing backend URL. Must be a valid URL.",
+        default="http://localhost:3100",
+        description="Langfuse tracing backend URL.",
     )
-    langfuse_public_key: str = Field(
-        default="",
-        description="Langfuse public key for trace authentication. Optional.",
-    )
-    langfuse_secret_key: str = Field(
-        default="",
-        description="Langfuse secret key for trace authentication. Optional.",
-    )
+    langfuse_public_key: str = Field(default="", description="Langfuse public key. Optional.")
+    langfuse_secret_key: str = Field(default="", description="Langfuse secret key. Optional.")
 
     # Weights & Biases (W&B) - Eval dashboards
-    wandb_api_key: str = Field(
-        default="",
-        description="Weights & Biases API key. Optional, for eval-run dashboards.",
-    )
-    wandb_project: str = Field(
-        default="evalrag",
-        description="W&B project name for storing eval runs.",
-    )
+    wandb_api_key: str = Field(default="", description="W&B API key. Optional.")
+    wandb_project: str = Field(default="evalrag", description="W&B project name.")
     wandb_mode: str = Field(
-        default="online",
-        description="W&B mode: online, offline, or disabled.",
+        default="online", description="W&B mode: online, offline, or disabled."
     )
 
     # Embeddings
     embedding_model: str = Field(
         default="BAAI/bge-small-en-v1.5",
-        description="HuggingFace embedding model ID. Must be a valid model identifier.",
+        min_length=1,
+        description="HuggingFace embedding model ID.",
+    )
+    reranker_model: str = Field(
+        # An English 6-layer cross-encoder. The multilingual 12-layer mMARCO
+        # model this replaced took ~14.5s to rerank 50 candidates on CPU
+        # against ~7.1s here, with no measurable ranking benefit on an English
+        # corpus, and reranking is the single largest cost in a query.
+        default="cross-encoder/ms-marco-MiniLM-L-6-v2",
+        min_length=1,
+        description="Cross-encoder model used to rerank retrieved chunks.",
     )
 
     # Generator Configuration
@@ -122,8 +152,8 @@ class Settings(BaseSettings):
         description="LLM provider for generation: anthropic, openai, or local.",
     )
     generator_model: str = Field(
-        default="claude-sonnet-4-6",
-        description="Claude model for answer generation. Must be a valid Anthropic model.",
+        default="claude-sonnet-5",
+        description="Claude model for answer generation.",
     )
     openai_generator_model: str = Field(
         default="gpt-4o-mini",
@@ -132,66 +162,84 @@ class Settings(BaseSettings):
 
     # Ollama (Local LLM)
     ollama_host: str = Field(
-        default="http://localhost:11434",
-        description="Ollama API host. Used if generator_provider=local.",
+        default="http://localhost:11434", description="Ollama API host."
     )
     ollama_model: str = Field(
-        default="llama3.1:8b",
-        description="Ollama model name for local generation.",
+        default="llama3.1:8b", min_length=1, description="Ollama model name."
     )
 
     # Evaluation Models
     judge_model: str = Field(
-        default="claude-opus-4-7",
-        description="Claude model for LLM-as-judge evaluation. Must be a valid Anthropic model.",
+        default="claude-opus-5", description="Claude model for LLM-as-judge evaluation."
     )
     graph_extraction_model: str = Field(
-        default="claude-haiku-4-5-20251001",
-        description="Claude model for knowledge graph extraction. Must be a valid Anthropic model.",
+        default="claude-haiku-4-5",
+        description="Claude model for knowledge graph extraction.",
     )
     agentic_model: str = Field(
-        default="claude-sonnet-4-6",
-        description="Claude model for agentic retrieval strategy. Must be a valid Anthropic model.",
+        default="claude-sonnet-5",
+        description="Claude model for the agentic retrieval strategy.",
     )
 
     # RAG Hyperparameters
     chunk_size_tokens: int = Field(
-        default=600,
-        ge=100,
-        le=2000,
-        description="Document chunk size in tokens. Valid range: 100–2000.",
+        default=600, ge=100, le=2000, description="Document chunk size in words."
     )
     chunk_overlap_tokens: int = Field(
-        default=80,
-        ge=0,
-        le=500,
-        description="Overlap between consecutive chunks in tokens. Valid range: 0–500.",
+        default=80, ge=0, le=500, description="Overlap between consecutive chunks."
     )
     retrieval_top_k: int = Field(
-        default=50,
-        ge=1,
-        le=100,
-        description="Number of documents to retrieve. Valid range: 1–100.",
+        default=50, ge=1, le=100, description="Candidates to retrieve before reranking."
     )
     rerank_top_k: int = Field(
-        default=8,
-        ge=1,
-        le=50,
-        description="Number of documents to keep after reranking. Valid range: 1–50.",
+        default=8, ge=1, le=50, description="Chunks to keep after reranking."
+    )
+    max_answer_tokens: int = Field(
+        default=1024, ge=64, le=8192, description="Max tokens in a generated answer."
     )
 
     # Agentic Strategy
     agentic_max_iters: int = Field(
-        default=15,
-        ge=1,
-        le=50,
-        description="Maximum iterations for agentic loop. Valid range: 1–50.",
+        default=15, ge=1, le=50, description="Maximum iterations for the agentic loop."
     )
 
     # Graph RAG
     graph_data_dir: str = Field(
         default="data/graph",
-        description="Directory to store knowledge graph data.",
+        min_length=1,
+        description="Directory for knowledge graph data. Use an absolute path in Docker.",
+    )
+
+    # Evaluation
+    eval_concurrency: int = Field(
+        default=4, ge=1, le=32, description="Golden examples evaluated in parallel."
+    )
+
+    # Ingestion limits
+    max_upload_mb: int = Field(
+        default=25, ge=1, le=500, description="Largest accepted upload, in megabytes."
+    )
+
+    # Provider call behaviour
+    provider_timeout_seconds: float = Field(
+        default=60.0, gt=0, le=600, description="Per-request timeout for LLM calls."
+    )
+    provider_max_retries: int = Field(
+        default=3, ge=0, le=10, description="Retries for transient LLM failures."
+    )
+
+    # Authentication
+    require_api_key: bool = Field(
+        default=False,
+        description=(
+            "Require an 'Authorization: Bearer <key>' header on mutating and "
+            "LLM-spending endpoints. Off by default so a fresh clone runs; turn "
+            "on before exposing the API beyond localhost."
+        ),
+    )
+    admin_key: str = Field(
+        default="",
+        description="Secret for /admin endpoints. They return 503 while unset.",
     )
 
     # CORS
@@ -200,307 +248,140 @@ class Settings(BaseSettings):
         description="Comma-separated list of allowed CORS origins.",
     )
 
+    @property
+    def cors_origin_list(self) -> list[str]:
+        """CORS origins as a cleaned list, ignoring stray whitespace and blanks."""
+        return [o.strip() for o in self.cors_origins.split(",") if o.strip()]
+
+    @property
+    def max_upload_bytes(self) -> int:
+        """Upload ceiling in bytes."""
+        return self.max_upload_mb * 1024 * 1024
+
     @field_validator("qdrant_url")
     @classmethod
-    def validate_qdrant_url(cls, v: str) -> str:
-        """Validate Qdrant URL format.
+    def _v_qdrant(cls, v: str) -> str:
+        return _validate_url(v, "QDRANT_URL", schemes=("http", "https"))
 
-        Args:
-            v: URL string to validate
+    @field_validator("langfuse_host")
+    @classmethod
+    def _v_langfuse(cls, v: str) -> str:
+        return _validate_url(v, "LANGFUSE_HOST", schemes=("http", "https"))
 
-        Raises:
-            ValueError: If URL is invalid
-        """
-        if not v:
-            raise ValueError("QDRANT_URL cannot be empty")
-        try:
-            parsed = urlparse(v)
-            if not parsed.scheme:
-                raise ValueError("QDRANT_URL must include a scheme (http/https)")
-            if not parsed.netloc:
-                raise ValueError("QDRANT_URL must include a host")
-        except Exception as e:
-            raise ValueError(f"QDRANT_URL is not a valid URL: {e}")
-        return v
+    @field_validator("ollama_host")
+    @classmethod
+    def _v_ollama(cls, v: str) -> str:
+        return _validate_url(v, "OLLAMA_HOST", schemes=("http", "https"))
 
     @field_validator("postgres_url")
     @classmethod
-    def validate_postgres_url(cls, v: str) -> str:
-        """Validate PostgreSQL connection URL format.
-
-        Args:
-            v: Connection string to validate
-
-        Raises:
-            ValueError: If URL is invalid or not a psycopg URL
-        """
+    def _v_postgres(cls, v: str) -> str:
         if not v:
             raise ValueError("POSTGRES_URL cannot be empty")
         if not v.startswith(("postgresql://", "postgresql+psycopg://")):
             raise ValueError(
                 "POSTGRES_URL must start with 'postgresql://' or 'postgresql+psycopg://'"
             )
-        try:
-            parsed = urlparse(v)
-            if not parsed.netloc:
-                raise ValueError("POSTGRES_URL must include a host")
-        except Exception as e:
-            raise ValueError(f"POSTGRES_URL is not a valid connection string: {e}")
-        return v
-
-    @field_validator("redis_url")
-    @classmethod
-    def validate_redis_url(cls, v: str) -> str:
-        """Validate Redis URL format.
-
-        Args:
-            v: URL string to validate
-
-        Raises:
-            ValueError: If URL is invalid
-        """
-        if not v:
-            raise ValueError("REDIS_URL cannot be empty")
-        if not v.startswith("redis://"):
-            raise ValueError("REDIS_URL must start with 'redis://'")
-        try:
-            parsed = urlparse(v)
-            if not parsed.netloc:
-                raise ValueError("REDIS_URL must include a host")
-        except Exception as e:
-            raise ValueError(f"REDIS_URL is not a valid URL: {e}")
-        return v
-
-    @field_validator("langfuse_host")
-    @classmethod
-    def validate_langfuse_host(cls, v: str) -> str:
-        """Validate Langfuse host URL format.
-
-        Args:
-            v: URL string to validate
-
-        Raises:
-            ValueError: If URL is invalid
-        """
-        if not v:
-            raise ValueError("LANGFUSE_HOST cannot be empty")
-        try:
-            parsed = urlparse(v)
-            if not parsed.scheme:
-                raise ValueError("LANGFUSE_HOST must include a scheme (http/https)")
-            if not parsed.netloc:
-                raise ValueError("LANGFUSE_HOST must include a host")
-        except Exception as e:
-            raise ValueError(f"LANGFUSE_HOST is not a valid URL: {e}")
+        if not urlparse(v).netloc:
+            raise ValueError("POSTGRES_URL must include a host")
         return v
 
     @field_validator("generator_provider")
     @classmethod
-    def validate_generator_provider(cls, v: str) -> str:
-        """Validate generator provider is supported.
-
-        Args:
-            v: Provider name to validate
-
-        Raises:
-            ValueError: If provider is not in the valid list
-        """
+    def _v_provider(cls, v: str) -> str:
         if v.lower() not in VALID_PROVIDERS:
             raise ValueError(
-                f"GENERATOR_PROVIDER must be one of {VALID_PROVIDERS}, got '{v}'"
+                f"GENERATOR_PROVIDER must be one of {sorted(VALID_PROVIDERS)}, got '{v}'"
             )
         return v.lower()
 
-    @field_validator("generator_model")
+    @field_validator("generator_model", "judge_model", "graph_extraction_model", "agentic_model")
     @classmethod
-    def validate_generator_model(cls, v: str) -> str:
-        """Validate generator model is recognized.
-
-        Args:
-            v: Model ID to validate
-
-        Raises:
-            ValueError: If model is not recognized
-        """
-        if not v:
-            raise ValueError("GENERATOR_MODEL cannot be empty")
-        if v not in VALID_ANTHROPIC_MODELS:
-            logger.warning(
-                f"GENERATOR_MODEL '{v}' is not in the list of known models. "
-                f"Known Anthropic models: {VALID_ANTHROPIC_MODELS}"
-            )
-        return v
-
-    @field_validator("judge_model")
-    @classmethod
-    def validate_judge_model(cls, v: str) -> str:
-        """Validate judge model is recognized.
-
-        Args:
-            v: Model ID to validate
-
-        Raises:
-            ValueError: If model is not recognized
-        """
-        if not v:
-            raise ValueError("JUDGE_MODEL cannot be empty")
-        if v not in VALID_ANTHROPIC_MODELS:
-            logger.warning(
-                f"JUDGE_MODEL '{v}' is not in the list of known models. "
-                f"Known Anthropic models: {VALID_ANTHROPIC_MODELS}"
-            )
-        return v
-
-    @field_validator("graph_extraction_model")
-    @classmethod
-    def validate_graph_extraction_model(cls, v: str) -> str:
-        """Validate graph extraction model is recognized.
-
-        Args:
-            v: Model ID to validate
-
-        Raises:
-            ValueError: If model is not recognized
-        """
-        if not v:
-            raise ValueError("GRAPH_EXTRACTION_MODEL cannot be empty")
-        if v not in VALID_ANTHROPIC_MODELS:
-            logger.warning(
-                f"GRAPH_EXTRACTION_MODEL '{v}' is not in the list of known models. "
-                f"Known Anthropic models: {VALID_ANTHROPIC_MODELS}"
-            )
-        return v
-
-    @field_validator("agentic_model")
-    @classmethod
-    def validate_agentic_model(cls, v: str) -> str:
-        """Validate agentic model is recognized.
-
-        Args:
-            v: Model ID to validate
-
-        Raises:
-            ValueError: If model is not recognized
-        """
-        if not v:
-            raise ValueError("AGENTIC_MODEL cannot be empty")
-        if v not in VALID_ANTHROPIC_MODELS:
-            logger.warning(
-                f"AGENTIC_MODEL '{v}' is not in the list of known models. "
-                f"Known Anthropic models: {VALID_ANTHROPIC_MODELS}"
-            )
-        return v
+    def _v_anthropic_model(cls, v: str, info) -> str:
+        return _warn_unknown_model(v, info.field_name.upper(), VALID_ANTHROPIC_MODELS)
 
     @field_validator("openai_generator_model")
     @classmethod
-    def validate_openai_generator_model(cls, v: str) -> str:
-        """Validate OpenAI generator model is recognized.
-
-        Args:
-            v: Model ID to validate
-
-        Raises:
-            ValueError: If model is not recognized
-        """
-        if not v:
-            raise ValueError("OPENAI_GENERATOR_MODEL cannot be empty")
-        if v not in VALID_OPENAI_MODELS:
-            logger.warning(
-                f"OPENAI_GENERATOR_MODEL '{v}' is not in the list of known models. "
-                f"Known OpenAI models: {VALID_OPENAI_MODELS}"
-            )
-        return v
+    def _v_openai_model(cls, v: str) -> str:
+        return _warn_unknown_model(v, "OPENAI_GENERATOR_MODEL", VALID_OPENAI_MODELS)
 
     @field_validator("wandb_mode")
     @classmethod
-    def validate_wandb_mode(cls, v: str) -> str:
-        """Validate W&B mode is recognized.
-
-        Args:
-            v: Mode string to validate
-
-        Raises:
-            ValueError: If mode is not valid
-        """
+    def _v_wandb_mode(cls, v: str) -> str:
         if v.lower() not in VALID_WANDB_MODES:
             raise ValueError(
-                f"WANDB_MODE must be one of {VALID_WANDB_MODES}, got '{v}'"
+                f"WANDB_MODE must be one of {sorted(VALID_WANDB_MODES)}, got '{v}'"
             )
         return v.lower()
 
-    @field_validator("embedding_model")
+    @field_validator("chunk_overlap_tokens")
     @classmethod
-    def validate_embedding_model(cls, v: str) -> str:
-        """Validate embedding model ID format.
-
-        Args:
-            v: Model ID to validate
-
-        Raises:
-            ValueError: If model ID is empty
-        """
-        if not v:
-            raise ValueError("EMBEDDING_MODEL cannot be empty")
-        # Allow any non-empty string as there are many valid HuggingFace models
+    def _v_overlap(cls, v: int, info) -> int:
+        size = info.data.get("chunk_size_tokens")
+        if size is not None and v >= size:
+            raise ValueError(
+                f"CHUNK_OVERLAP_TOKENS ({v}) must be smaller than "
+                f"CHUNK_SIZE_TOKENS ({size}); otherwise chunking never advances."
+            )
         return v
 
     def validate_startup(self) -> None:
-        """Validate required configuration on startup.
+        """Check cross-field configuration consistency when the server boots.
 
-        This method is called after Pydantic field validation to check runtime
-        configuration consistency (e.g., provider vs. API key mismatch).
+        Called from the app lifespan, not at import, so that tests, linters and
+        `--help` do not require a configured environment.
 
         Raises:
-            ValueError: If critical configuration requirements are not met.
+            ValueError: If the selected generator provider has no credentials.
         """
-        warnings = []
-        errors = []
+        errors: list[str] = []
+        warnings: list[str] = []
 
-        # Anthropic key is required as primary generator for evaluation
-        if not self.anthropic_api_key:
+        if self.generator_provider == "anthropic" and not self.anthropic_api_key:
             errors.append(
-                "ANTHROPIC_API_KEY is not set. Required for evaluation "
-                "(judge models, graph extraction) and as fallback generator."
+                "GENERATOR_PROVIDER is 'anthropic' but ANTHROPIC_API_KEY is not set."
+            )
+        elif self.generator_provider == "openai" and not self.openai_api_key:
+            errors.append(
+                "GENERATOR_PROVIDER is 'openai' but OPENAI_API_KEY is not set."
+            )
+        elif self.generator_provider == "local":
+            logger.info("Local generator (Ollama) at %s", self.ollama_host)
+
+        if not self.anthropic_api_key:
+            warnings.append(
+                "ANTHROPIC_API_KEY is not set. Evaluation (LLM judge), graph "
+                "extraction and the agentic strategy will be unavailable."
             )
 
-        # Warn if selected provider is not configured
-        if self.generator_provider == "anthropic":
-            if not self.anthropic_api_key:
-                errors.append(
-                    f"Generator provider is '{self.generator_provider}' but "
-                    "ANTHROPIC_API_KEY is not set"
-                )
-        elif self.generator_provider == "openai":
-            if not self.openai_api_key:
-                errors.append(
-                    f"Generator provider is '{self.generator_provider}' but "
-                    "OPENAI_API_KEY is not set"
-                )
-        elif self.generator_provider == "local":
-            logger.info("Local generator (Ollama) is configured")
-
-        # Warn about optional tracing/monitoring
         if self.langfuse_public_key and not self.langfuse_secret_key:
             warnings.append(
-                "LANGFUSE_PUBLIC_KEY is set but LANGFUSE_SECRET_KEY is missing. "
-                "Traces will not be recorded."
+                "LANGFUSE_PUBLIC_KEY is set but LANGFUSE_SECRET_KEY is missing; "
+                "traces will not be recorded."
             )
 
-        if self.wandb_api_key and self.wandb_mode == "offline":
-            logger.info("W&B is configured in offline mode")
+        if self.require_api_key and not self.admin_key:
+            warnings.append(
+                "REQUIRE_API_KEY is on but ADMIN_KEY is unset, so there is no way "
+                "to mint a key. Set ADMIN_KEY and use scripts/setup_auth.py."
+            )
 
-        # Log warnings
-        for warning in warnings:
-            logger.warning(f"Config warning: {warning}")
+        if not self.require_api_key:
+            warnings.append(
+                "REQUIRE_API_KEY is off: /ask, /compare, /ingest and /eval accept "
+                "unauthenticated requests. Fine for local use; turn it on before "
+                "exposing this beyond localhost."
+            )
 
-        # Raise if critical errors exist
+        for w in warnings:
+            logger.warning("Config warning: %s", w)
+
         if errors:
-            error_msg = "Configuration validation failed:\n  " + "\n  ".join(errors)
-            logger.error(error_msg)
-            raise ValueError(error_msg)
+            raise ValueError(
+                "Configuration validation failed:\n  " + "\n  ".join(errors)
+            )
 
         logger.info("Configuration validation passed")
 
 
 settings = Settings()
-settings.validate_startup()

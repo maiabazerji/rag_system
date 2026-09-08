@@ -2,11 +2,9 @@
 from __future__ import annotations
 
 import logging
-from functools import lru_cache
 from pathlib import Path
-from typing import Optional
 
-from jinja2 import Environment, FileSystemLoader, TemplateNotFound, StrictUndefined
+from jinja2 import Environment, FileSystemLoader, StrictUndefined, TemplateNotFound
 
 logger = logging.getLogger(__name__)
 
@@ -14,9 +12,16 @@ PROMPTS_DIR = Path(__file__).parent
 
 
 class PromptManager:
-    """Manages prompt templates with Jinja2 templating and auto-escaping for security."""
+    """Loads and renders Jinja2 prompt templates.
 
-    def __init__(self, templates_dir: Optional[Path] = None):
+    Autoescaping is deliberately OFF. These templates render Markdown that is
+    sent to a language model, not HTML sent to a browser, so HTML-entity
+    encoding would corrupt every apostrophe, ampersand and angle bracket in the
+    question and the retrieved context. Defence against instructions embedded in
+    retrieved text belongs in the prompt itself (see `default.md`), not here.
+    """
+
+    def __init__(self, templates_dir: Path | None = None):
         """Initialize PromptManager with a templates directory.
 
         Args:
@@ -25,8 +30,9 @@ class PromptManager:
         self.templates_dir = templates_dir or PROMPTS_DIR
         self.env = Environment(
             loader=FileSystemLoader(str(self.templates_dir)),
-            autoescape=True,
+            autoescape=False,
             undefined=StrictUndefined,
+            keep_trailing_newline=True,
         )
 
     def load_template(self, version: str = "default") -> str:
@@ -80,7 +86,7 @@ class PromptManager:
 
 
 # Global instance for prompt management
-_prompt_manager: Optional[PromptManager] = None
+_prompt_manager: PromptManager | None = None
 
 
 def get_prompt_manager() -> PromptManager:

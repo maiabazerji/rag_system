@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import logging
+from dataclasses import dataclass
 
 try:
     from qdrant_client.async_client import AsyncQdrantClient
@@ -61,10 +62,22 @@ async def _ensure_collection(c: AsyncQdrantClient) -> None:
             timeout=5.0,
             service_name="Qdrant",
         )
-    except (TimeoutError, Exception) as e:
+    except Exception as e:
         logger.error(f"Failed to ensure Qdrant collection: {type(e).__name__}: {e}")
         _qdrant_breaker.record_failure()
         raise
+
+
+# A single document's superseded revisions, so one page always covers them.
+_STALE_SCROLL_LIMIT = 1000
+
+
+@dataclass(frozen=True)
+class StaleRevisions:
+    """What a stale-revision cleanup removed."""
+
+    points: int = 0
+    doc_ids: frozenset[str] = frozenset()
 
 
 def _point_id(chunk_id: str) -> int:
@@ -89,7 +102,7 @@ async def upsert(chunks, vectors) -> None:
                     **chunk.metadata,
                 },
             )
-            for chunk, vec in zip(chunks, vectors)
+            for chunk, vec in zip(chunks, vectors, strict=True)
         ]
         c = await client()
         await async_timeout_wrapper(
@@ -98,7 +111,7 @@ async def upsert(chunks, vectors) -> None:
             service_name="Qdrant",
         )
         _qdrant_breaker.record_success()
-    except (TimeoutError, Exception) as e:
+    except Exception as e:
         logger.error(f"Qdrant upsert failed: {type(e).__name__}: {e}")
         _qdrant_breaker.record_failure()
         raise
@@ -121,7 +134,7 @@ async def search(vector, top_k: int = 8):
         )
         _qdrant_breaker.record_success()
         return result.points
-    except (TimeoutError, Exception) as e:
+    except Exception as e:
         logger.error(f"Qdrant search failed: {type(e).__name__}: {e}")
         _qdrant_breaker.record_failure()
         logger.warning("Returning empty context due to Qdrant failure")
@@ -141,8 +154,87 @@ async def count() -> int:
         )
         _qdrant_breaker.record_success()
         return result.count
-    except (TimeoutError, Exception) as e:
+    except Exception as e:
         logger.error(f"Qdrant count failed: {type(e).__name__}: {e}")
         _qdrant_breaker.record_failure()
         logger.warning("Returning 0 documents due to Qdrant failure")
         return 0  # Graceful degradation
+
+
+async def delete_stale_revisions(filename: str, keep_doc_id: str) -> StaleRevisions:
+    """Remove chunks left behind by earlier revisions of a document.
+
+    Chunk point ids are derived from ``doc_id``, which is content-derived, so
+    re-indexing an edited file writes a *new* set of points and the previous
+    revision's points survive untouched. Left alone they accumulate: the index
+    ends up holding several near-identical copies of the same document, which
+    then crowd each other out of the reranker's top-k and starve genuinely
+    relevant documents of a slot.
+
+    Args:
+        filename: The document's filename, as recorded in chunk metadata.
+        keep_doc_id: The revision being indexed now; its points are preserved.
+
+    Returns:
+        The points removed and the document revisions they belonged to. Callers
+        need the ids to clear anything keyed off them elsewhere, such as the
+        knowledge graph. Empty if the cleanup could not run.
+    """
+    if not _qdrant_breaker.can_execute():
+        logger.error("Qdrant circuit breaker is open; skipping stale-revision cleanup")
+        return StaleRevisions()
+
+    selector = qm.Filter(
+        must=[qm.FieldCondition(key="filename", match=qm.MatchValue(value=filename))],
+        must_not=[qm.FieldCondition(key="doc_id", match=qm.MatchValue(value=keep_doc_id))],
+    )
+    try:
+        c = await client()
+        before = await async_timeout_wrapper(
+            c.count(
+                collection_name=settings.qdrant_collection,
+                count_filter=selector,
+                exact=True,
+            ),
+            timeout=5.0,
+            service_name="Qdrant",
+        )
+        if not before.count:
+            _qdrant_breaker.record_success()
+            return StaleRevisions()
+
+        # Read the ids before deleting; afterwards there is nothing left to ask.
+        # One page is plenty: this matches a single document's own revisions.
+        points, _ = await async_timeout_wrapper(
+            c.scroll(
+                collection_name=settings.qdrant_collection,
+                scroll_filter=selector,
+                limit=_STALE_SCROLL_LIMIT,
+                with_payload=["doc_id"],
+                with_vectors=False,
+            ),
+            timeout=5.0,
+            service_name="Qdrant",
+        )
+        doc_ids = {
+            p.payload["doc_id"]
+            for p in points
+            if p.payload and p.payload.get("doc_id")
+        }
+
+        await async_timeout_wrapper(
+            c.delete(
+                collection_name=settings.qdrant_collection,
+                points_selector=qm.FilterSelector(filter=selector),
+            ),
+            timeout=5.0,
+            service_name="Qdrant",
+        )
+        _qdrant_breaker.record_success()
+        return StaleRevisions(points=before.count, doc_ids=frozenset(doc_ids))
+    except Exception as e:
+        # A failed cleanup leaves duplicates behind but the new revision is
+        # already indexed, so the answer path still works. Don't fail ingest.
+        logger.error(f"Qdrant stale-revision cleanup failed: {type(e).__name__}: {e}")
+        _qdrant_breaker.record_failure()
+        return StaleRevisions()

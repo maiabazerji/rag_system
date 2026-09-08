@@ -6,7 +6,7 @@ course adapts it to LLM applications.
 
 ## Core Primitives Used in LLM Work
 
-- **Runs**: one unit of work- an evaluation pass, a prompt variant sweep, a
+- **Runs**: one unit of work, an evaluation pass, a prompt variant sweep, a
   benchmark. Each run has a config (model, prompt version, top-k, etc.) and
   a set of logged metrics.
 - **Tables**: row-oriented logs with arbitrary columns. For LLM apps, a row

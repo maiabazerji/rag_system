@@ -18,11 +18,12 @@ import asyncio
 import logging
 from concurrent.futures import ThreadPoolExecutor
 from functools import lru_cache
-from typing import Optional
-
-from sentence_transformers import SentenceTransformer
+from typing import TYPE_CHECKING
 
 from app.config import settings
+
+if TYPE_CHECKING:  # pragma: no cover
+    from sentence_transformers import SentenceTransformer
 
 logger = logging.getLogger(__name__)
 
@@ -44,6 +45,10 @@ def _model() -> SentenceTransformer:
             internet connectivity, invalid model name).
     """
     try:
+        # Imported lazily: sentence-transformers pulls in torch, and importing
+        # this module should not cost that unless an embedding is actually needed.
+        from sentence_transformers import SentenceTransformer
+
         return SentenceTransformer(settings.embedding_model)
     except Exception as e:
         logger.error(f"Failed to load embedding model '{settings.embedding_model}': {e}")
@@ -112,7 +117,7 @@ async def embed_texts_async(texts: list[str]) -> list[list[float]]:
         return []
 
     try:
-        loop = asyncio.get_event_loop()
+        loop = asyncio.get_running_loop()
         embeddings = await loop.run_in_executor(
             _executor,
             lambda: _model().encode(texts, normalize_embeddings=True)
@@ -191,7 +196,13 @@ def embedding_dim() -> int:
         >>> print(f"Creating index for {dim}-dimensional embeddings")
     """
     try:
-        return int(_model().get_sentence_embedding_dimension())
+        dim = _model().get_sentence_embedding_dimension()
+        if dim is None:
+            raise RuntimeError(
+                f"Model '{settings.embedding_model}' did not report an embedding "
+                "dimension. It may not be a sentence-transformers model."
+            )
+        return int(dim)
     except Exception as e:
         logger.error(f"Failed to get embedding dimension: {e}")
         raise RuntimeError(f"Failed to get embedding dimension: {str(e)}") from e

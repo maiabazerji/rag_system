@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import json
 from collections import defaultdict
+from collections.abc import Collection
 from dataclasses import dataclass, field
 from pathlib import Path
 from threading import Lock
@@ -123,6 +124,52 @@ def append(triples: list[Triple]) -> dict:
             else:
                 skipped += 1
     return {"added": added, "skipped": skipped}
+
+
+def remove_docs(doc_ids: Collection[str]) -> int:
+    """Drop every triple extracted from the given document revisions.
+
+    Triples are tied to the chunk they came from, and chunk ids derive from the
+    document's content hash, so re-indexing an edited document strands the old
+    revision's triples: they point at chunks the vector store no longer holds,
+    and an entity walk keeps surfacing text that is no longer in the corpus.
+    Calling this when the vector store drops a revision keeps the two in step.
+
+    The index is rebuilt from the survivors rather than unpicked in place: the
+    entity maps are many-to-one, so an entity may be reachable through triples
+    from several documents and cannot simply be deleted alongside one of them.
+
+    Args:
+        doc_ids: Document ids whose triples should be removed.
+
+    Returns:
+        The number of triples removed.
+    """
+    global _INDEX
+    if not doc_ids:
+        return 0
+
+    idx = load()  # outside the lock: load() takes it, and it is not reentrant
+    with _LOCK:
+        survivors = [t for t in idx.triples if t.doc_id not in doc_ids]
+        removed = len(idx.triples) - len(survivors)
+        if not removed:
+            return 0
+
+        rebuilt = GraphIndex()
+        for t in survivors:
+            rebuilt.add(t)
+
+        # Write beside the store and swap, so an interrupted rewrite cannot
+        # leave a half-truncated file where the graph used to be.
+        path = _triples_path()
+        tmp = path.with_name(path.name + ".tmp")
+        tmp.write_text(
+            "".join(t.to_json() + "\n" for t in survivors), encoding="utf-8"
+        )
+        tmp.replace(path)
+        _INDEX = rebuilt
+        return removed
 
 
 def reset() -> None:

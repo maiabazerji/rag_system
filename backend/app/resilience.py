@@ -6,11 +6,11 @@ failures in Qdrant, Postgres, and Anthropic API calls.
 from __future__ import annotations
 
 import asyncio
-import logging
 import random
 import time
+from collections.abc import Awaitable, Callable
 from functools import wraps
-from typing import Any, Awaitable, Callable, TypeVar
+from typing import Any, TypeVar
 
 from app.logging_config import get_structured_logger
 
@@ -39,7 +39,7 @@ async def async_timeout_wrapper(
     """
     try:
         return await asyncio.wait_for(coro, timeout=timeout)
-    except asyncio.TimeoutError as e:
+    except TimeoutError as e:
         logger.error(
             f"{service_name} call timed out after {timeout}s",
             extra_fields={
@@ -154,16 +154,47 @@ class CircuitBreaker:
         }
 
 
+def _default_retryable() -> tuple:
+    """Exception types worth retrying, including the Anthropic SDK's own.
+
+    The SDK raises typed errors (`RateLimitError`, `APIStatusError`,
+    `APIConnectionError`), never `httpx.HTTPStatusError`, so matching on httpx
+    types alone would silently retry nothing.
+    """
+    types: list[type[BaseException]] = [
+        ConnectionError,
+        TimeoutError,
+        asyncio.TimeoutError,
+    ]
+    try:
+        import anthropic
+
+        types += [
+            anthropic.RateLimitError,
+            anthropic.APIConnectionError,
+            anthropic.APITimeoutError,
+            anthropic.InternalServerError,
+        ]
+    except ImportError:  # pragma: no cover
+        pass
+    return tuple(types)
+
+
+def _is_retryable_status(exc: BaseException, statuses: tuple) -> bool:
+    """True when the exception carries an HTTP status code worth retrying."""
+    status = getattr(exc, "status_code", None)
+    if status is None:
+        response = getattr(exc, "response", None)
+        status = getattr(response, "status_code", None)
+    return status in statuses
+
+
 def with_retry(
     max_retries: int = 3,
     backoff_factor: float = 2.0,
     jitter: bool = True,
-    retryable_exceptions: tuple = (
-        ConnectionError,
-        TimeoutError,
-        asyncio.TimeoutError,
-    ),
-    retryable_http_status: tuple = (429, 500, 502, 503, 504),
+    retryable_exceptions: tuple | None = None,
+    retryable_http_status: tuple = (408, 429, 500, 502, 503, 504),
 ) -> Callable:
     """Decorator for retrying async functions with exponential backoff.
 
@@ -177,6 +208,7 @@ def with_retry(
     Returns:
         Decorated function that retries on transient failures
     """
+    retryable = _default_retryable() if retryable_exceptions is None else retryable_exceptions
 
     def decorator(func: Callable[..., Awaitable[T]]) -> Callable[..., Awaitable[T]]:
         @wraps(func)
@@ -199,18 +231,9 @@ def with_retry(
                 except Exception as e:
                     last_exception = e
 
-                    # Check if the exception is retryable
-                    is_retryable = isinstance(e, retryable_exceptions)
-
-                    # Check for httpx exceptions with retryable status codes
-                    if not is_retryable:
-                        try:
-                            import httpx
-
-                            if isinstance(e, httpx.HTTPStatusError):
-                                is_retryable = e.response.status_code in retryable_http_status
-                        except ImportError:
-                            pass
+                    is_retryable = isinstance(e, retryable) or _is_retryable_status(
+                        e, retryable_http_status
+                    )
 
                     if not is_retryable or attempt >= max_retries:
                         logger.error(

@@ -16,6 +16,9 @@ type Answer = {
   refusal: boolean;
   provider?: string | null;
   model?: string | null;
+  latency_ms?: number;
+  input_tokens?: number;
+  output_tokens?: number;
 };
 
 type Turn = { question: string; answer?: Answer; error?: string; loading?: boolean };
@@ -206,16 +209,6 @@ function TurnView({ turn }: { turn: Turn }) {
   );
 }
 
-function Skeleton() {
-  return (
-    <div className="space-y-2">
-      <div className="skeleton h-3 w-1/3" />
-      <div className="skeleton h-3 w-full" />
-      <div className="skeleton h-3 w-11/12" />
-      <div className="skeleton h-3 w-2/3" />
-    </div>
-  );
-}
 
 function cleanAnswer(text: string): string {
   return text
@@ -241,13 +234,22 @@ function AnswerView({ a }: { a: Answer }) {
         <span className={`chip ${a.refusal ? "!text-amber-300 !border-amber-500/40 !bg-amber-500/10" : "!text-emerald-300 !border-emerald-500/40 !bg-emerald-500/10"}`}>
           {a.refusal ? "⚠ Refused" : "✓ Answered"}
         </span>
-        {a.provider && <span className="chip">{a.provider}{a.model ? ` · ${a.model}` : ""}</span>}
+        {a.provider && <span className="chip">{a.provider}</span>}
+        <span className="chip" title="Model confidence in this answer">{formatConfidence(a.confidence)}</span>
         <Tooltip label="How much the model trusts its answer (0-1 scale). Higher = more confident it's grounded in sources.">
           <ConfidenceBar pct={pct} refused={a.refusal} />
         </Tooltip>
       </div>
 
       <p className="text-zinc-200 leading-relaxed">{cleanAnswer(a.answer)}</p>
+
+      <MetadataRow
+        compact
+        model={a.model ?? undefined}
+        latency_ms={a.latency_ms}
+        input_tokens={a.input_tokens}
+        output_tokens={a.output_tokens}
+      />
 
       {!a.refusal && <RatingWidget a={a} />}
     </div>

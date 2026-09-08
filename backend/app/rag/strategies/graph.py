@@ -29,19 +29,17 @@ Use cases:
 """
 from __future__ import annotations
 
-import logging
-from typing import Optional
-
 from app.config import settings
 from app.logging_config import get_structured_logger
 from app.prompts import render_prompt
+from app.rag.embed import embed_query_async
 from app.rag.graph_extract import extract_question_entities
-from app.rag.graph_store import describe_subgraph, load as load_graph, neighbors
+from app.rag.graph_store import describe_subgraph, neighbors
+from app.rag.graph_store import load as load_graph
 from app.rag.providers.anthropic_provider import generate_with_usage
-from app.rag.rerank import rerank
-from app.rag.retrieve import hybrid_search
+from app.rag.rerank import rerank_async
+from app.rag.retrieve import dense_search
 from app.rag.store import search as vector_search
-from app.rag.embed import embed_query
 from app.rag.strategies.base import Strategy, StrategyResult
 from app.schemas import Chunk, Source
 
@@ -71,7 +69,7 @@ async def _fetch_chunks_by_id(chunk_ids: set[str]) -> list[Chunk]:
     if not chunk_ids:
         return []
     fetched: list[Chunk] = []
-    probe = embed_query(" ")
+    probe = await embed_query_async(" ")
     hits = await vector_search(probe, top_k=512)
     by_id = {h.payload["chunk_id"]: h for h in hits if h.payload.get("chunk_id") in chunk_ids}
     for cid, h in by_id.items():
@@ -118,7 +116,7 @@ class GraphRAG(Strategy):
         >>> result = await strategy.run(
         ...     question="What companies did Steve Jobs work for?",
         ...     top_k=8,
-        ...     model="claude-opus-4-7",
+        ...     model="claude-sonnet-5",
         ...     prompt_version="default",
         ... )
         >>> print(f"Answer: {result.answer}")
@@ -233,7 +231,7 @@ class GraphRAG(Strategy):
             }
         )
 
-        vector_chunks = await hybrid_search(question, top_k=settings.retrieval_top_k)
+        vector_chunks = await dense_search(question, top_k=settings.retrieval_top_k)
         vector_ids = {c.id for c in vector_chunks}
         logger.debug(
             "Vector search completed",
@@ -268,7 +266,7 @@ class GraphRAG(Strategy):
             },
         )
 
-        ranked = rerank(question, all_chunks, top_k=top_k)
+        ranked = await rerank_async(question, all_chunks, top_k=top_k)
         logger.debug(
             "Reranking completed",
             extra_fields={
@@ -322,7 +320,7 @@ class GraphRAG(Strategy):
             },
         )
 
-        out = await generate_with_usage(model=model, prompt=user_msg, max_tokens=1024)
+        out = await generate_with_usage(model=model, prompt=user_msg, max_tokens=settings.max_answer_tokens)
         trace.append({"step": "generate", "chars": len(out["text"])})
 
         logger.info(
@@ -340,7 +338,14 @@ class GraphRAG(Strategy):
 
         return StrategyResult(
             answer=out["text"] or "(empty response)",
-            sources=[Source(chunk_id=c.id, quote=c.text[:280]) for c in ranked[:5]],
+            sources=[
+                Source(
+                    chunk_id=c.id,
+                    quote=c.text[:280],
+                    document=c.metadata.get("filename"),
+                )
+                for c in ranked[:5]
+            ],
             input_tokens=out["input_tokens"],
             output_tokens=out["output_tokens"],
             trace=trace,

@@ -4,7 +4,7 @@ import logging
 from dataclasses import dataclass
 from pathlib import Path
 
-from app.prompts.loader import render_prompt, get_prompt_manager
+from app.prompts.loader import get_prompt_manager, render_prompt
 
 logger = logging.getLogger(__name__)
 

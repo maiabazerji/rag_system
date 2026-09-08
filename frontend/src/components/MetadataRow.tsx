@@ -30,10 +30,10 @@ export default function MetadataRow({
         {model && <span className="chip !px-2 !py-0.5">{model}</span>}
         <div className="flex items-center gap-2">
           <Tooltip label="Time from request to response">
-            <span className="font-mono">⏱ {latency_ms ? formatLatency(latency_ms) : "–"}</span>
+            <span className="font-mono">⏱ {latency_ms ? formatLatency(latency_ms) : "n/a"}</span>
           </Tooltip>
-          <Tooltip label="Input + output tokens (cost estimate)">
-            <span className="font-mono">💰 {total_tokens ? formatTokens(total_tokens) : "–"}</span>
+          <Tooltip label={cost ? `Estimated cost: ${cost}` : "Input + output tokens"}>
+            <span className="font-mono">💰 {total_tokens ? formatTokens(total_tokens) : "n/a"}</span>
           </Tooltip>
           {iterations && iterations > 1 && (
             <Tooltip label="Number of reasoning iterations">
@@ -68,10 +68,11 @@ export default function MetadataRow({
         </Tooltip>
       )}
       {total_tokens > 0 && (
-        <Tooltip label="Input + output tokens used (cost indicator)" side="top">
+        <Tooltip label={cost ? `Estimated cost: ${cost}` : "Input + output tokens used"} side="top">
           <div className="bg-emerald-500/20 border border-emerald-500/40 rounded p-2 cursor-help">
             <div className="text-[10px] text-emerald-300 uppercase font-semibold">Tokens</div>
             <div className="text-sm font-mono font-bold text-emerald-100 mt-1">{formatTokens(total_tokens)}</div>
+            {cost && <div className="text-[10px] text-emerald-300/70 font-mono mt-0.5">≈ {cost}</div>}
           </div>
         </Tooltip>
       )}

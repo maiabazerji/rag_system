@@ -1,4 +1,4 @@
-# 🧠 EvalRAG- Production LLM Evaluation & Advanced RAG Platform
+# 🧠 EvalRAG: Production LLM Evaluation & Advanced RAG Platform
 
 ## 📑 Table of Contents
 
@@ -36,10 +36,10 @@
 
 **Four layers:**
 
-1. **Frontend**- AI dashboard (ask questions, compare models A/B, view scores, track regressions).
-2. **Backend API**- ingestion, embeddings, retrieval, inference, evaluation.
-3. **Evaluation Engine**- RAG metrics, LLM-as-judge, regression tests, benchmarks.
-4. **Data Layer**- vector DB, document store, golden dataset store.
+1. **Frontend**: AI dashboard (ask questions, compare models A/B, view scores, track regressions).
+2. **Backend API**: ingestion, embeddings, retrieval, inference, evaluation.
+3. **Evaluation Engine**: RAG metrics, LLM-as-judge, regression tests, benchmarks.
+4. **Data Layer**: vector DB, document store, golden dataset store.
 
 ---
 
@@ -172,9 +172,9 @@ docker compose -f infra/docker-compose.yml up -d   # qdrant, postgres, redis, la
 
 Three stores with clear roles:
 
-- **Document Store** (Postgres + object storage)- raw docs, chunks, metadata, versions.
-- **Vector Store** (Qdrant)- dense embeddings + payload for hybrid filtering.
-- **Eval Store** (Postgres)- golden datasets, run results, regression history.
+- **Document Store** (Postgres + object storage): raw docs, chunks, metadata, versions.
+- **Vector Store** (Qdrant): dense embeddings + payload for hybrid filtering.
+- **Eval Store** (Postgres): golden datasets, run results, regression history.
 
 **Chunk schema**
 
@@ -199,7 +199,7 @@ PDF/HTML/MD/DOCX → Loader → Clean → Chunk → Embed → Index (dense+spars
 
 - **Loaders**: `unstructured`, `pypdf`, `trafilatura`.
 - **Cleaning**: strip boilerplate, normalize whitespace, dedupe.
-- **Chunking**: semantic (sentence-aware) with overlap; target 400–800 tokens.
+- **Chunking**: semantic (sentence-aware) with overlap; target 400-800 tokens.
 - **Idempotency**: hash each chunk; skip if unchanged.
 - **Async**: enqueue via Redis; workers process in parallel.
 
@@ -207,7 +207,7 @@ PDF/HTML/MD/DOCX → Loader → Clean → Chunk → Embed → Index (dense+spars
 
 ## I. Embeddings & Vector Store
 
-- Batch embed (64–128) with retries + exponential backoff.
+- Batch embed (64-128) with retries + exponential backoff.
 - Store embedding model name + version with each vector (for reindexing).
 - Qdrant collection with HNSW + `payload` for filters (`doc_id`, `tags`, `date`).
 - Build parallel BM25 index keyed by `chunk_id` for sparse retrieval.
@@ -241,8 +241,8 @@ Fallback order: rewrite → if low retrieval confidence → multi-query → HyDE
 
 ## L. Reranking & Context Compression
 
-- **Rerank**: top-50 candidates → cross-encoder → top-k (5–8).
-- **Compression**: per-chunk extractive selection (LLM or lightweight extractor) keeps only spans relevant to the query- reduces tokens, raises faithfulness.
+- **Rerank**: top-50 candidates → cross-encoder → top-k (5-8).
+- **Compression**: per-chunk extractive selection (LLM or lightweight extractor) keeps only spans relevant to the query, reduces tokens, raises faithfulness.
 
 ---
 
@@ -306,7 +306,7 @@ Run per-example and aggregate. Store every run with: commit SHA, prompt version,
 
 ## Q. Golden Dataset & Benchmarks
 
-- 100–500 curated `(question, ideal_answer, expected_sources)` triples.
+- 100-500 curated `(question, ideal_answer, expected_sources)` triples.
 - Stratified by difficulty, topic, and failure mode (multi-hop, numeric, refusal).
 - Versioned in git (JSONL). Changes require PR review.
 - Synthetic augmentation via LLM, but **human-reviewed** before entering the set.
@@ -360,11 +360,11 @@ All responses typed via Pydantic; OpenAPI auto-generated.
 
 Pages:
 
-- **Ask**- query box, streamed answer, retrieved chunks with highlights, citations.
-- **Compare**- side-by-side A/B (two models or two prompt versions).
-- **Eval**- run overview, per-metric charts, failure drilldown.
-- **Regressions**- timeline of runs, diff viewer for changed examples.
-- **Traces**- per-request drilldown: retrieval → rerank → prompt → output.
+- **Ask**: query box, streamed answer, retrieved chunks with highlights, citations.
+- **Compare**: side-by-side A/B (two models or two prompt versions).
+- **Eval**: run overview, per-metric charts, failure drilldown.
+- **Regressions**: timeline of runs, diff viewer for changed examples.
+- **Traces**: per-request drilldown: retrieval → rerank → prompt → output.
 
 Stack: React + Vite + Tailwind + TanStack Query + Recharts.
 
@@ -391,11 +391,11 @@ Stack: React + Vite + Tailwind + TanStack Query + Recharts.
 
 ## W. Testing Strategy
 
-- **Unit**- chunking, RRF fusion, schema validation.
-- **Integration**- ingest → retrieve → generate on a tiny fixture corpus.
-- **Eval tests**- golden set thresholds as CI gates.
-- **Load**- Locust/k6 on `/ask`; measure p95 under concurrency.
-- **Contract**- frontend ↔ backend via OpenAPI-generated client.
+- **Unit**: chunking, RRF fusion, schema validation.
+- **Integration**: ingest → retrieve → generate on a tiny fixture corpus.
+- **Eval tests**: golden set thresholds as CI gates.
+- **Load**: Locust/k6 on `/ask`; measure p95 under concurrency.
+- **Contract**: frontend ↔ backend via OpenAPI-generated client.
 
 ---
 
@@ -428,13 +428,13 @@ Stack: React + Vite + Tailwind + TanStack Query + Recharts.
 
 **Glossary**
 
-- **RAG**- Retrieval-Augmented Generation.
-- **BM25**- classical lexical retrieval scoring.
-- **RRF**- Reciprocal Rank Fusion; combines ranked lists.
-- **HyDE**- Hypothetical Document Embeddings.
-- **Cross-encoder**- scores (query, doc) jointly; more accurate, slower.
-- **Faithfulness**- answer is grounded in retrieved context.
-- **Golden set**- human-curated eval dataset.
+- **RAG**: Retrieval-Augmented Generation.
+- **BM25**: classical lexical retrieval scoring.
+- **RRF**: Reciprocal Rank Fusion; combines ranked lists.
+- **HyDE**: Hypothetical Document Embeddings.
+- **Cross-encoder**: scores (query, doc) jointly; more accurate, slower.
+- **Faithfulness**: answer is grounded in retrieved context.
+- **Golden set**: human-curated eval dataset.
 
 **References**
 

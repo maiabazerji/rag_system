@@ -1,6 +1,8 @@
 services:
   qdrant:
-    image: qdrant/qdrant:latest
+    # Pinned deliberately: a Qdrant storage volume cannot be read by an older
+    # server, so downgrading this tag panics on startup against existing data.
+    image: qdrant/qdrant:v1.19.1
     ports: ["6333:6333"]
     volumes: [qdrant_data:/qdrant/storage]
     healthcheck:
@@ -13,41 +15,40 @@ services:
     image: postgres:16
     environment:
       POSTGRES_USER: evalrag
-      POSTGRES_PASSWORD: pw
+      # Development default. Override POSTGRES_PASSWORD in .env for anything
+      # reachable beyond this machine.
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-pw}
       POSTGRES_DB: evalrag
     ports: ["5434:5432"]
-    volumes: [pg_data:/var/lib/postgresql/data]
+    volumes:
+      - pg_data:/var/lib/postgresql/data
+      # Gives Langfuse its own database instead of sharing the app's.
+      - ./postgres-init:/docker-entrypoint-initdb.d:ro
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U evalrag -d evalrag"]
       interval: 10s
       timeout: 5s
       retries: 5
 
-  redis:
-    image: redis:7
-    ports: ["6381:6379"]
-    healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
-      interval: 10s
-      timeout: 3s
-      retries: 5
-
   langfuse:
-    image: langfuse/langfuse:latest
+    image: langfuse/langfuse:2
+    profiles: ["tracing"]
     depends_on:
       postgres:
         condition: service_healthy
     environment:
-      DATABASE_URL: postgresql://evalrag:pw@postgres:5432/evalrag
-      NEXTAUTH_SECRET: devsecret
+      # Its own database, so Langfuse migrations cannot collide with ours.
+      DATABASE_URL: postgresql://evalrag:${POSTGRES_PASSWORD:-pw}@postgres:5432/langfuse
+      NEXTAUTH_SECRET: ${LANGFUSE_NEXTAUTH_SECRET:-change-me-in-dot-env}
       NEXTAUTH_URL: http://localhost:3100
-      SALT: devsalt
+      SALT: ${LANGFUSE_SALT:-change-me-in-dot-env}
     ports: ["3100:3000"]
 
   backend:
     build:
       context: ../backend
       dockerfile: Dockerfile
+      target: dev
       network: host
     env_file:
       - ../.env
@@ -55,25 +56,31 @@ services:
       # Container-internal URLs (override anything env_file might set):
       # services talk to each other via Compose DNS, not localhost.
       QDRANT_URL: http://qdrant:6333
-      POSTGRES_URL: postgresql+psycopg://evalrag:pw@postgres:5432/evalrag
-      REDIS_URL: redis://redis:6379/0
+      POSTGRES_URL: postgresql+psycopg://evalrag:${POSTGRES_PASSWORD:-pw}@postgres:5432/evalrag
       LANGFUSE_HOST: http://langfuse:3000
       # Inside the container, "localhost" is the container; host-gateway reaches the laptop.
       OLLAMA_HOST: http://host.docker.internal:11434
+      # Absolute paths: the graph used to be written to a container path that
+      # was not the bind mount, so it vanished on every rebuild.
+      GRAPH_DATA_DIR: /data/graph
+      LOG_DIR: /app/logs
       # Model is pre-downloaded into the bind-mounted cache below- skip HF's online
       # "check for updates" call, which intermittently dies with closed-httpx-client.
       HF_HUB_OFFLINE: "1"
       TRANSFORMERS_OFFLINE: "1"
-      # Logging
       LOG_LEVEL: INFO
-      # Everything else (API keys, GENERATOR_PROVIDER, OLLAMA_MODEL, OPENAI_GENERATOR_MODEL,
-      # WANDB_*, LANGFUSE_*) comes from env_file (../.env). Don't list them here-
-      # `environment:` overrides env_file, so empty `${VAR:-}` defaults would silently
-      # zero out values supplied in .env.
+      # Everything else (API keys, GENERATOR_PROVIDER, REQUIRE_API_KEY, ADMIN_KEY,
+      # OLLAMA_MODEL, WANDB_*, LANGFUSE_*) comes from env_file (../.env). Don't list
+      # them here- `environment:` overrides env_file, so empty `${VAR:-}` defaults
+      # would silently zero out values supplied in .env.
     extra_hosts:
       - "host.docker.internal:host-gateway"
     volumes:
       - ../backend/app:/app/app
+      # Without this the image's baked-in copy of the tests is what
+      # `compose exec backend pytest` runs, so edited tests appear to fail (or
+      # pass) for reasons that have nothing to do with the current code.
+      - ../backend/tests:/app/tests
       - ../scripts:/scripts
       - ../data:/data
       - ./logs:/app/logs
@@ -85,8 +92,6 @@ services:
       qdrant:
         condition: service_healthy
       postgres:
-        condition: service_healthy
-      redis:
         condition: service_healthy
 
   frontend:

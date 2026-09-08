@@ -6,7 +6,7 @@ where each weight is an IDF factor multiplied by a saturating term-frequency
 factor that accounts for document length.
 
 The canonical BM25 parameters are `k1` (term frequency saturation, typically
-1.2–2.0) and `b` (length normalization, typically 0.75). Larger `k1` lets
+1.2-2.0) and `b` (length normalization, typically 0.75). Larger `k1` lets
 term frequency continue to increase the score; larger `b` penalizes longer
 documents more.
 
