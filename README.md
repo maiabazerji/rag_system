@@ -247,6 +247,8 @@ npm run build            # typecheck + production build
 npm run dev              # dev server on :5173
 ```
 
+The frontend needs Node 22.12 or newer; `vitest` 5 refuses to start on Node 20.
+
 The app imports without any configuration. `settings.validate_startup()` runs in the FastAPI lifespan rather than at import time, so linters, tests and tooling all work in a bare checkout.
 
 All three gates run in CI on every push and pull request ([`.github/workflows/ci.yml`](.github/workflows/ci.yml)).
