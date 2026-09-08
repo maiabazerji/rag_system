@@ -1,0 +1,25 @@
+# Normalize line endings so a checkout on Windows and one on Linux produce the
+# same blobs. Without this, editing a file on Windows can rewrite every line and
+# turn a one-line change into a whole-file diff.
+* text=auto eol=lf
+
+# Shell scripts must keep LF or they fail to execute inside containers.
+*.sh text eol=lf
+infra/*.sh text eol=lf
+
+# Windows-only scripts keep CRLF.
+*.bat text eol=crlf
+*.ps1 text eol=crlf
+
+# Binary files git should never try to convert or diff as text.
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.ico binary
+*.pdf binary
+*.woff binary
+*.woff2 binary
+
+# Generated; collapse in pull request diffs.
+package-lock.json linguist-generated=true -diff

@@ -55,7 +55,7 @@ export default function DataPage() {
     <div className="flex flex-col gap-6 max-w-6xl">
       <header>
         <h1 className="display text-4xl font-semibold text-white">Data</h1>
-        <p className="text-sm text-zinc-400 mt-2">Golden dataset: 100,000 Q&A pairs. Performance metrics across retrieval strategies.</p>
+        <p className="text-sm text-zinc-400 mt-2">What is indexed, and how the retrieval strategies compare on it.</p>
       </header>
 
       {/* Stats Row - Compact */}

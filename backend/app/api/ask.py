@@ -1,49 +1,49 @@
-import logging
-from fastapi import APIRouter
-from fastapi.responses import JSONResponse
+from fastapi import APIRouter, Depends
 
+from app.auth import record_tokens, require_api_key
+from app.logging_config import get_structured_logger
 from app.rag.generate import answer_question
-from app.schemas import Answer, AskRequest, Source
+from app.schemas import Answer, AskRequest
 
-logger = logging.getLogger(__name__)
-router = APIRouter()
+logger = get_structured_logger(__name__)
+router = APIRouter(dependencies=[Depends(require_api_key)])
 
 
-@router.post("", response_model=Answer)
-async def ask(req: AskRequest) -> Answer:
-    try:
-        if not req.question or not req.question.strip():
-            return Answer(
-                question="",
-                answer="Please provide a question.",
-                sources=[Source(chunk_id="none", quote="")],
-                confidence=0.0,
-                refusal=True,
-            )
+@router.post(
+    "",
+    response_model=Answer,
+    summary="Answer a question with RAG",
+    description=(
+        "Runs the question through the chosen RAG strategy and returns a grounded "
+        "answer with its sources, latency and token counts."
+    ),
+)
+async def ask(req: AskRequest, auth: dict = Depends(require_api_key)) -> Answer:
+    """Answer a question using RAG.
 
-        return await answer_question(
-            question=req.question,
-            top_k=req.top_k,
-            provider=req.provider,
-            model=req.model,
-            prompt_version=req.prompt_version,
-            strategy=req.strategy,
-        )
-    except ValueError as e:
-        logger.warning(f"Invalid request: {e}")
-        return Answer(
-            question=req.question,
-            answer=f"Invalid request: {str(e)}",
-            sources=[Source(chunk_id="none", quote="")],
-            confidence=0.0,
-            refusal=True,
-        )
-    except Exception as e:
-        logger.exception(f"Ask error: {e}")
-        return Answer(
-            question=req.question,
-            answer="An error occurred while processing your question. Please try again.",
-            sources=[Source(chunk_id="none", quote="")],
-            confidence=0.0,
-            refusal=True,
-        )
+    Requires `Authorization: Bearer <key>` when REQUIRE_API_KEY is enabled.
+
+    Args:
+        req: Question and per-request overrides.
+        auth: Authenticated principal, injected by the dependency.
+
+    Returns:
+        An Answer. Errors surface as a refusal rather than an exception, so the
+        UI always has something to render.
+    """
+    result = await answer_question(
+        question=req.question,
+        top_k=req.top_k,
+        provider=req.provider,
+        model=req.model,
+        prompt_version=req.prompt_version,
+        strategy=req.strategy,
+    )
+
+    record_tokens(
+        auth,
+        tokens_input=result.input_tokens,
+        tokens_output=result.output_tokens,
+        model=result.model,
+    )
+    return result

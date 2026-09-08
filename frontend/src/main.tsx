@@ -8,6 +8,7 @@ import EvalPage from "./pages/Eval";
 import Regressions from "./pages/Regressions";
 import Ingest from "./pages/Ingest";
 import Data from "./pages/Data";
+import ApiKeyGate from "./components/ApiKeyGate";
 import {
   BeakerIcon,
   ChatIcon,
@@ -72,7 +73,7 @@ function Sidebar() {
           Ingest, ask, score, ship.
         </div>
         <div className="flex items-center justify-between pt-3 border-t border-bg-border text-[11px] text-zinc-500">
-          <span className="font-mono">v0.1</span>
+          <span className="font-mono">v0.3</span>
           <a
             href="https://github.com/maiabazerji"
             target="_blank"
@@ -115,6 +116,7 @@ function Layout({ children }: { children: React.ReactNode }) {
       <div className="flex-1 flex flex-col min-w-0">
         <MobileNav />
         <main className="flex-1 px-4 sm:px-10 py-10 max-w-5xl w-full mx-auto animate-fade-in">
+          <ApiKeyGate />
           {children}
         </main>
       </div>

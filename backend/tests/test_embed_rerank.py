@@ -1,16 +1,16 @@
-import numpy as np
 from unittest.mock import MagicMock, patch
 
+import numpy as np
 import pytest
 
 from app.rag.embed import (
-    embed_texts,
     embed_query,
-    embedding_dim,
-    embed_texts_async,
     embed_query_async,
+    embed_texts,
+    embed_texts_async,
+    embedding_dim,
 )
-from app.rag.rerank import rerank, _rerank_with_cross_encoder, _rerank_with_bm25
+from app.rag.rerank import _rerank_with_bm25, _rerank_with_cross_encoder, rerank
 from app.schemas import Chunk
 
 

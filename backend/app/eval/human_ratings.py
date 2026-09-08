@@ -4,9 +4,8 @@ One file, append-only. Cheap, inspectable, and easy to swap for Postgres later.
 """
 from __future__ import annotations
 
-import json
 import uuid
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 
 from app.schemas import HumanRating, HumanRatingRequest
@@ -24,7 +23,7 @@ def save(req: HumanRatingRequest) -> HumanRating:
     _ensure_file()
     record = HumanRating(
         id=uuid.uuid4().hex[:12],
-        created_at=datetime.now(timezone.utc).isoformat(timespec="seconds"),
+        created_at=datetime.now(UTC).isoformat(timespec="seconds"),
         **req.model_dump(),
     )
     with RATINGS_FILE.open("a", encoding="utf-8") as f:

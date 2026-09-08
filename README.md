@@ -1,107 +1,121 @@
 # EvalRAG
 
-A production-ready platform for comparing three RAG retrieval strategies — **Classic**, **Graph**, and **Agentic** — on the same corpus, with built-in evaluation to catch regressions. Built with the Anthropic API (Claude).
+Run the same question through three different RAG retrieval strategies, **Classic**, **Graph**, and **Agentic**, on your own corpus, and measure which one actually answers it better. Built on the Anthropic API (Claude).
 
-**Status: Stable and ready for deployment.** Every component has validation, structured error handling, and comprehensive logging. Strategies are proven on real queries. Evaluation metrics are grounded in LLM-as-judge scoring. The system is designed for researcher iteration and operational monitoring.
+## Why
 
-## Why I built this
+Most RAG projects pick one retrieval strategy and stop there. But a strategy that nails single-fact lookups can flail on multi-hop questions, and the reverse is also true. EvalRAG exists to answer one question: **which strategy actually works better on my data?**
 
-Most RAG projects pick one retrieval strategy and call it done. Here's the tension: a strategy that nails single-fact lookups can flail on multi-hop questions, and vice versa. So I built EvalRAG to answer: **which strategy actually works better on my data?**
+The **Compare view** (`/compare` in the UI, `POST /compare/strategies` on the API) runs one question through every strategy and shows the answers, sources, latency, token cost, and reasoning trace side by side. Paired with an evaluation harness that scores answers with an LLM judge and a regression detector that flags when a change makes things worse on your golden dataset, you can tell whether a retrieval tweak helped or hurt.
 
-The **Compare view** (`/compare` in the UI, `POST /compare/strategies` on the API) runs the same question through all three strategies in parallel. You see answers, sources, latency, token cost, and the reasoning trace side by side. No benchmarks, no hand-waving:just empirical comparison.
+For a file-by-file walkthrough, see [LEARN.md](./LEARN.md).
 
-Paired with an **evaluation harness** that scores answers on faithfulness and relevance, plus a **regression system** that flags when a change silently breaks things on your golden dataset, the system lets you measure whether a retrieval tweak or prompt change actually helped or hurt.
+## Three strategies, one corpus
 
-For a file-by-file walkthrough of how each strategy works, see [LEARN.md](./LEARN.md).
+| Strategy | Retrieval logic | Implementation | Best at |
+|---|---|---|---|
+| **Classic** | embed → vector search → cross-encoder rerank → answer | [`classic.py`](backend/app/rag/strategies/classic.py) | single-fact lookups |
+| **Graph** | entity walk over a Claude-extracted knowledge graph | [`graph.py`](backend/app/rag/strategies/graph.py) + [`graph_store.py`](backend/app/rag/graph_store.py) + [`graph_extract.py`](backend/app/rag/graph_extract.py) | "how is X related to Y" multi-hop |
+| **Agentic** | Claude drives `search`/`fetch`/`finish` tools in a loop | [`agentic.py`](backend/app/rag/strategies/agentic.py) + [`tool_use_loop`](backend/app/rag/providers/anthropic_provider.py) | ambiguous, multi-step questions |
 
-## Three RAG strategies, one corpus
+All three return the same `StrategyResult` shape, which is what makes them comparable 1:1.
 
-| Strategy    | Retrieval logic                          | Implementation                                                | Best at                          |
-|-------------|------------------------------------------|---------------------------------------------------------------|----------------------------------|
-| **Classic** | embed → vector search → rerank → answer  | [`backend/app/rag/strategies/classic.py`](backend/app/rag/strategies/classic.py) | single-fact lookups              |
-| **Graph**   | entity walk on a Claude-built knowledge graph | [`backend/app/rag/strategies/graph.py`](backend/app/rag/strategies/graph.py) + [`graph_store.py`](backend/app/rag/graph_store.py) + [`graph_extract.py`](backend/app/rag/graph_extract.py) | "how is X related to Y" multi-hop |
-| **Agentic** | Claude drives `search`/`fetch`/`finish` tools in a loop | [`backend/app/rag/strategies/agentic.py`](backend/app/rag/strategies/agentic.py) + [`tool_use_loop`](backend/app/rag/providers/anthropic_provider.py) | ambiguous, multi-step questions  |
+**Classic** is fast and cheap but struggles when an answer has to be assembled across documents. **Graph** extracts entity relationships up front (with Claude Haiku) and walks them at query time. **Agentic** hands Claude a toolbox and lets it decide the retrieval path step by step, the most capable and the most expensive.
 
-**Classic RAG** is fast and cheap, but struggles with questions that require reasoning across multiple documents. **Graph RAG** excels at "how is X related to Y" by extracting entity relationships upfront (via Claude Haiku) and walking them at query time. **Agentic RAG** gives Claude a toolbox and lets it decide the retrieval strategy step-by-step:best for ambiguous or multi-step questions, but higher latency and token cost.
+## Architecture
 
----
-
-## The four layers
-
-| Layer | What it does | Where it lives |
+| Layer | What it does | Where |
 |---|---|---|
-| Frontend | Dashboard: ask questions, A/B compare models, view eval scores, browse traces | `frontend/src/` |
-| Backend API | FastAPI- routes for ingest, ask, compare, eval, traces | `backend/app/api/` |
+| Frontend | Ask questions, compare strategies, view eval scores, browse traces | `frontend/src/` |
+| Backend API | FastAPI routes for ingest, ask, compare, eval, graph, traces | `backend/app/api/` |
 | RAG pipeline | Chunk → embed → retrieve → rerank → generate | `backend/app/rag/` |
-| Eval engine | Metrics, LLM-as-judge, regression tracking | `backend/app/eval/` |
+| Eval engine | LLM-as-judge scoring, regression tracking | `backend/app/eval/` |
 
-Backing stores (run via Docker): **Qdrant** (vectors), **Postgres** (docs, eval results), **Redis** (queue), **Langfuse** (traces).
+Backing services: **Qdrant** (vectors), **Postgres** (API keys and usage accounting), and optionally **Langfuse** (traces) and **W&B** (eval dashboards).
 
----
+Everything in this table is implemented. The embedding model is a real SentenceTransformer, the reranker is a real cross-encoder (with a BM25 fallback), and the judge is a real model call.
 
-## What happens when you ask a question
+> **Check the reranker is the one you think it is.** If the cross-encoder cannot be downloaded, reranking degrades to BM25 silently and every request still returns 200. `"reranker": "bm25"` in the logs means the cross-encoder is not running and any comparison you draw is really a comparison of BM25. This bit this project for a long time: the configured model id was a repo that did not exist, so the fallback was the only code path ever taken.
 
-A question now flows through a **dispatcher** that picks the strategy:
+### What happens when you ask a question
 
-1. **`POST /ask`** with `{"question": "...", "strategy": "classic" | "graph" | "agentic"}` → [`backend/app/api/ask.py`](backend/app/api/ask.py).
-2. **`answer_question`** → [`backend/app/rag/generate.py`](backend/app/rag/generate.py)- picks defaults, opens a trace, calls `get_strategy(strategy).run(...)`.
-3. The chosen strategy (in [`backend/app/rag/strategies/`](backend/app/rag/strategies/)) does its retrieval differently- but they all return the same `StrategyResult` shape (answer, sources, latency, tokens, trace).
-4. **LLM call** → all three strategies generate via `AsyncAnthropic` ([`anthropic_provider.py`](backend/app/rag/providers/anthropic_provider.py)). The agentic strategy uses the `tool_use_loop` helper instead of plain `generate`.
-5. **Trace close** → in-memory events you can fetch from `/traces/{id}`.
+1. `POST /ask` with `{"question": "...", "strategy": "classic" | "graph" | "agentic"}` → [`ask.py`](backend/app/api/ask.py)
+2. `answer_question` → [`generate.py`](backend/app/rag/generate.py) picks defaults, opens a trace, and calls `get_strategy(strategy).run(...)`
+3. The strategy retrieves in its own way but returns the same `StrategyResult` (answer, sources, latency, tokens, trace)
+4. All three generate through `AsyncAnthropic` ([`anthropic_provider.py`](backend/app/rag/providers/anthropic_provider.py)); the agentic strategy uses `tool_use_loop`
+5. The trace is retrievable from `/traces/{id}` (in memory, so it does not survive a restart)
 
-The shared backbone (chunk → embed → vector search → rerank) lives at
-[`embed.py`](backend/app/rag/embed.py), [`store.py`](backend/app/rag/store.py),
-[`retrieve.py`](backend/app/rag/retrieve.py), [`rerank.py`](backend/app/rag/rerank.py)-
-every strategy uses it.
-
-The shape returned by every endpoint is defined in [`backend/app/schemas/`](backend/app/schemas/)- Pydantic models like `Answer`, `Source`, `AskRequest`. These also enforce structured outputs from the LLM (the "N" section of the blueprint).
+Retrieval is **dense-only**: the query is embedded and matched against Qdrant. The lexical BM25 signal enters one step later, in [`rerank.py`](backend/app/rag/rerank.py), as the reranker's fallback when the cross-encoder is unavailable. This is a dense-retrieve-then-rerank pipeline, not hybrid retrieval in the fuse-two-retrievers sense.
 
 ### What happens when you run an eval
 
-1. `POST /eval/run` → [`eval_routes.py`](backend/app/api/eval_routes.py) → `run_evaluation` in [`app/eval/metrics.py`](backend/app/eval/metrics.py).
-2. It loads a **golden dataset** (question + expected answer pairs) from `data/golden/`.
-3. For each question: run the RAG pipeline → score with deterministic metrics *and* an **LLM-as-judge** call ([`app/eval/judge.py`](backend/app/eval/judge.py)).
-4. Results saved, compared against prior runs → [`app/eval/regression.py`](backend/app/eval/regression.py) flags regressions.
-5. Optionally streamed to **W&B** via [`app/tracing/wandb_tracer.py`](backend/app/tracing/wandb_tracer.py) for dashboards.
+1. `POST /eval/run` → `run_evaluation` in [`metrics.py`](backend/app/eval/metrics.py)
+2. Loads a golden dataset (question + ideal answer) from `data/golden/`
+3. Answers each question, then scores it with the LLM judge in [`judge.py`](backend/app/eval/judge.py) on faithfulness, answer relevance, context precision and context recall
+4. Saves the run to `data/eval_runs/` and compares it against previous runs of **the same configuration** → [`regression.py`](backend/app/eval/regression.py)
+5. Optionally streams to W&B via [`wandb_tracer.py`](backend/app/tracing/wandb_tracer.py)
+
+**On unscored examples.** If the judge fails (rate limit, timeout, unparseable response), that example is recorded with `score: null` and left out of the aggregate. The run result reports `n_scored` and `n_unscored` so a partially failed run can never be mistaken for a complete one. A fabricated midpoint score would be worse than a missing one.
 
 ---
 
-## What's real vs. stubbed
+## Baseline on the bundled corpus
 
-The scaffold runs end-to-end but many modules are intentionally stubs so you can wire them up as a learning exercise. See `EvalRAG.md` sections I, L, M, P for the recipes.
+41 documents, 107 chunks, `golden_v1` (34 questions), all 34 scored. Reproduce with
+`python scripts/run_eval.py --dataset golden_v1 --all`.
 
-| Module | Status | To wire |
-|---|---|---|
-| `rag/generate.py` (Anthropic call) | **Real**- just needs `ANTHROPIC_API_KEY` |- |
-| `rag/embed.py` | Stub | Real embedding model (bge-small / OpenAI) |
-| `rag/retrieve.py` | Real (talks to Qdrant) | Add BM25 for true hybrid |
-| `rag/rerank.py` | Stub (pass-through) | `bge-reranker-large` cross-encoder |
-| `eval/judge.py` | Stub (returns zeros) | Real judge LLM call |
-| `eval/metrics.py` | Partial | RAGAS metrics |
-| `tracing/wandb_tracer.py` | Real (no-ops if key missing) |- |
-| Langfuse tracing | Infra only | Wire client into `app/tracing/` |
+| Metric | Classic | Graph | Agentic |
+|---|---|---|---|
+| Retrieval precision | 0.185 | 0.185 | **0.250** |
+| Retrieval recall | **0.765** | **0.765** | 0.544 |
+| Retrieval hit rate | **0.765** | **0.765** | 0.559 |
+| Retrieval MRR | **0.554** | **0.554** | 0.356 |
+| Faithfulness | 0.507 | **0.519** | 0.249 |
+| Answer relevance | **0.862** | 0.854 | 0.521 |
+| Context precision | 0.368 | 0.353 | **0.416** |
+| Context recall | **0.328** | 0.318 | 0.275 |
+| Latency (ms/question) | 21,675 | **15,204** | 17,976 |
+| Tokens (total) | **389,251** | 397,431 | 727,101 |
+| Refusals | **0** | **0** | 6 |
 
-Missing provider keys are handled gracefully- `generate.py` returns a clear refusal if `ANTHROPIC_API_KEY` is blank; W&B silently no-ops. Check which providers are configured:
+Three things this says, none of them the marketing answer:
 
-```bash
-curl http://localhost:8011/health
-# {"status":"ok","providers":{"anthropic":true,"openai":false,...}}
-```
+**Classic and Graph score identically on retrieval.** Not a coincidence and not a
+bug. The graph strategy walks the entity graph *and* runs the same dense search,
+then keeps only the graph hits that dense search missed. With 107 chunks and
+`RETRIEVAL_TOP_K=50`, dense search already returns nearly half the corpus, so
+there is almost nothing left for the walk to add, and the same reranker picks the
+same top-8. Graph RAG needs either a much larger corpus or a much smaller
+`RETRIEVAL_TOP_K` before it can differentiate itself. On this corpus it is Classic
+with extra steps.
+
+**Agentic is the weakest strategy here, at 1.9x the tokens.** It refused 6 of 34
+questions, and a refusal scores near zero on faithfulness and relevance, which is
+what drags those columns down. It does win retrieval precision and context
+precision: it fetches less, and what it fetches is more on-topic. That is a real
+strength, spent badly.
+
+**Faithfulness around 0.5 is the number to attack.** Answer relevance is high, so
+the answers address the question; faithfulness says they assert more than the
+retrieved context supports. That gap is the interesting bug, and it is the kind of
+thing this harness exists to surface.
+
+These are the numbers from one small corpus. The point of the tool is that you run
+it on yours.
 
 ---
 
-## Quickstart (Docker- everything at once)
+## Quickstart (Docker)
 
-Spins up frontend + backend + Qdrant + Postgres + Redis + Langfuse together as one **Compose stack**.
+Brings up frontend, backend, Qdrant and Postgres together.
 
-> **Golden rule.** The Compose file lives at `infra/docker-compose.yml`, **not** at the project root. Every `docker compose` command needs to point at it- either with `-f infra/docker-compose.yml`, or by `cd`-ing into `infra/` first, or by setting `$env:COMPOSE_FILE`. Plain `docker compose down` from the project root will fail with `no configuration file provided: not found`.
+> **Note.** The Compose file lives at `infra/docker-compose.yml`, not at the project root. Every command needs `-f infra/docker-compose.yml`, or `cd infra` first, or `$env:COMPOSE_FILE`. A bare `docker compose down` from the root fails with `no configuration file provided`.
 
-### 1 · Configure (one-time)
+### 1. Configure
 
 ```powershell
-# Windows PowerShell (cwd = project root)
+# Windows PowerShell (from the project root)
 copy .env.example .env
-# Open .env and fill ANTHROPIC_API_KEY (others can stay blank for a smoke test)
 ```
 
 ```bash
@@ -109,160 +123,192 @@ copy .env.example .env
 cp .env.example .env
 ```
 
-All provider keys are **optional** for a first smoke test- `generate.py` returns a graceful refusal when `ANTHROPIC_API_KEY` is blank, W&B silently no-ops, etc.
+Open `.env` and set `ANTHROPIC_API_KEY`. Everything else has a working default. Without a key the stack still starts and the UI still loads, but every answer comes back as a refusal.
 
-### 2 · Build + start the stack
+### 2. Start
 
 ```bash
 docker compose -f infra/docker-compose.yml up -d --build
 ```
 
-`up` creates the containers, `-d` runs them detached (background), `--build` rebuilds the local `backend` and `frontend` images from their Dockerfiles. First run downloads ~2 GB of base images; subsequent runs are seconds.
+Add `--profile tracing` if you also want Langfuse. The first build downloads a couple of GB; later starts take seconds.
 
-### 3 · Open the apps
+### 3. Open
 
-| App      | URL                              | Notes                              |
-|----------|----------------------------------|------------------------------------|
-| Frontend | <http://localhost:5173>          | Vite dev server, HMR enabled       |
-| Backend  | <http://localhost:8011/docs>     | FastAPI Swagger UI                 |
-| Health   | <http://localhost:8011/health>   | Reports which provider keys are set |
-| Langfuse | <http://localhost:3100>          | Tracing dashboard (sign up locally) |
+| App | URL | Notes |
+|---|---|---|
+| Frontend | <http://localhost:5173> | Vite dev server with hot reload |
+| Backend | <http://localhost:8011/docs> | OpenAPI / Swagger UI |
+| Health | <http://localhost:8011/health> | Which providers are configured |
+| Langfuse | <http://localhost:3100> | Only with `--profile tracing` |
 
-### 4 · Ingest some docs and run an eval
+### 4. Ingest and evaluate
 
 ```bash
 docker compose -f infra/docker-compose.yml exec backend python /scripts/ingest.py
 docker compose -f infra/docker-compose.yml exec backend python /scripts/run_eval.py --dataset golden_v1
 ```
 
-`exec` runs a one-shot command inside an already-running container. The `/scripts` path is bind-mounted from `./scripts/` on your host, so you can edit and re-run without rebuilding the image.
+Or drag files onto the Ingest page. Accepted types: `.pdf`, `.txt`, `.md`, `.markdown`, `.rst`, `.csv`, `.json`, up to `MAX_UPLOAD_MB` (25 MB by default).
 
-### 5 · Tail logs / stop / wipe
+### 5. Logs, stop, wipe
 
 ```bash
-docker compose -f infra/docker-compose.yml logs -f backend frontend   # follow logs
-docker compose -f infra/docker-compose.yml ps                         # what's running
-docker compose -f infra/docker-compose.yml down                       # stop + remove containers (keeps data)
-docker compose -f infra/docker-compose.yml down -v                    # also delete named volumes (wipes Postgres + Qdrant)
+docker compose -f infra/docker-compose.yml logs -f backend      # follow logs
+docker compose -f infra/docker-compose.yml ps                   # what's running
+docker compose -f infra/docker-compose.yml down                 # stop (keeps data)
+docker compose -f infra/docker-compose.yml down -v              # also wipe volumes
 ```
 
-### Compose cheat sheet
+### Port map (host → container)
 
-If you don't want to type `-f infra/docker-compose.yml` every time, pick one:
+| Service | Host | Container | Why this host port |
+|---|---|---|---|
+| Frontend | `5173` | `5173` | Vite default |
+| Backend | `8011` | `8000` | `8001` was taken on the author's machine |
+| Langfuse | `3100` | `3000` | `3000` is a common Next.js default |
+| Postgres | `5434` | `5432` | `5432`/`5433` taken by other stacks |
+| Qdrant | `6333` | `6333` | free |
 
-```powershell
-# A. Run commands from inside the infra folder
-cd infra
-docker compose ps
+Containers reach each other by **service name** on the internal network (`qdrant:6333`, `postgres:5432`), never `localhost`. The host ports are only for reaching services from your machine.
 
-# B. Sticky for the whole shell session (PowerShell)
-$env:COMPOSE_FILE = "infra/docker-compose.yml"
-docker compose ps
+`backend/app/` and `frontend/src/` are bind-mounted, so edits appear inside the containers immediately and uvicorn `--reload` / Vite HMR pick them up.
 
-# C. Sticky for the whole shell session (bash / zsh)
-export COMPOSE_FILE=infra/docker-compose.yml
-docker compose ps
+---
+
+## Authentication
+
+Auth is **off by default** so a fresh clone runs with no setup. `/ask`, `/compare`, `/ingest`, `/eval` and `/graph` accept unauthenticated requests, which is fine on localhost and not fine anywhere else.
+
+To turn it on:
+
+```bash
+# 1. In .env
+REQUIRE_API_KEY=true
+ADMIN_KEY=<python -c "import secrets; print(secrets.token_urlsafe(32))">
+
+# 2. Restart, then mint a key
+python scripts/setup_auth.py --create-key "my-laptop"
 ```
 
-### Service port map (host → container)
+The key is shown once, only its SHA-256 hash is stored. Paste it into the field the UI shows (it appears automatically when the backend reports `auth_required`), or send it yourself:
 
-| Service   | Host port | Container port | Why this host port? |
-|-----------|-----------|----------------|----------------------|
-| Frontend  | `5173`    | `5173`         | Vite default         |
-| Backend   | `8011`    | `8000`         | `8001` was busy on this machine- bumped by 10 |
-| Langfuse  | `3100`    | `3000`         | `3000` was busy- common React/Next.js default |
-| Postgres  | `5434`    | `5432`         | `5432`/`5433` already taken by other stacks    |
-| Redis     | `6381`    | `6379`         | `6380` already taken by `e-invoice-redis`      |
-| Qdrant    | `6333`    | `6333`         | Free                                           |
+```bash
+curl -H "Authorization: Bearer sk_..." http://localhost:8011/ingest/stats
+```
 
-**`HOST:CONTAINER`** is how `docker compose` publishes ports. Containers always talk to each other over the **container ports** on the internal `infra_default` Docker network (e.g. `redis:6379`, `postgres:5432`- note the service name as DNS, not `localhost`). The **host ports** above are only how *you* reach the services from your laptop. The backend env vars in `infra/docker-compose.yml` use the container ports for exactly this reason.
+Each key carries a per-minute rate limit (`--rpm`, default 10) enforced across every protected route, and its token usage is recorded per request.
 
-Code in `backend/app/` and `frontend/src/` is **bind-mounted**- edits on your host instantly appear inside the containers, and uvicorn `--reload` / Vite HMR pick them up automatically. Named volumes (`qdrant_data`, `pg_data`) persist data across `down` but are wiped by `down -v`.
+```bash
+python scripts/setup_auth.py --list-keys           # keys and 24h usage
+python scripts/setup_auth.py --deactivate-key 1    # revoke, effective immediately
+```
+
+Auth requires Postgres. It is the only thing that does, so with `REQUIRE_API_KEY=false` and no `ADMIN_KEY` the backend never opens a database connection.
+
+---
+
+## Configuration
+
+[`.env.example`](./.env.example) documents every setting. The ones worth knowing:
+
+| Setting | Default | Effect |
+|---|---|---|
+| `GENERATOR_MODEL` | `claude-sonnet-5` | Model that writes answers |
+| `JUDGE_MODEL` | `claude-opus-5` | Model that grades them |
+| `RETRIEVAL_TOP_K` | `50` | Candidates fetched before reranking |
+| `RERANK_TOP_K` | `8` | Chunks sent to the model, the main cost lever |
+| `CHUNK_SIZE_TOKENS` | `600` | Words per chunk (applies to new ingests) |
+| `AGENTIC_MAX_ITERS` | `15` | Bounds worst-case cost of one agentic question |
+| `MAX_UPLOAD_MB` | `25` | Upload ceiling |
+| `REQUIRE_API_KEY` | `false` | Enforce API keys |
+
+Changing `EMBEDDING_MODEL` changes the vector dimension. The backend refuses to start against a collection built with a different model and tells you so; recreate it with `docker compose -f infra/docker-compose.yml down -v`.
+
+---
+
+## Development
+
+```bash
+cd backend
+python -m venv .venv && . .venv/Scripts/activate    # or bin/activate on macOS/Linux
+pip install --index-url https://download.pytorch.org/whl/cpu torch
+pip install -e ".[dev]"
+
+ruff check app tests     # lint
+mypy app                 # types
+pytest -q                # 258 tests
+```
+
+```bash
+cd frontend
+npm ci
+npm run build            # typecheck + production build
+npm run dev              # dev server on :5173
+```
+
+The app imports without any configuration. `settings.validate_startup()` runs in the FastAPI lifespan rather than at import time, so linters, tests and tooling all work in a bare checkout.
+
+All three gates run in CI on every push and pull request ([`.github/workflows/ci.yml`](.github/workflows/ci.yml)).
+
+More detail, including troubleshooting: [`backend/SETUP.md`](./backend/SETUP.md).
 
 ---
 
 ## Troubleshooting
 
-### Configuration Problems
+**Every answer is a refusal** → `ANTHROPIC_API_KEY` is unset. Check `GET /health`.
 
-**"ANTHROPIC_API_KEY is not set"** → Add your key to `.env` and restart. See `.env.example` for all configurable settings.
+**`Connection refused` from Postgres, Qdrant** → services aren't up. `docker compose -f infra/docker-compose.yml up -d`.
 
-**"Connection refused (Postgres/Redis/Qdrant)"** → Services aren't running. Restart with `docker compose -f infra/docker-compose.yml up -d`.
+**401 on every request** → `REQUIRE_API_KEY=true` and no key is set. See [Authentication](#authentication).
 
-**"503 Service Unavailable"** → An API key is missing for the chosen provider. Check `GET /health` to see which providers are configured.
+**429 Rate limit exceeded** → your key's per-minute limit. Raise it with `--rpm` when creating the key.
 
-### Performance Tuning
+**Answers are slow** → lower `RETRIEVAL_TOP_K` and `RERANK_TOP_K`; try `claude-haiku-4-5` as `GENERATOR_MODEL`. The agentic strategy is inherently slower, it makes up to `AGENTIC_MAX_ITERS` model calls per question.
 
-**Slow responses (> 5 sec)?**
-- Reduce `RETRIEVAL_TOP_K` in `.env` (default 50, try 10)
-- Shrink `CHUNK_SIZE_TOKENS` (default 600, try 400)
-- Check logs: `docker compose -f infra/docker-compose.yml logs -f backend`
+**Graph strategy returns nothing** → build the graph first: `POST /graph/build`, then poll `GET /graph/build/{job_id}`. It runs one model call per chunk, so it takes a while on a large corpus.
 
-**High token costs?**
-- Lower `RETRIEVAL_TOP_K` and `CHUNK_SIZE_TOKENS`
-- Use a cheaper model (e.g., `claude-haiku-4-5-20251001` for evaluation)
-
-### Full Troubleshooting Guide
-
-See [`backend/SETUP.md`](./backend/SETUP.md) for detailed debugging steps, Docker tips, database recovery, and common errors with solutions.
+Fuller guide: [`backend/SETUP.md`](./backend/SETUP.md).
 
 ---
 
 ## Contributing
 
-This codebase is built as a learning resource and experimental platform for RAG strategies. Contributions are welcome:
+1. **New strategy?** Add a `Strategy` subclass in `backend/app/rag/strategies/` and register it in `REGISTRY`.
+2. **New metric?** Extend `backend/app/eval/judge.py` and `DIMENSIONS`.
+3. **Frontend?** `frontend/src/`.
+4. **Bug?** Open an issue with logs (`LOG_LEVEL=DEBUG` in `.env`).
 
-1. **New retrieval strategies?** Add to `backend/app/rag/strategies/`
-2. **New metrics?** Extend `backend/app/eval/metrics.py`
-3. **Frontend improvements?** See `frontend/src/`
-4. **Bug fixes?** Open an issue with logs (enable DEBUG in `.env`)
-
-All PRs should include:
-- Clear description of the change and why
-- Tests (if adding new logic)
-- Updated comments/docstrings
-- Validated against `.env.example` if adding config keys
+Pull requests should keep `ruff check`, `mypy` and `pytest` green, add tests for new logic, and document any new setting in `.env.example`.
 
 ---
 
 ## Where to go next
 
-- **Understand the architecture**: [`LEARN.md`](./LEARN.md) walks through every module (entity, data flow, responsibility). Start here to orient yourself.
-- **Set up the backend**: [`backend/SETUP.md`](./backend/SETUP.md) has step-by-step installation, debugging tips, and solutions to common issues.
-- **Deep dive into strategies**: [`EvalRAG.md`](./EvalRAG.md) covers theory (why three strategies?), implementation details (how graphs are built), and recipes for extending.
-- **Configuration reference**: [`.env.example`](./.env.example) is the source of truth for every setting, with links to where to get API keys and recommended values.
-- **API reference**: `http://localhost:8011/docs` (Swagger UI) auto-generates docs for every endpoint once the backend is running.
-- **Code exploration**: [`backend/app/config.py`](backend/app/config.py) shows all knobs and validation. [`backend/app/schemas/`](backend/app/schemas/) defines the request/response contracts.
+- [`LEARN.md`](./LEARN.md), module-by-module walkthrough
+- [`backend/SETUP.md`](./backend/SETUP.md), local install, debugging, common errors
+- [`EvalRAG.md`](./EvalRAG.md), theory and extension recipes
+- [`.env.example`](./.env.example), every setting, annotated
+- <http://localhost:8011/docs>, live API reference
 
 ---
 
-## Glossary (Docker + RAG keywords used above)
+## Glossary
 
-**Docker**
+**Chunk**, a passage split from a source document (~600 words here, with overlap).
+**Embedding**, a fixed-length vector encoding meaning; the same model must embed both documents and queries.
+**Vector DB**, an index optimized for approximate nearest-neighbor search. Here: Qdrant.
+**Reranking**, a slower cross-encoder rescoring the top-K from retrieval, for higher precision.
+**Grounding / citations**, the answer references the chunks it used, which is what makes it auditable.
+**Golden dataset**, hand-labeled question/answer pairs used as ground truth.
+**LLM-as-judge**, a second model scoring answers against a rubric.
+**Faithfulness**, does the answer assert only what the retrieved context supports?
+**Regression**, a metric got worse than the previous run *of the same configuration*.
+**Circuit breaker**, after repeated provider failures, calls fail fast for 30 seconds instead of piling up.
 
-- **Image**- read-only template (e.g. `redis:7`, `postgres:16`); the recipe.
-- **Container**- a running instance of an image; isolated process tree, filesystem, **network namespace**.
-- **Compose**- declarative orchestrator. `docker-compose.yml` describes a set of services + a shared **bridge network** + named **volumes**, all started together.
-- **Service vs. container name**- service is the name in YAML (`redis`); container becomes `infra-redis-1` (project + service + replica index). Project name defaults to the folder of the compose file (here: `infra`).
-- **Bridge network**- the virtual switch Compose puts your services on. Containers reach each other by **service name** as DNS (`redis:6379`, `postgres:5432`). Internal traffic does NOT need a published port.
-- **Port publishing / mapping**- `HOST:CONTAINER`. Only needed when *your laptop* (outside Docker) wants to reach a service. Two listeners can't share a host port → "already allocated."
-- **Bind / listen**- kernel operations. A port is owned by exactly one socket per `(interface, port, protocol)`.
-- **Bind mount vs. named volume**- bind mount maps a host path into the container (`../backend/app:/app/app`)- great for hot reload. Named volume is Docker-managed storage (`pg_data`, `qdrant_data`)- survives `down`, wiped by `down -v`.
-- **Healthcheck**- a probe inside the container; combined with `depends_on: condition: service_healthy` to delay dependents until upstream is ready.
-- **Env file / interpolation**- `${ANTHROPIC_API_KEY:-}` reads from `.env` (loaded via `env_file:`) and defaults to empty if missing.
-- **`up`/`down`/`logs`/`exec`/`ps`**- create+start / stop+remove / tail logs / one-shot command in a running container / status. Add `-d` to `up` for detached, `-v` to `down` to wipe volumes.
+---
 
-**RAG**
+## License
 
-- **Chunk**- a passage (~300–800 tokens, ~10–15% overlap) split from a source document.
-- **Embedding**- a fixed-length vector that encodes semantic meaning; same model must embed both docs and queries.
-- **Vector DB**- index optimized for **ANN** (approximate nearest neighbor) search over embeddings. Here: **Qdrant**.
-- **Hybrid retrieval**- combine **dense** (embedding similarity) with **sparse** (BM25 / keyword) signals; usually beats either alone.
-- **Reranking**- a slower **cross-encoder** that re-scores the top-K from retrieval for higher precision.
-- **Context compression**- trim retrieved passages to the spans actually relevant to the question, to fit the context window and reduce noise.
-- **Grounding / citations**- the answer references the chunks it used; reduces **hallucination** and gives auditability.
-- **Golden dataset**- hand-labeled question/answer pairs used as the ground truth for evaluation.
-- **LLM-as-judge**- a second model scores the system's answer against a rubric (faithfulness, relevance, etc.).
-- **Faithfulness**- does the answer only assert what's in the retrieved context? (No hallucination.)
-- **Regression**- a metric got worse vs. the previous run on the same dataset; the eval engine flags this so a "small" prompt change doesn't silently break things.
-- **Tracing**- per-request structured logs of every stage (retrieval, prompts, LLM call). Here: **Langfuse** (web UI) and **W&B** (eval-run dashboards).
+[MIT](./LICENSE)

@@ -5,10 +5,14 @@ import Tooltip from "../components/Tooltip";
 import ErrorAlert from "../components/ErrorAlert";
 
 type Run = {
+  id: string;
   dataset: string;
   model?: string | null;
   n: number;
-  aggregate?: { faithfulness?: number; answer_relevance?: number; context_precision?: number; context_recall?: number };
+  n_scored: number;
+  n_unscored: number;
+  created_at?: string | null;
+  aggregate?: { faithfulness?: number; answer_relevance?: number; context_precision?: number; context_recall?: number } | null;
 };
 
 const METRICS: { key: keyof NonNullable<Run["aggregate"]>; label: string; desc: string }[] = [
@@ -18,20 +22,14 @@ const METRICS: { key: keyof NonNullable<Run["aggregate"]>; label: string; desc: 
   { key: "context_recall", label: "Recall", desc: "Retrieved all relevant chunks" },
 ];
 
-const GOLDEN_SAMPLES = [
-  {
-    q: "How does entity extraction in Graph RAG reduce hallucination compared to dense-only systems?",
-    a: "Graph RAG extracts entities upfront and walks relationships, forcing the model to ground claims in the knowledge structure. Dense-only systems can drift into semantically plausible but unsupported answers because they lack structural constraints.",
-  },
-  {
-    q: "When should you trade latency for reasoning capability in a RAG system?",
-    a: "For synthesis queries requiring cross-document reasoning, Agentic RAG's tool-use loop justifies higher latency. For factual lookups, Classic RAG's speed wins. The tradeoff depends on query complexity and tolerance for latency.",
-  },
-  {
-    q: "How do chunk size and embedding model interact in a retrieval system?",
-    a: "Smaller chunks with powerful embeddings (e.g., text-embedding-3-large) excel at precision but risk fragmenting context. Larger chunks preserve context but may dilute relevance signals. The optimal pairing depends on document structure and query complexity.",
-  },
-];
+/** "2026-09-05T10:53:40+00:00" -> "5 Sep 2026, 10:53". */
+function formatRunDate(iso?: string | null): string | null {
+  if (!iso) return null;
+  const d = new Date(iso);
+  return Number.isNaN(d.getTime())
+    ? null
+    : d.toLocaleString(undefined, { day: "numeric", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit" });
+}
 
 export default function EvalPage() {
   const { data, refetch, isFetching, error, isLoading } = useQuery({
@@ -48,11 +46,18 @@ export default function EvalPage() {
     }
   }
 
+  // A run whose judge never returned a score has nothing to show but four
+  // dashes, so it is kept out of the list and reported as a count instead.
+  const scored = (data ?? []).filter((r) => r.aggregate && r.n_scored > 0);
+  const unscoredCount = (data?.length ?? 0) - scored.length;
+
   return (
     <div className="flex flex-col gap-6 max-w-6xl">
       <header>
         <h1 className="display text-4xl font-semibold text-white">Evaluation</h1>
-        <p className="text-sm text-zinc-400 mt-2">Golden dataset: 100,000 Q&A pairs. Measure strategy performance with precision, recall, and relevance metrics.</p>
+        <p className="text-sm text-zinc-400 mt-2">
+          Score a golden dataset on faithfulness, relevance, and retrieval precision and recall.
+        </p>
       </header>
 
       {isLoading ? (
@@ -64,22 +69,30 @@ export default function EvalPage() {
           error={`Failed to load evaluations: ${error instanceof Error ? error.message : "Unknown error"}`}
           onRetry={() => refetch()}
         />
-      ) : !data?.length ? (
+      ) : !scored.length ? (
         <div className="card p-12 text-center">
-          <h2 className="text-xl font-semibold text-white mb-2">No evaluation runs yet</h2>
-          <p className="text-sm text-zinc-400 mb-6">Run an evaluation on the golden dataset to measure retrieval strategy performance.</p>
+          <h2 className="text-xl font-semibold text-white mb-2">No scored evaluation runs yet</h2>
+          <p className="text-sm text-zinc-400 mb-6">
+            {unscoredCount > 0
+              ? `${unscoredCount} earlier ${unscoredCount === 1 ? "run" : "runs"} produced no scores. Run an evaluation to measure retrieval strategy performance.`
+              : "Run an evaluation on the golden dataset to measure retrieval strategy performance."}
+          </p>
           <button onClick={runNow} disabled={isFetching} className="btn-primary min-h-[48px]">
             {isFetching ? "Running…" : "Run Evaluation"}
           </button>
         </div>
       ) : (
         <div className="space-y-6">
-          {data.map((r, i) => (
-            <div key={i} className="card p-6">
+          {scored.map((r) => (
+            <div key={r.id} className="card p-6">
               <div className="flex items-center justify-between mb-6 flex-wrap gap-4">
                 <div>
-                  <h2 className="text-lg font-semibold text-white">Evaluation Results</h2>
-                  <p className="text-xs text-zinc-500 mt-1">Golden dataset • 100,000 questions</p>
+                  <h2 className="text-lg font-semibold text-white">{r.dataset}</h2>
+                  <p className="text-xs text-zinc-500 mt-1">
+                    {r.n_scored} of {r.n} {r.n === 1 ? "question" : "questions"} scored
+                    {r.model ? ` • ${r.model}` : ""}
+                    {formatRunDate(r.created_at) ? ` • ${formatRunDate(r.created_at)}` : ""}
+                  </p>
                 </div>
                 <button onClick={runNow} disabled={isFetching} className="btn-primary text-sm px-4 py-2 min-h-[44px] sm:min-h-auto">
                   {isFetching ? "Running…" : "Re-run"}
@@ -96,7 +109,7 @@ export default function EvalPage() {
                       <div className="p-4 rounded-lg bg-bg-surface border border-bg-border cursor-help">
                         <div className="text-xs text-zinc-500 uppercase font-semibold tracking-wide">{m.label}</div>
                         <div className="text-2xl sm:text-3xl font-bold text-white mt-2 tabular-nums">
-                          {v == null ? "–" : v.toFixed(2)}
+                          {v == null ? "n/a" : v.toFixed(2)}
                         </div>
                         <div className="mt-3 h-1.5 bg-bg-elevated rounded-full overflow-hidden">
                           <div
@@ -120,18 +133,11 @@ export default function EvalPage() {
         </div>
       )}
 
-      {/* Golden Dataset Examples */}
-      <div className="card p-6">
-        <h2 className="text-lg font-semibold text-white mb-4">Golden Dataset Examples</h2>
-        <div className="space-y-4">
-          {GOLDEN_SAMPLES.map((s, i) => (
-            <div key={i} className="p-4 rounded-lg bg-bg-surface border border-bg-border">
-              <div className="text-sm font-semibold text-white mb-2">Q{i + 1}: {s.q}</div>
-              <div className="text-sm text-zinc-400 leading-relaxed pl-4 border-l border-accent">{s.a}</div>
-            </div>
-          ))}
-        </div>
-      </div>
+      {scored.length > 0 && unscoredCount > 0 && (
+        <p className="text-xs text-zinc-500">
+          {unscoredCount} earlier {unscoredCount === 1 ? "run is" : "runs are"} hidden because the judge returned no scores.
+        </p>
+      )}
     </div>
   );
 }

@@ -2,7 +2,6 @@ import { useEffect, useState, ReactNode } from "react";
 import { get, post } from "../api/client";
 import LoadingSpinner from "../components/LoadingSpinner";
 import ErrorAlert from "../components/ErrorAlert";
-import MetadataRow from "../components/MetadataRow";
 import Tooltip from "../components/Tooltip";
 import { formatLatency, formatTokens } from "../utils/formatting";
 
@@ -317,6 +316,14 @@ function StrategyCard({
               </details>
             </div>
           )}
+
+          {/* Reasoning trace and strategy-specific detail */}
+          {result.extra && Object.keys(result.extra).length > 0 && (
+            <ExtraDetails name={name} extra={result.extra} />
+          )}
+          {result.trace && result.trace.length > 0 && (
+            <TraceDetails trace={result.trace} />
+          )}
         </>
       )}
     </div>
@@ -324,54 +331,7 @@ function StrategyCard({
 }
 
 
-function stripMarkdown(text: string): string {
-  return text
-    .split("\n")
-    .filter(line => !line.match(/^#+\s/) && !line.match(/^>\s/) && line.trim() !== "---" && line.trim() !== "|" && line.trim() !== "")
-    .map(line => {
-      return line
-        .replace(/\*\*(.+?)\*\*/g, "$1")
-        .replace(/\*(.+?)\*/g, "$1")
-        .replace(/`(.+?)`/g, "$1")
-        .replace(/\[(.+?)\]\(.+?\)/g, "$1")
-        .replace(/According to \[[\w:]+\]\s*,?\s*/g, "");
-    })
-    .join("\n")
-    .trim();
-}
 
-function Sources({ sources }: { sources: Source[] }) {
-  const [expanded, setExpanded] = useState<string | null>(null);
-
-  return (
-    <div>
-      <div className="text-[10px] uppercase tracking-wider text-zinc-500 mb-2 font-semibold">Sources ({sources.length})</div>
-      <div className="space-y-1.5">
-        {sources.map((s, i) => (
-          <div
-            key={`${s.chunk_id}-${i}`}
-            className="bg-zinc-900/50 border border-zinc-700/50 rounded-md p-2 hover:border-zinc-600/70 transition-colors cursor-pointer"
-            onClick={() => setExpanded(expanded === s.chunk_id ? null : s.chunk_id)}
-          >
-            <div className="flex items-start gap-2">
-              <span className="text-accent text-[10px] font-mono flex-shrink-0 mt-0.5">
-                [{i + 1}]
-              </span>
-              <div className="flex-1 min-w-0">
-                <div className="text-[10px] text-zinc-400 font-mono truncate">{s.chunk_id}</div>
-                {expanded === s.chunk_id && (
-                  <div className="text-[11px] text-zinc-300 mt-1.5 leading-relaxed max-h-24 overflow-y-auto border-t border-zinc-700/50 pt-1.5">
-                    {stripMarkdown(s.quote) || "(empty quote)"}
-                  </div>
-                )}
-              </div>
-            </div>
-          </div>
-        ))}
-      </div>
-    </div>
-  );
-}
 
 function FormattedAnswer({ text }: { text: string }) {
   const renderInline = (str: string): ReactNode => {
@@ -523,14 +483,13 @@ function ExtraDetails({
           Knowledge graph details
         </summary>
         <div className="mt-3 space-y-3">
-          {extra.entities && (
+          {Array.isArray(extra.entities) && extra.entities.length > 0 && (
             <div>
               <div className="text-[10px] uppercase tracking-wider text-zinc-500 mb-1.5 font-semibold">
                 Extracted Entities
               </div>
               <div className="flex flex-wrap gap-1">
-                {Array.isArray(extra.entities) &&
-                  extra.entities.map((e, i) => (
+                {extra.entities.map((e, i) => (
                     <span
                       key={i}
                       className="px-2 py-1 rounded-full bg-violet-500/20 border border-violet-500/40 text-violet-300 text-[10px] font-mono"
@@ -541,14 +500,13 @@ function ExtraDetails({
               </div>
             </div>
           )}
-          {extra.related_entities && (
+          {Array.isArray(extra.related_entities) && extra.related_entities.length > 0 && (
             <div>
               <div className="text-[10px] uppercase tracking-wider text-zinc-500 mb-1.5 font-semibold">
                 Related Entities (1 hop)
               </div>
               <div className="flex flex-wrap gap-1">
-                {Array.isArray(extra.related_entities) &&
-                  extra.related_entities.map((e, i) => (
+                {extra.related_entities.map((e, i) => (
                     <span
                       key={i}
                       className="px-2 py-1 rounded-full bg-violet-500/10 border border-violet-500/30 text-violet-200 text-[10px]"
@@ -559,7 +517,7 @@ function ExtraDetails({
               </div>
             </div>
           )}
-          {extra.subgraph && (
+          {typeof extra.subgraph === "string" && extra.subgraph.length > 0 && (
             <div>
               <div className="text-[10px] uppercase tracking-wider text-zinc-500 mb-1.5 font-semibold">
                 Knowledge Graph Structure
@@ -613,27 +571,6 @@ function rest(t: TraceStep) {
   return r;
 }
 
-function Skeleton() {
-  return (
-    <div className="space-y-3">
-      <div className="flex flex-wrap gap-1.5">
-        <div className="skeleton h-5 w-16" />
-        <div className="skeleton h-5 w-20" />
-        <div className="skeleton h-5 w-24" />
-      </div>
-      <div className="space-y-2">
-        <div className="skeleton h-3 w-full" />
-        <div className="skeleton h-3 w-11/12" />
-        <div className="skeleton h-3 w-5/6" />
-        <div className="skeleton h-3 w-4/5" />
-      </div>
-      <div className="space-y-1.5 pt-2 border-t border-zinc-700/50">
-        <div className="skeleton h-2.5 w-full" />
-        <div className="skeleton h-2.5 w-2/3" />
-      </div>
-    </div>
-  );
-}
 
 function WinnersBar({ results }: { results: StrategyOut[] }) {
   const ok = results.filter((r) => !r.refusal);

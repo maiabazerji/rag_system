@@ -1,4 +1,3 @@
-import json
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -6,7 +5,6 @@ import pytest
 from app.rag.strategies.agentic import AgenticRAG
 from app.rag.strategies.classic import ClassicRAG
 from app.rag.strategies.graph import GraphRAG
-from app.schemas import Chunk, Source
 
 
 @pytest.mark.asyncio
@@ -14,12 +12,11 @@ class TestClassicRAG:
     async def test_classic_rag_success(self, fake_chunks, mock_qdrant_search_results):
         """Test classic RAG retrieval and generation."""
         chunks = fake_chunks(3)
-        mock_results = mock_qdrant_search_results(chunks)
 
         strategy = ClassicRAG()
 
-        with patch("app.rag.strategies.classic.hybrid_search", new_callable=AsyncMock) as mock_search:
-            with patch("app.rag.strategies.classic.rerank") as mock_rerank:
+        with patch("app.rag.strategies.classic.dense_search", new_callable=AsyncMock) as mock_search:
+            with patch("app.rag.strategies.classic.rerank_async") as mock_rerank:
                 with patch("app.rag.strategies.classic.generate_with_usage", new_callable=AsyncMock) as mock_gen:
                     mock_search.return_value = chunks
                     mock_rerank.return_value = chunks[:2]
@@ -32,7 +29,7 @@ class TestClassicRAG:
                     result = await strategy.run(
                         "What is the test topic?",
                         top_k=8,
-                        model="claude-sonnet-4-6",
+                        model="claude-sonnet-5",
                         prompt_version="v1",
                     )
 
@@ -50,15 +47,15 @@ class TestClassicRAG:
         """Test classic RAG with empty context."""
         strategy = ClassicRAG()
 
-        with patch("app.rag.strategies.classic.hybrid_search", new_callable=AsyncMock) as mock_search:
-            with patch("app.rag.strategies.classic.rerank") as mock_rerank:
+        with patch("app.rag.strategies.classic.dense_search", new_callable=AsyncMock) as mock_search:
+            with patch("app.rag.strategies.classic.rerank_async") as mock_rerank:
                 mock_search.return_value = []
                 mock_rerank.return_value = []
 
                 result = await strategy.run(
                     "What is the test topic?",
                     top_k=8,
-                    model="claude-sonnet-4-6",
+                    model="claude-sonnet-5",
                     prompt_version="v1",
                 )
 
@@ -72,8 +69,8 @@ class TestClassicRAG:
         chunks = fake_chunks(2)
         strategy = ClassicRAG()
 
-        with patch("app.rag.strategies.classic.hybrid_search", new_callable=AsyncMock) as mock_search:
-            with patch("app.rag.strategies.classic.rerank") as mock_rerank:
+        with patch("app.rag.strategies.classic.dense_search", new_callable=AsyncMock) as mock_search:
+            with patch("app.rag.strategies.classic.rerank_async") as mock_rerank:
                 with patch("app.rag.strategies.classic.generate_with_usage", new_callable=AsyncMock) as mock_gen:
                     mock_search.return_value = chunks
                     mock_rerank.return_value = chunks
@@ -83,7 +80,7 @@ class TestClassicRAG:
                         await strategy.run(
                             "What is the test topic?",
                             top_k=8,
-                            model="claude-sonnet-4-6",
+                            model="claude-sonnet-5",
                             prompt_version="v1",
                         )
 
@@ -92,8 +89,8 @@ class TestClassicRAG:
         chunks = fake_chunks(2)
         strategy = ClassicRAG()
 
-        with patch("app.rag.strategies.classic.hybrid_search", new_callable=AsyncMock) as mock_search:
-            with patch("app.rag.strategies.classic.rerank") as mock_rerank:
+        with patch("app.rag.strategies.classic.dense_search", new_callable=AsyncMock) as mock_search:
+            with patch("app.rag.strategies.classic.rerank_async") as mock_rerank:
                 with patch("app.rag.strategies.classic.generate_with_usage", new_callable=AsyncMock) as mock_gen:
                     mock_search.return_value = chunks
                     mock_rerank.return_value = chunks
@@ -106,7 +103,7 @@ class TestClassicRAG:
                     result = await strategy.run(
                         "What is the test topic?",
                         top_k=8,
-                        model="claude-sonnet-4-6",
+                        model="claude-sonnet-5",
                         prompt_version="v1",
                     )
 
@@ -127,7 +124,7 @@ class TestGraphRAG:
             result = await strategy.run(
                 "What is connected to X?",
                 top_k=8,
-                model="claude-sonnet-4-6",
+                model="claude-sonnet-5",
                 prompt_version="v1",
             )
 
@@ -143,9 +140,9 @@ class TestGraphRAG:
         with patch("app.rag.strategies.graph.load_graph") as mock_load:
             with patch("app.rag.strategies.graph.extract_question_entities", new_callable=AsyncMock) as mock_extract:
                 with patch("app.rag.strategies.graph.neighbors") as mock_neighbors:
-                    with patch("app.rag.strategies.graph.hybrid_search", new_callable=AsyncMock) as mock_search:
+                    with patch("app.rag.strategies.graph.dense_search", new_callable=AsyncMock) as mock_search:
                         with patch("app.rag.strategies.graph._fetch_chunks_by_id", new_callable=AsyncMock) as mock_fetch:
-                            with patch("app.rag.strategies.graph.rerank") as mock_rerank:
+                            with patch("app.rag.strategies.graph.rerank_async") as mock_rerank:
                                 with patch("app.rag.strategies.graph.describe_subgraph") as mock_describe:
                                     with patch("app.rag.strategies.graph.generate_with_usage", new_callable=AsyncMock) as mock_gen:
                                         mock_graph = MagicMock()
@@ -167,13 +164,13 @@ class TestGraphRAG:
                                         result = await strategy.run(
                                             "How is entity1 connected to entity2?",
                                             top_k=8,
-                                            model="claude-sonnet-4-6",
+                                            model="claude-sonnet-5",
                                             prompt_version="v1",
                                         )
 
                                         assert result.answer == "Graph-based answer."
                                         assert result.refusal is False
-                                        assert "entity1" in result.extra
+                                        assert "entity1" in result.extra["entities"]
                                         assert "subgraph" in result.extra
                                         assert result.input_tokens == 200
 
@@ -184,9 +181,9 @@ class TestGraphRAG:
         with patch("app.rag.strategies.graph.load_graph") as mock_load:
             with patch("app.rag.strategies.graph.extract_question_entities", new_callable=AsyncMock) as mock_extract:
                 with patch("app.rag.strategies.graph.neighbors") as mock_neighbors:
-                    with patch("app.rag.strategies.graph.hybrid_search", new_callable=AsyncMock) as mock_search:
+                    with patch("app.rag.strategies.graph.dense_search", new_callable=AsyncMock) as mock_search:
                         with patch("app.rag.strategies.graph._fetch_chunks_by_id", new_callable=AsyncMock) as mock_fetch:
-                            with patch("app.rag.strategies.graph.rerank") as mock_rerank:
+                            with patch("app.rag.strategies.graph.rerank_async") as mock_rerank:
                                 mock_graph = MagicMock()
                                 mock_graph.triples = [("e1", "rel", "e2")]
                                 mock_load.return_value = mock_graph
@@ -200,7 +197,7 @@ class TestGraphRAG:
                                 result = await strategy.run(
                                     "How is entity1 connected?",
                                     top_k=8,
-                                    model="claude-sonnet-4-6",
+                                    model="claude-sonnet-5",
                                     prompt_version="v1",
                                 )
 
@@ -212,7 +209,6 @@ class TestGraphRAG:
 class TestAgenticRAG:
     async def test_agentic_rag_success_with_finish(self, fake_chunks):
         """Test agentic RAG that calls finish tool."""
-        chunks = fake_chunks(2)
         strategy = AgenticRAG()
 
         with patch("app.rag.strategies.agentic.tool_use_loop", new_callable=AsyncMock) as mock_loop:
@@ -230,7 +226,7 @@ class TestAgenticRAG:
             result = await strategy.run(
                 "Search for information?",
                 top_k=8,
-                model="claude-sonnet-4-6",
+                model="claude-sonnet-5",
                 prompt_version="v1",
             )
 
@@ -255,7 +251,7 @@ class TestAgenticRAG:
             result = await strategy.run(
                 "Search for information?",
                 top_k=8,
-                model="claude-sonnet-4-6",
+                model="claude-sonnet-5",
                 prompt_version="v1",
             )
 
@@ -275,12 +271,12 @@ class TestAgenticRAG:
                 "trace": [],
             }
 
-            with patch("app.rag.strategies.agentic.embed_query"):
+            with patch("app.rag.strategies.agentic.embed_query_async"):
                 with patch("app.rag.strategies.agentic.vector_search", new_callable=AsyncMock):
                     await strategy.run(
                         "What?",
                         top_k=8,
-                        model="claude-sonnet-4-6",
+                        model="claude-sonnet-5",
                         prompt_version="v1",
                     )
 
@@ -308,7 +304,7 @@ class TestAgenticRAG:
             result = await strategy.run(
                 "What?",
                 top_k=8,
-                model="claude-sonnet-4-6",
+                model="claude-sonnet-5",
                 prompt_version="v1",
             )
 

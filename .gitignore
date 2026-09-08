@@ -44,10 +44,23 @@ Thumbs.db
 .hf_cache/
 data/eval_runs/
 data/human_ratings/
+data/graph/
+infra/logs/
+logs/
 *.log
+
+# Build output
+frontend/dist/
+.coverage
+htmlcov/
 
 # OS / misc
 *.bak
 *.tmp
+
+# Draft writing kept out of the repo. Matched case-insensitively on Windows but
+# not on Linux/CI, so both spellings are listed explicitly.
 LINKEDIN_POST.md
+linkedin_post.md
 MEDIUM_ARTICLE.md
+medium_article.md

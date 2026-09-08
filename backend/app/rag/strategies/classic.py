@@ -30,15 +30,12 @@ Use cases:
 """
 from __future__ import annotations
 
-import logging
-from typing import Optional
-
 from app.config import settings
 from app.logging_config import get_structured_logger
 from app.prompts import render_prompt
 from app.rag.providers.anthropic_provider import generate_with_usage
-from app.rag.rerank import rerank
-from app.rag.retrieve import hybrid_search
+from app.rag.rerank import rerank_async
+from app.rag.retrieve import dense_search
 from app.rag.strategies.base import Strategy, StrategyResult
 from app.schemas import Source
 
@@ -76,7 +73,7 @@ class ClassicRAG(Strategy):
         Args:
             question: The user's question to answer.
             top_k: Number of top chunks to include in context for generation.
-            model: Language model ID for generation (e.g., "claude-opus-4-7").
+            model: Language model ID for generation (e.g., "claude-sonnet-5").
             prompt_version: Prompt template version to use for formatting the context.
 
         Returns:
@@ -98,7 +95,7 @@ class ClassicRAG(Strategy):
             },
         )
 
-        candidates = await hybrid_search(question, top_k=settings.retrieval_top_k)
+        candidates = await dense_search(question, top_k=settings.retrieval_top_k)
         logger.debug(
             "Retrieval completed",
             extra_fields={
@@ -108,7 +105,7 @@ class ClassicRAG(Strategy):
             },
         )
 
-        context = rerank(question, candidates, top_k=top_k)
+        context = await rerank_async(question, candidates, top_k=top_k)
         logger.debug(
             "Reranking completed",
             extra_fields={
@@ -155,7 +152,7 @@ class ClassicRAG(Strategy):
             },
         )
 
-        out = await generate_with_usage(model=model, prompt=user_msg, max_tokens=1024)
+        out = await generate_with_usage(model=model, prompt=user_msg, max_tokens=settings.max_answer_tokens)
 
         logger.info(
             "Classic RAG strategy completed",
@@ -171,7 +168,14 @@ class ClassicRAG(Strategy):
 
         return StrategyResult(
             answer=out["text"] or "(empty response)",
-            sources=[Source(chunk_id=c.id, quote=c.text[:280]) for c in context[:5]],
+            sources=[
+                Source(
+                    chunk_id=c.id,
+                    quote=c.text[:280],
+                    document=c.metadata.get("filename"),
+                )
+                for c in context[:5]
+            ],
             input_tokens=out["input_tokens"],
             output_tokens=out["output_tokens"],
             trace=[

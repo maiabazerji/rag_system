@@ -105,7 +105,7 @@ class Strategy(ABC):
             top_k: Maximum number of chunks to include in context for answer generation.
                 Strategies may retrieve more chunks initially then rerank to this value.
             model: Name/ID of the language model to use for generation
-                (e.g., "claude-opus-4-7", "gpt-4").
+                (e.g., "claude-sonnet-5", "gpt-4").
             prompt_version: Version/name of the prompt template to use for system/user
                 messages (e.g., "default", "v2"). Versioning allows A/B testing.
 

@@ -4,16 +4,15 @@ This module handles semantic search over indexed documents. It provides a single
 high-level function (hybrid_search) that orchestrates embedding + vector search
 with graceful degradation for service failures.
 
-The "hybrid" name refers to combining lexical (BM25) and semantic (vector) signals
-in the underlying vector store, though this implementation only exposes vector search.
+Retrieval is dense-only: the query is embedded and matched against the vector
+store. The lexical (BM25) signal enters later, in `rerank.py`, as the reranker's
+fallback scorer -- so this is a dense-retrieve/rerank pipeline, not hybrid
+retrieval in the fuse-two-retrievers sense.
 """
 from __future__ import annotations
 
-import logging
-from typing import Optional
-
 from app.logging_config import get_structured_logger
-from app.rag.embed import embed_query
+from app.rag.embed import embed_query_async
 from app.rag.store import search
 from app.schemas import Chunk
 
@@ -22,8 +21,8 @@ logger = get_structured_logger(__name__)
 _RESERVED = {"chunk_id", "doc_id", "text"}
 
 
-async def hybrid_search(query: str, top_k: int = 50) -> list[Chunk]:
-    """Retrieve relevant chunks from the vector store using semantic search.
+async def dense_search(query: str, top_k: int = 50) -> list[Chunk]:
+    """Retrieve relevant chunks from the vector store using dense vector search.
 
     Encodes the query to a vector embedding, then searches the Qdrant vector store
     for the top-k most similar chunks. Reconstructs Chunk objects from vector store
@@ -48,12 +47,12 @@ async def hybrid_search(query: str, top_k: int = 50) -> list[Chunk]:
         No exceptions. All errors are caught and logged, with empty list returned.
 
     Example:
-        >>> chunks = await hybrid_search("What is machine learning?", top_k=10)
+        >>> chunks = await dense_search("What is machine learning?", top_k=10)
         >>> for chunk in chunks:
         ...     print(f"[{chunk.id}] {chunk.text[:100]}...")
     """
     try:
-        vec = embed_query(query)
+        vec = await embed_query_async(query)
         hits = await search(vec, top_k=top_k)
         chunks = []
         for h in hits:
@@ -89,3 +88,8 @@ async def hybrid_search(query: str, top_k: int = 50) -> list[Chunk]:
             },
         )
         return []  # Graceful degradation: return empty results instead of failing
+
+
+# Backwards-compatible alias: this function was called `hybrid_search` before the
+# name was corrected to match what it actually does.
+hybrid_search = dense_search

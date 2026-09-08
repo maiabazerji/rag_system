@@ -17,22 +17,27 @@ Key concepts:
 """
 from __future__ import annotations
 
-import logging
-from typing import Optional
+import asyncio
+from concurrent.futures import ThreadPoolExecutor
+from typing import TYPE_CHECKING, Any
 
 from rank_bm25 import BM25Okapi
-from sentence_transformers import CrossEncoder
 
+from app.config import settings
 from app.logging_config import get_structured_logger
 from app.schemas import Chunk
 
+if TYPE_CHECKING:  # pragma: no cover
+    from sentence_transformers import CrossEncoder
+
 logger = get_structured_logger(__name__)
 
-_cross_encoder_model: Optional[CrossEncoder] = None
-_cross_encoder_error: Optional[str] = None
+_executor = ThreadPoolExecutor(max_workers=2, thread_name_prefix="rerank")
+_cross_encoder_model: CrossEncoder | None = None
+_cross_encoder_error: str | None = None
 
 
-def _load_cross_encoder() -> Optional[CrossEncoder]:
+def _load_cross_encoder() -> CrossEncoder | None:
     """Load and cache the cross-encoder model.
 
     Loads the cross-encoder model on first call and caches it globally.
@@ -51,10 +56,13 @@ def _load_cross_encoder() -> Optional[CrossEncoder]:
         return None
 
     try:
-        _cross_encoder_model = CrossEncoder("cross-encoder/mmarco-MiniLMv2-L12-H384-v1")
+        # Imported lazily so this module does not drag in torch at import time.
+        from sentence_transformers import CrossEncoder
+
+        _cross_encoder_model = CrossEncoder(settings.reranker_model)
         logger.info(
             "Cross-encoder model loaded",
-            extra_fields={"model": "mmarco-MiniLMv2-L12-H384-v1"},
+            extra_fields={"model": settings.reranker_model},
         )
         return _cross_encoder_model
     except Exception as e:
@@ -98,14 +106,16 @@ def _rerank_with_cross_encoder(
         return _rerank_with_bm25(query, chunks, top_k)
 
     try:
-        # Prepare pairs for cross-encoder
-        pairs = [[query, chunk.text] for chunk in chunks]
+        # Prepare pairs for cross-encoder. `predict` is typed against a wide
+        # multimodal union and list is invariant, so a concrete list[list[str]]
+        # is rejected even though it is exactly what the method expects.
+        pairs: list[Any] = [[query, chunk.text] for chunk in chunks]
 
         # Score all pairs
         scores = cross_encoder.predict(pairs)
 
         # Sort chunks by score (descending)
-        scored_chunks = list(zip(chunks, scores))
+        scored_chunks = list(zip(chunks, scores, strict=True))
         scored_chunks.sort(key=lambda x: x[1], reverse=True)
 
         # Return top-k
@@ -169,7 +179,7 @@ def _rerank_with_bm25(query: str, chunks: list[Chunk], top_k: int) -> list[Chunk
         scores = bm25.get_scores(query_tokens)
 
         # Sort chunks by score (descending)
-        scored_chunks = list(zip(chunks, scores))
+        scored_chunks = list(zip(chunks, scores, strict=True))
         scored_chunks.sort(key=lambda x: x[1], reverse=True)
 
         # Return top-k
@@ -258,3 +268,23 @@ def rerank(query: str, chunks: list[Chunk], top_k: int = 8) -> list[Chunk]:
 
     # Normal case: rerank and truncate to top_k
     return _rerank_with_cross_encoder(query, chunks, top_k)
+
+
+async def rerank_async(query: str, chunks: list[Chunk], top_k: int = 8) -> list[Chunk]:
+    """Async wrapper around :func:`rerank`.
+
+    Cross-encoder inference is CPU-bound and would otherwise block the event
+    loop for the duration of the scoring pass.
+
+    Args:
+        query: The query to rerank against.
+        chunks: Candidate chunks from retrieval.
+        top_k: Number of chunks to keep.
+
+    Returns:
+        The reranked chunks, best first.
+    """
+    if not chunks:
+        return []
+    loop = asyncio.get_running_loop()
+    return await loop.run_in_executor(_executor, rerank, query, chunks, top_k)

@@ -1,7 +1,9 @@
 import json
 import logging
 import logging.config
-from datetime import datetime, timezone
+import os
+from datetime import UTC, datetime
+from pathlib import Path
 from typing import Any
 
 from app.middleware.request_id import get_request_id
@@ -13,7 +15,7 @@ class StructuredJSONFormatter(logging.Formatter):
     def format(self, record: logging.LogRecord) -> str:
         """Format log record as JSON with structured fields."""
         log_data = {
-            "timestamp": datetime.fromtimestamp(record.created, tz=timezone.utc).isoformat(),
+            "timestamp": datetime.fromtimestamp(record.created, tz=UTC).isoformat(),
             "level": record.levelname,
             "logger": record.name,
             "message": record.getMessage(),
@@ -43,14 +45,18 @@ class StructuredLogger(logging.LoggerAdapter):
     """Logger adapter that supports structured logging with extra fields."""
 
     def process(self, msg: str, kwargs: Any) -> tuple[str, Any]:
-        """Process log message to extract extra fields."""
-        extra_fields = kwargs.pop("extra_fields", {})
+        """Move `extra_fields=` into the stdlib `extra` dict.
+
+        Keys of the `extra` dict become attributes on the LogRecord, so passing
+        `extra={"extra_fields": {...}}` is what makes `record.extra_fields`
+        available to StructuredJSONFormatter.
+        """
+        extra_fields = kwargs.pop("extra_fields", None)
         if extra_fields:
-            record = kwargs.get("extra", {})
-            if not isinstance(record, dict):
-                record = {}
-            record.extra_fields = extra_fields
-            kwargs["extra"] = record
+            supplied = kwargs.get("extra")
+            extra = dict(supplied) if isinstance(supplied, dict) else {}
+            extra["extra_fields"] = extra_fields
+            kwargs["extra"] = extra
         return msg, kwargs
 
 
@@ -60,48 +66,69 @@ def get_structured_logger(name: str) -> StructuredLogger:
     return StructuredLogger(base_logger, {})
 
 
-LOGGING_CONFIG = {
-    "version": 1,
-    "disable_existing_loggers": False,
-    "formatters": {
-        "structured": {
-            "()": "app.logging_config.StructuredJSONFormatter",
-        },
-    },
-    "handlers": {
+LOG_DIR = Path(os.getenv("LOG_DIR", "logs"))
+LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO").upper()
+
+
+def _build_config(file_logging: bool) -> dict:
+    handlers: dict[str, dict[str, Any]] = {
         "console": {
             "class": "logging.StreamHandler",
-            "level": "INFO",
+            "level": LOG_LEVEL,
             "formatter": "structured",
             "stream": "ext://sys.stdout",
         },
-        "file": {
+    }
+    app_handlers = ["console"]
+
+    if file_logging:
+        handlers["file"] = {
             "class": "logging.handlers.RotatingFileHandler",
             "level": "DEBUG",
             "formatter": "structured",
-            "filename": "logs/evalrag.log",
+            "filename": str(LOG_DIR / "evalrag.log"),
             "maxBytes": 10485760,  # 10MB
             "backupCount": 5,
+            "encoding": "utf-8",
+        }
+        app_handlers.append("file")
+
+    return {
+        "version": 1,
+        "disable_existing_loggers": False,
+        "formatters": {
+            "structured": {"()": "app.logging_config.StructuredJSONFormatter"},
         },
-    },
-    "loggers": {
-        "app": {
-            "level": "DEBUG",
-            "handlers": ["console", "file"],
-            "propagate": False,
+        "handlers": handlers,
+        "loggers": {
+            "app": {
+                "level": "DEBUG" if file_logging else LOG_LEVEL,
+                "handlers": app_handlers,
+                "propagate": False,
+            },
         },
-    },
-    "root": {
-        "level": "INFO",
-        "handlers": ["console"],
-    },
-}
+        "root": {"level": LOG_LEVEL, "handlers": ["console"]},
+    }
 
 
-def setup_logging():
-    """Initialize logging configuration."""
+def setup_logging() -> None:
+    """Initialize logging.
+
+    Console logging is always configured. File logging is added only when the
+    log directory is writable, so a read-only or missing directory degrades to
+    console-only instead of silently dropping the structured formatter.
+    """
+    file_logging = False
     try:
-        logging.config.dictConfig(LOGGING_CONFIG)
+        LOG_DIR.mkdir(parents=True, exist_ok=True)
+        file_logging = True
+    except OSError:
+        pass
+
+    try:
+        logging.config.dictConfig(_build_config(file_logging))
     except Exception:
-        # Fallback to basic config if file handler fails
-        logging.basicConfig(level=logging.INFO)
+        logging.config.dictConfig(_build_config(file_logging=False))
+        logging.getLogger(__name__).warning(
+            "File logging unavailable; falling back to console-only logging."
+        )

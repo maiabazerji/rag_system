@@ -10,13 +10,14 @@ No-ops gracefully when WANDB_API_KEY is unset or wandb is missing.
 from __future__ import annotations
 
 import os
+from collections.abc import Iterator
 from contextlib import contextmanager
-from typing import Any, Iterator
+from typing import Any
 
 from app.config import settings
 
 try:
-    import wandb  # type: ignore
+    import wandb
 except ImportError:  # pragma: no cover
     wandb = None  # type: ignore
 
@@ -50,7 +51,7 @@ def log_eval_table(run: Any, rows: list[dict]) -> None:
     """Log per-example scores as a W&B Table (course pattern)."""
     if run is None or wandb is None or not rows:
         return
-    columns = sorted({k for r in rows for k in r.keys()})
+    columns = sorted({k for r in rows for k in r})
     table = wandb.Table(columns=columns)
     for r in rows:
         table.add_data(*[r.get(c) for c in columns])

@@ -32,12 +32,10 @@ Use cases:
 from __future__ import annotations
 
 import json
-import logging
-from typing import Callable, Optional
 
 from app.config import settings
 from app.logging_config import get_structured_logger
-from app.rag.embed import embed_query
+from app.rag.embed import embed_query_async
 from app.rag.providers.anthropic_provider import tool_use_loop
 from app.rag.store import search as vector_search
 from app.rag.strategies.base import Strategy, StrategyResult
@@ -125,7 +123,7 @@ class AgenticRAG(Strategy):
         >>> result = await strategy.run(
         ...     question="Who were the founders of the company?",
         ...     top_k=8,
-        ...     model="claude-opus-4-7",
+        ...     model="claude-sonnet-5",
         ...     prompt_version="default",
         ... )
         >>> print(f"Answer: {result.answer}")
@@ -206,7 +204,7 @@ class AgenticRAG(Strategy):
                     "top_k": k,
                 },
             )
-            vec = embed_query(q)
+            vec = await embed_query_async(q)
             hits = await vector_search(vec, top_k=k)
             previews = []
             for h in hits:
@@ -214,7 +212,11 @@ class AgenticRAG(Strategy):
                 text = h.payload.get("text")
                 doc_id = h.payload.get("doc_id")
                 if cid and text and doc_id:
-                    seen_chunks[cid] = {"doc_id": doc_id, "text": text}
+                    seen_chunks[cid] = {
+                        "doc_id": doc_id,
+                        "text": text,
+                        "filename": h.payload.get("filename"),
+                    }
                     previews.append({"chunk_id": cid, "preview": text[:300]})
             logger.debug(
                 "Search results",
@@ -260,14 +262,18 @@ class AgenticRAG(Strategy):
                     },
                 )
                 return cached["text"]
-            vec = embed_query(" ")
+            vec = await embed_query_async(" ")
             hits = await vector_search(vec, top_k=512)
             for h in hits:
                 if h.payload.get("chunk_id") == cid:
                     text = h.payload.get("text")
                     doc_id = h.payload.get("doc_id")
                     if text and doc_id:
-                        seen_chunks[cid] = {"doc_id": doc_id, "text": text}
+                        seen_chunks[cid] = {
+                            "doc_id": doc_id,
+                            "text": text,
+                            "filename": h.payload.get("filename"),
+                        }
                         logger.debug(
                             "Chunk fetched from vector store",
                             extra_fields={
@@ -325,13 +331,18 @@ class AgenticRAG(Strategy):
                 "finish": _tool_finish,
             },
             max_iters=settings.agentic_max_iters,
-            max_tokens=1024,
+            max_tokens=settings.max_answer_tokens,
         )
 
         if final:
             citations = [c for c in final["citations"] if c in seen_chunks]
             sources = [
-                Source(chunk_id=c, quote=seen_chunks[c]["text"][:280]) for c in citations
+                Source(
+                    chunk_id=c,
+                    quote=seen_chunks[c]["text"][:280],
+                    document=seen_chunks[c].get("filename"),
+                )
+                for c in citations
             ] or [Source(chunk_id="none", quote="")]
             logger.info(
                 "Agentic RAG strategy completed with finish",
@@ -379,7 +390,14 @@ class AgenticRAG(Strategy):
         )
         return StrategyResult(
             answer=out["text"] or "(agent stopped without finishing)",
-            sources=[Source(chunk_id=c, quote=v["text"][:280]) for c, v in list(seen_chunks.items())[:5]]
+            sources=[
+                Source(
+                    chunk_id=c,
+                    quote=v["text"][:280],
+                    document=v.get("filename"),
+                )
+                for c, v in list(seen_chunks.items())[:5]
+            ]
             or [Source(chunk_id="none", quote="")],
             refusal=not has_answer,
             confidence=0.8 if has_answer else 0.3,
