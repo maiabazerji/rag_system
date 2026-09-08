@@ -9,6 +9,7 @@ No-ops gracefully when WANDB_API_KEY is unset or wandb is missing.
 """
 from __future__ import annotations
 
+import importlib
 import os
 from collections.abc import Iterator
 from contextlib import contextmanager
@@ -16,10 +17,13 @@ from typing import Any
 
 from app.config import settings
 
+# Imported dynamically so the module type-checks the same way whether or not the
+# optional `tracing` extra is installed.
+wandb: Any
 try:
-    import wandb
+    wandb = importlib.import_module("wandb")
 except ImportError:  # pragma: no cover
-    wandb = None  # type: ignore
+    wandb = None
 
 
 def _enabled() -> bool:
