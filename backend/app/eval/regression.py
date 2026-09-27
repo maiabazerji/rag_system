@@ -11,11 +11,12 @@ import logging
 from itertools import pairwise
 from pathlib import Path
 
+from app.config import settings
 from app.eval.judge import DIMENSIONS
 
 logger = logging.getLogger(__name__)
 
-RUNS_DIR = Path(__file__).resolve().parents[3] / "data" / "eval_runs"
+RUNS_DIR = settings.data_path / "eval_runs"
 
 
 def _run_files() -> list[Path]:
@@ -64,6 +65,7 @@ def list_run_summaries() -> list[dict]:
                 "provider": run.get("provider"),
                 "model": run.get("model"),
                 "prompt_version": run.get("prompt_version"),
+                "judge_model": run.get("judge_model"),
                 "n": run.get("n", 0),
                 "n_scored": run.get("n_scored", run.get("n", 0)),
                 "n_unscored": run.get("n_unscored", 0),
@@ -97,7 +99,10 @@ def _config_key(run: dict) -> tuple:
     """Group key identifying runs that are legitimately comparable.
 
     Strategy is part of the key: Classic scoring lower than Agentic is the
-    finding the project exists to produce, not a regression.
+    finding the project exists to produce, not a regression. ``model`` and
+    ``provider`` are what the run actually used (older runs recorded only the
+    request override), and the judge model is included because a different
+    judge scores differently.
     """
     return (
         run.get("dataset"),
@@ -105,6 +110,7 @@ def _config_key(run: dict) -> tuple:
         run.get("provider"),
         run.get("model"),
         run.get("prompt_version"),
+        run.get("judge_model"),
     )
 
 

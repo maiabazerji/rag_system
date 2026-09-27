@@ -8,6 +8,7 @@ from __future__ import annotations
 import asyncio
 import random
 import time
+import weakref
 from collections.abc import Awaitable, Callable
 from functools import wraps
 from typing import Any, TypeVar
@@ -17,6 +18,17 @@ from app.logging_config import get_structured_logger
 logger = get_structured_logger(__name__)
 
 T = TypeVar("T")
+
+# The live breaker per service, so /metrics can report their state without
+# each owner having to export it. Weak references, and the newest breaker for
+# a service replaces the previous one (tests rebuild them).
+_BREAKERS: dict[str, weakref.ReferenceType[CircuitBreaker]] = {}
+
+
+def registered_breakers() -> list[CircuitBreaker]:
+    """All live circuit breakers, sorted by service name."""
+    live = (ref() for _, ref in sorted(_BREAKERS.items()))
+    return [b for b in live if b is not None]
 
 
 async def async_timeout_wrapper(
@@ -77,11 +89,17 @@ class CircuitBreaker:
         self.failure_count = 0
         self.last_failure_time = 0.0
         self.state = "closed"  # closed, open, half_open
+        # When the half-open probe was granted. Only one call may be in flight
+        # while half-open; a probe that never reports back (e.g. a cancelled
+        # task) is presumed lost after `recovery_timeout`.
+        self._probe_started: float | None = None
+        _BREAKERS[service_name] = weakref.ref(self)
 
     def record_success(self) -> None:
         """Record a successful call; reset failure count."""
         self.failure_count = 0
         self.state = "closed"
+        self._probe_started = None
         logger.debug(
             "Circuit breaker success",
             extra_fields={
@@ -95,7 +113,9 @@ class CircuitBreaker:
         """Record a failed call; track failure count and potentially open circuit."""
         self.failure_count += 1
         self.last_failure_time = time.time()
-        if self.failure_count >= self.failure_threshold:
+        was_probe = self.state == "half_open"
+        self._probe_started = None
+        if was_probe or self.failure_count >= self.failure_threshold:
             self.state = "open"
             logger.warning(
                 "Circuit breaker opened",
@@ -117,11 +137,27 @@ class CircuitBreaker:
                 },
             )
 
+    def release_probe(self) -> None:
+        """End a half-open probe that proved nothing either way (e.g. a 429).
+
+        The breaker stays half-open and the next caller may probe again.
+        """
+        self._probe_started = None
+
+    def _grant_probe(self) -> bool:
+        """Grant the single half-open probe if no live probe is in flight."""
+        now = time.time()
+        if self._probe_started is not None and now - self._probe_started < self.recovery_timeout:
+            return False
+        self._probe_started = now
+        return True
+
     def can_execute(self) -> bool:
         """Check if a call can be executed.
 
-        Returns True if circuit is closed or if enough time has passed
-        to attempt a half-open state.
+        Returns True if circuit is closed, or grants exactly one probe call
+        once the recovery window has passed. Further callers are rejected until
+        that probe records a success or failure.
         """
         if self.state == "closed":
             return True
@@ -139,11 +175,11 @@ class CircuitBreaker:
                         "recovery_timeout": self.recovery_timeout,
                     },
                 )
-                return True
+                return self._grant_probe()
             return False
 
-        # half_open: allow one attempt
-        return True
+        # half_open: allow one attempt at a time
+        return self._grant_probe()
 
     def get_state(self) -> dict:
         """Get current state of the circuit breaker."""

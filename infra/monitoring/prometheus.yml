@@ -1,0 +1,23 @@
+# Prometheus for the `monitoring` Compose profile.
+#
+# The backend serves /metrics only when METRICS_ENABLED=true, and only to
+# loopback callers or to requests carrying the admin key. Prometheus runs in its
+# own container, so it sends the key as X-Admin-Key, read from a file Compose
+# mounts from ADMIN_KEY in .env (see `configs:` in docker-compose.yml).
+
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+
+scrape_configs:
+  - job_name: evalrag-backend
+    metrics_path: /metrics
+    static_configs:
+      - targets: ["backend:8000"]
+    http_headers:
+      X-Admin-Key:
+        files: [/etc/prometheus/admin_key]
+
+  - job_name: prometheus
+    static_configs:
+      - targets: ["localhost:9090"]

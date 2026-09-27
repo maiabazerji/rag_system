@@ -1,8 +1,11 @@
-import { useQuery } from "@tanstack/react-query";
-import { get, post } from "../api/client";
+import { useState } from "react";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { LONG_TIMEOUT_MS, errorMessage, get, post } from "../api/client";
 import LoadingSpinner from "../components/LoadingSpinner";
 import Tooltip from "../components/Tooltip";
 import ErrorAlert from "../components/ErrorAlert";
+import { formatScore } from "../utils/formatting";
+import { useI18n, type MessageKey } from "../i18n";
 
 type Run = {
   id: string;
@@ -15,36 +18,49 @@ type Run = {
   aggregate?: { faithfulness?: number; answer_relevance?: number; context_precision?: number; context_recall?: number } | null;
 };
 
-const METRICS: { key: keyof NonNullable<Run["aggregate"]>; label: string; desc: string }[] = [
-  { key: "faithfulness", label: "Faithfulness", desc: "Answer only asserts what's in retrieved context" },
-  { key: "answer_relevance", label: "Relevance", desc: "Answer addresses the question" },
-  { key: "context_precision", label: "Precision", desc: "Retrieved chunks are on-topic" },
-  { key: "context_recall", label: "Recall", desc: "Retrieved all relevant chunks" },
+type MetricKey = keyof NonNullable<Run["aggregate"]>;
+
+const METRICS: { key: MetricKey; label: MessageKey; desc: MessageKey }[] = [
+  { key: "faithfulness", label: "eval.metric.faithfulness", desc: "eval.metric.faithfulness.desc" },
+  { key: "answer_relevance", label: "eval.metric.answer_relevance", desc: "eval.metric.answer_relevance.desc" },
+  { key: "context_precision", label: "eval.metric.context_precision", desc: "eval.metric.context_precision.desc" },
+  { key: "context_recall", label: "eval.metric.context_recall", desc: "eval.metric.context_recall.desc" },
 ];
 
-/** "2026-09-05T10:53:40+00:00" -> "5 Sep 2026, 10:53". */
-function formatRunDate(iso?: string | null): string | null {
-  if (!iso) return null;
-  const d = new Date(iso);
-  return Number.isNaN(d.getTime())
-    ? null
-    : d.toLocaleString(undefined, { day: "numeric", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit" });
-}
+/** Golden datasets shipped in data/golden/. golden_fr_v1 asks French questions of the English corpus. */
+const DATASETS: { id: string; label: MessageKey }[] = [
+  { id: "golden_v1", label: "eval.dataset.golden_v1" },
+  { id: "golden_v2", label: "eval.dataset.golden_v2" },
+  { id: "golden_fr_v1", label: "eval.dataset.golden_fr_v1" },
+];
+
+const DATE_FORMAT: Intl.DateTimeFormatOptions = {
+  day: "numeric",
+  month: "short",
+  year: "numeric",
+  hour: "2-digit",
+  minute: "2-digit",
+};
 
 export default function EvalPage() {
-  const { data, refetch, isFetching, error, isLoading } = useQuery({
+  const { t, tp, lang, locale, formatDate } = useI18n();
+  const queryClient = useQueryClient();
+  const [dataset, setDataset] = useState(() => (lang === "fr" ? "golden_fr_v1" : "golden_v1"));
+  const { data, refetch, error, isLoading } = useQuery({
     queryKey: ["runs"],
     queryFn: () => get<Run[]>("/eval/runs"),
   });
 
-  async function runNow() {
-    try {
-      await post("/eval/run", { dataset: "golden_v1" });
-      refetch();
-    } catch (e) {
-      // Error will be handled by ErrorAlert
-    }
-  }
+  // An eval answers and judges every golden question inside one request, so it
+  // gets the long timeout, and the buttons stay disabled until it returns.
+  const run = useMutation({
+    mutationFn: (name: string) => post("/eval/run", { dataset: name }, { timeoutMs: LONG_TIMEOUT_MS }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["runs"] });
+      queryClient.invalidateQueries({ queryKey: ["regressions"] });
+    },
+  });
+  const runNow = (name: string = dataset) => run.mutate(name);
 
   // A run whose judge never returned a score has nothing to show but four
   // dashes, so it is kept out of the list and reported as a count instead.
@@ -53,90 +69,123 @@ export default function EvalPage() {
 
   return (
     <div className="flex flex-col gap-6 max-w-6xl">
-      <header>
-        <h1 className="display text-4xl font-semibold text-white">Evaluation</h1>
-        <p className="text-sm text-zinc-400 mt-2">
-          Score a golden dataset on faithfulness, relevance, and retrieval precision and recall.
-        </p>
+      <header className="flex items-end justify-between gap-4 flex-wrap">
+        <div>
+          <h1 className="display text-4xl font-semibold text-white">{t("eval.title")}</h1>
+          <p className="text-sm text-zinc-400 mt-2">{t("eval.subtitle")}</p>
+        </div>
+        <label className="flex flex-col gap-1 text-xs text-zinc-400">
+          {t("eval.dataset")}
+          <select
+            value={dataset}
+            onChange={(e) => setDataset(e.target.value)}
+            className="input text-sm !py-2"
+          >
+            {DATASETS.map((d) => (
+              <option key={d.id} value={d.id}>
+                {t(d.label)}
+              </option>
+            ))}
+          </select>
+        </label>
       </header>
+
+      {run.isPending && (
+        <div className="card p-4">
+          <LoadingSpinner message={t("eval.running")} />
+        </div>
+      )}
+
+      {run.error && (
+        <ErrorAlert
+          error={t("eval.runFailed", { error: errorMessage(run.error) })}
+          onRetry={() => runNow(run.variables ?? dataset)}
+          onDismiss={() => run.reset()}
+        />
+      )}
 
       {isLoading ? (
         <div className="card p-12">
-          <LoadingSpinner message="Loading evaluation results..." />
+          <LoadingSpinner message={t("eval.loading")} />
         </div>
       ) : error ? (
         <ErrorAlert
-          error={`Failed to load evaluations: ${error instanceof Error ? error.message : "Unknown error"}`}
+          error={t("eval.loadFailed", { error: errorMessage(error) })}
           onRetry={() => refetch()}
         />
       ) : !scored.length ? (
         <div className="card p-12 text-center">
-          <h2 className="text-xl font-semibold text-white mb-2">No scored evaluation runs yet</h2>
+          <h2 className="text-xl font-semibold text-white mb-2">{t("eval.empty")}</h2>
           <p className="text-sm text-zinc-400 mb-6">
-            {unscoredCount > 0
-              ? `${unscoredCount} earlier ${unscoredCount === 1 ? "run" : "runs"} produced no scores. Run an evaluation to measure retrieval strategy performance.`
-              : "Run an evaluation on the golden dataset to measure retrieval strategy performance."}
+            {unscoredCount > 0 ? tp("eval.emptyUnscored", unscoredCount) : t("eval.emptyHelp")}
           </p>
-          <button onClick={runNow} disabled={isFetching} className="btn-primary min-h-[48px]">
-            {isFetching ? "Running…" : "Run Evaluation"}
+          <button onClick={() => runNow()} disabled={run.isPending} className="btn-primary min-h-[48px]">
+            {run.isPending ? t("common.running") : t("eval.run")}
           </button>
         </div>
       ) : (
         <div className="space-y-6">
-          {scored.map((r) => (
-            <div key={r.id} className="card p-6">
-              <div className="flex items-center justify-between mb-6 flex-wrap gap-4">
-                <div>
-                  <h2 className="text-lg font-semibold text-white">{r.dataset}</h2>
-                  <p className="text-xs text-zinc-500 mt-1">
-                    {r.n_scored} of {r.n} {r.n === 1 ? "question" : "questions"} scored
-                    {r.model ? ` • ${r.model}` : ""}
-                    {formatRunDate(r.created_at) ? ` • ${formatRunDate(r.created_at)}` : ""}
-                  </p>
+          <div className="flex justify-end">
+            <button onClick={() => runNow()} disabled={run.isPending} className="btn-primary text-sm px-4 py-2 min-h-[44px] sm:min-h-auto">
+              {run.isPending ? t("common.running") : t("eval.run")}
+            </button>
+          </div>
+          {scored.map((r) => {
+            const date = r.created_at ? formatDate(r.created_at, DATE_FORMAT) : "";
+            return (
+              <div key={r.id} className="card p-6">
+                <div className="flex items-center justify-between mb-6 flex-wrap gap-4">
+                  <div>
+                    <h2 className="text-lg font-semibold text-white">{r.dataset}</h2>
+                    <p className="text-xs text-zinc-500 mt-1">
+                      {tp("eval.scored", r.n, { scored: r.n_scored })}
+                      {r.model ? ` • ${r.model}` : ""}
+                      {date ? ` • ${date}` : ""}
+                    </p>
+                  </div>
+                  <button onClick={() => runNow(r.dataset)} disabled={run.isPending} className="btn-ghost text-sm px-4 py-2 min-h-[44px] sm:min-h-auto">
+                    {run.isPending ? t("common.running") : t("eval.rerun")}
+                  </button>
                 </div>
-                <button onClick={runNow} disabled={isFetching} className="btn-primary text-sm px-4 py-2 min-h-[44px] sm:min-h-auto">
-                  {isFetching ? "Running…" : "Re-run"}
-                </button>
-              </div>
 
-              <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 sm:gap-4">
-                {METRICS.map((m) => {
-                  const v = r.aggregate?.[m.key];
-                  const pct = v == null ? 0 : Math.round(v * 100);
+                <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 sm:gap-4">
+                  {METRICS.map((m) => {
+                    const v = r.aggregate?.[m.key];
+                    const pct = v == null ? 0 : Math.round(v * 100);
+                    const shown = v == null ? t("common.na") : formatScore(v, 2, locale);
 
-                  return (
-                    <Tooltip key={m.key} label={m.desc} side="top">
-                      <div className="p-4 rounded-lg bg-bg-surface border border-bg-border cursor-help">
-                        <div className="text-xs text-zinc-500 uppercase font-semibold tracking-wide">{m.label}</div>
-                        <div className="text-2xl sm:text-3xl font-bold text-white mt-2 tabular-nums">
-                          {v == null ? "n/a" : v.toFixed(2)}
+                    return (
+                      <Tooltip key={m.key} label={t(m.desc)} side="top">
+                        <div className="p-4 rounded-lg bg-bg-surface border border-bg-border cursor-help">
+                          <div className="text-xs text-zinc-500 uppercase font-semibold tracking-wide">{t(m.label)}</div>
+                          <div className="text-2xl sm:text-3xl font-bold text-white mt-2 tabular-nums">
+                            {shown}
+                          </div>
+                          <div className="mt-3 h-1.5 bg-bg-elevated rounded-full overflow-hidden">
+                            <div
+                              className="h-full bg-gradient-to-r from-accent to-emerald-400 transition-all"
+                              style={{ width: `${pct}%` }}
+                              role="progressbar"
+                              aria-valuenow={pct}
+                              aria-valuemin={0}
+                              aria-valuemax={100}
+                              aria-label={t("eval.metricAria", { label: t(m.label), value: shown })}
+                            />
+                          </div>
+                          <p className="text-[10px] sm:text-[11px] text-zinc-500 mt-2 hidden sm:block">{t(m.desc)}</p>
                         </div>
-                        <div className="mt-3 h-1.5 bg-bg-elevated rounded-full overflow-hidden">
-                          <div
-                            className="h-full bg-gradient-to-r from-accent to-emerald-400 transition-all"
-                            style={{ width: `${pct}%` }}
-                            role="progressbar"
-                            aria-valuenow={pct}
-                            aria-valuemin={0}
-                            aria-valuemax={100}
-                            aria-label={`${m.label}: ${v?.toFixed(2) || "N/A"}`}
-                          />
-                        </div>
-                        <p className="text-[10px] sm:text-[11px] text-zinc-500 mt-2 hidden sm:block">{m.desc}</p>
-                      </div>
-                    </Tooltip>
-                  );
-                })}
+                      </Tooltip>
+                    );
+                  })}
+                </div>
               </div>
-            </div>
-          ))}
+            );
+          })}
         </div>
       )}
 
       {scored.length > 0 && unscoredCount > 0 && (
-        <p className="text-xs text-zinc-500">
-          {unscoredCount} earlier {unscoredCount === 1 ? "run is" : "runs are"} hidden because the judge returned no scores.
-        </p>
+        <p className="text-xs text-zinc-500">{tp("eval.hidden", unscoredCount)}</p>
       )}
     </div>
   );

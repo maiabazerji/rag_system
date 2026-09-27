@@ -75,23 +75,46 @@ async def extract_triples(
     ]
 
 
-async def extract_question_entities(question: str) -> list[str]:
-    """Pull out candidate entities from a question- what to walk the graph from."""
+class QuestionEntities(list[str]):
+    """Entities pulled from a question, plus the tokens spent extracting them.
+
+    A plain list of entity strings, so existing callers are unaffected; the
+    usage rides along as attributes for callers that account for cost.
+    """
+
+    input_tokens: int = 0
+    output_tokens: int = 0
+
+
+async def extract_question_entities(question: str) -> QuestionEntities:
+    """Pull out candidate entities from a question- what to walk the graph from.
+
+    Returns:
+        The entities, carrying ``input_tokens`` / ``output_tokens`` for the
+        extraction call even when nothing could be parsed.
+    """
     out = await generate_with_usage(
         model=settings.graph_extraction_model,
         prompt=(
             f'List the key noun-phrase entities in this question as a JSON array of strings. '
+            "If the question is not in English, also list each entity's English form, "
+            "since the documents may be in English. "
             f'No prose. Question: "{question}"'
         ),
         system="You return only valid JSON.",
         max_tokens=200,
     )
+    result = QuestionEntities()
+    result.input_tokens = int(out.get("input_tokens", 0) or 0)
+    result.output_tokens = int(out.get("output_tokens", 0) or 0)
     raw = out["text"].strip()
     m = re.search(r"\[.*]", raw, re.DOTALL)
     if not m:
-        return []
+        return result
     try:
         data = json.loads(m.group(0))
     except json.JSONDecodeError:
-        return []
-    return [s.strip() for s in data if isinstance(s, str) and s.strip()]
+        return result
+    if isinstance(data, list):
+        result.extend(s.strip() for s in data if isinstance(s, str) and s.strip())
+    return result

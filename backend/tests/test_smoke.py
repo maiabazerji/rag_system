@@ -15,8 +15,11 @@ def test_health(client):
     body = r.json()
     assert body["status"] == "ok"
     assert body["auth_required"] is False
-    for provider in ("anthropic", "openai", "langfuse", "wandb"):
+    for provider in ("anthropic", "openai", "wandb"):
         assert provider in body["providers"]
+    # Telemetry is off by default, so /health must not claim Langfuse is exporting.
+    assert body["providers"]["langfuse"] is False
+    assert body["telemetry"]["mode"] == "off"
 
 
 def test_health_reports_auth_state(client, settings, monkeypatch):

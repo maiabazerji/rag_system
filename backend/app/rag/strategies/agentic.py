@@ -33,10 +33,13 @@ from __future__ import annotations
 
 import json
 
+from app.access import AccessScope
 from app.config import settings
+from app.i18n import localized
 from app.logging_config import get_structured_logger
 from app.rag.embed import embed_query_async
 from app.rag.providers.anthropic_provider import tool_use_loop
+from app.rag.store import fetch_chunks
 from app.rag.store import search as vector_search
 from app.rag.strategies.base import Strategy, StrategyResult
 from app.schemas import Source
@@ -44,6 +47,7 @@ from app.schemas import Source
 logger = get_structured_logger(__name__)
 
 _RESERVED = {"chunk_id", "doc_id", "text"}
+_MAX_SEARCH_TOP_K = 12
 
 _SYSTEM = (
     "You are a research agent answering questions strictly from a private document corpus.\n"
@@ -54,6 +58,11 @@ _SYSTEM = (
     "  3. If your first search misses, try a different phrasing (synonyms, related concepts).\n"
     "  4. When you have found relevant chunks that answer the question, call `finish` with refusal=false, the answer, and chunk_ids.\n"
     "  5. ONLY call `finish` with refusal=true if you've tried multiple searches and the corpus genuinely has NO relevant information.\n\n"
+    "Language: the documents may be in a different language from the question. If a search "
+    "in the question's language misses, search again in the documents' language (English "
+    "is common). Always write the `finish` answer, including a refusal, in the language of "
+    "the user's question: a French question gets a French answer even when every source is "
+    "in English.\n\n"
     f"Hard limit: {settings.agentic_max_iters} tool calls total. Be efficient. Default to refusal=false when you have evidence."
 )
 
@@ -66,7 +75,12 @@ _TOOLS = [
             "type": "object",
             "properties": {
                 "query": {"type": "string", "description": "what to search for"},
-                "top_k": {"type": "integer", "default": 5, "minimum": 1, "maximum": 12},
+                "top_k": {
+                    "type": "integer",
+                    "default": 5,
+                    "minimum": 1,
+                    "maximum": _MAX_SEARCH_TOP_K,
+                },
             },
             "required": ["query"],
         },
@@ -99,6 +113,21 @@ _TOOLS = [
         },
     },
 ]
+
+
+def _retrieval_extra(seen_chunks: dict[str, dict]) -> dict:
+    """Describe everything the agent read, in the order it first saw it.
+
+    The agent's "retrieved context" is every chunk its searches surfaced, so
+    that is what retrieval metrics and the judge are given -- the same basis as
+    the reranked context of the other strategies.
+    """
+    return {
+        "chunks_explored": list(seen_chunks.keys()),
+        "retrieved_ids": list(seen_chunks.keys()),
+        "retrieved_docs": [v.get("filename") for v in seen_chunks.values()],
+        "context_text": "\n\n".join(f"[{cid}]\n{v['text']}" for cid, v in seen_chunks.items()),
+    }
 
 
 class AgenticRAG(Strategy):
@@ -140,6 +169,7 @@ class AgenticRAG(Strategy):
         top_k: int,
         model: str,
         prompt_version: str,
+        access: AccessScope | None = None,
     ) -> StrategyResult:
         """Execute agentic RAG: run Claude in a tool-use loop to answer the question.
 
@@ -151,6 +181,9 @@ class AgenticRAG(Strategy):
             top_k: Not used directly; controls context size in final generation.
             model: Language model for Claude (must support tool use).
             prompt_version: Not used for agentic RAG (uses _SYSTEM instead).
+            access: The caller's read scope. Both tools are restricted to it,
+                so the agent cannot search for or fetch (by guessed id) a
+                chunk the caller may not read.
 
         Returns:
             StrategyResult with answer from tool calls, sources, confidence,
@@ -194,7 +227,12 @@ class AgenticRAG(Strategy):
                     },
                 )
                 return json.dumps([], ensure_ascii=False)
-            k = int(args.get("top_k", 5))
+            try:
+                k = int(args.get("top_k", 5))
+            except (TypeError, ValueError):
+                k = 5
+            # The schema says 1-12, but tool input is model output: clamp it.
+            k = max(1, min(k, _MAX_SEARCH_TOP_K))
             logger.debug(
                 "Search tool invoked",
                 extra_fields={
@@ -205,7 +243,7 @@ class AgenticRAG(Strategy):
                 },
             )
             vec = await embed_query_async(q)
-            hits = await vector_search(vec, top_k=k)
+            hits = await vector_search(vec, top_k=k, access=access)
             previews = []
             for h in hits:
                 cid = h.payload.get("chunk_id")
@@ -262,8 +300,7 @@ class AgenticRAG(Strategy):
                     },
                 )
                 return cached["text"]
-            vec = await embed_query_async(" ")
-            hits = await vector_search(vec, top_k=512)
+            hits = await fetch_chunks([cid], access=access)
             for h in hits:
                 if h.payload.get("chunk_id") == cid:
                     text = h.payload.get("text")
@@ -332,6 +369,7 @@ class AgenticRAG(Strategy):
             },
             max_iters=settings.agentic_max_iters,
             max_tokens=settings.max_answer_tokens,
+            terminal_tools={"finish"},
         )
 
         if final:
@@ -369,17 +407,33 @@ class AgenticRAG(Strategy):
                 output_tokens=out["output_tokens"],
                 iterations=out["iterations"],
                 trace=out["trace"],
-                extra={"chunks_explored": list(seen_chunks.keys())},
+                extra=_retrieval_extra(seen_chunks),
             )
 
-        # Agent never called finish but has substantial output
-        has_answer = out["text"] and len(out["text"].strip()) > 50
+        # The agent never called `finish`. If the loop stopped on a provider
+        # error or the step limit, its text is a diagnostic, not an answer.
+        stop_reason = out.get("stop_reason", "end_turn")
+        failed = bool(out.get("error")) or stop_reason in ("provider_error", "max_iters")
+        text = (out.get("text") or "").strip()
+        if failed:
+            answer = localized(
+                "agent_provider_failed"
+                if stop_reason == "provider_error"
+                else "agent_step_limit",
+                question,
+            )
+            has_answer = False
+        else:
+            # The model ended its turn with prose instead of calling `finish`.
+            has_answer = len(text) > 50
+            answer = text or localized("agent_no_answer", question)
         logger.info(
             "Agentic RAG strategy completed without finish",
             extra_fields={
                 "strategy": "agentic",
                 "model": model,
                 "has_answer": has_answer,
+                "stop_reason": stop_reason,
                 "input_tokens": out["input_tokens"],
                 "output_tokens": out["output_tokens"],
                 "iterations": out["iterations"],
@@ -389,7 +443,7 @@ class AgenticRAG(Strategy):
             },
         )
         return StrategyResult(
-            answer=out["text"] or "(agent stopped without finishing)",
+            answer=answer,
             sources=[
                 Source(
                     chunk_id=c,
@@ -400,9 +454,10 @@ class AgenticRAG(Strategy):
             ]
             or [Source(chunk_id="none", quote="")],
             refusal=not has_answer,
-            confidence=0.8 if has_answer else 0.3,
+            confidence=0.5 if has_answer else 0.0,
             input_tokens=out["input_tokens"],
             output_tokens=out["output_tokens"],
             iterations=out["iterations"],
             trace=out["trace"],
+            extra={**_retrieval_extra(seen_chunks), "stop_reason": stop_reason},
         )

@@ -6,6 +6,9 @@ so the system can answer questions about itself.
 Usage:
     python scripts/ingest.py
     python scripts/ingest.py --path data/docs --concurrency 8
+    python scripts/ingest.py --path hr/ --tenant acme --groups hr,managers
+
+Without --tenant/--groups, documents go to DEFAULT_TENANT and are public.
 """
 from __future__ import annotations
 
@@ -17,7 +20,8 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "backend"))
 
-from app.rag.ingest import SUPPORTED_SUFFIXES, enqueue_document  # noqa: E402
+from app.rag.ingest import enqueue_document  # noqa: E402
+from app.rag.parsers import SUPPORTED_EXTENSIONS  # noqa: E402
 
 DEFAULT_DOCS = ROOT / "data" / "docs"
 META_FILES = [ROOT / "README.md", ROOT / "EvalRAG.md", ROOT / "LEARN.md"]
@@ -28,23 +32,44 @@ def _collect(root: Path, include_meta: bool) -> list[Path]:
     paths = [
         p
         for p in sorted(root.rglob("*"))
-        if p.is_file() and p.suffix.lower() in SUPPORTED_SUFFIXES
+        if p.is_file() and p.suffix.lower() in SUPPORTED_EXTENSIONS
     ]
     if include_meta:
         paths += [p for p in META_FILES if p.is_file()]
     return paths
 
 
-async def _ingest_one(path: Path, semaphore: asyncio.Semaphore) -> tuple[Path, str | None]:
+def _relative_name(path: Path, root: Path) -> str:
+    """Name a file by its path under the ingest root (or the repo, for META_FILES).
+
+    The name keys stale-revision cleanup, so two files that share a basename in
+    different folders must not collide, as they would with ``path.name``.
+    """
+    path = path.resolve()
+    for base in (root.resolve(), ROOT):
+        if path.is_relative_to(base):
+            return path.relative_to(base).as_posix()
+    return path.name
+
+
+async def _ingest_one(
+    path: Path,
+    root: Path,
+    semaphore: asyncio.Semaphore,
+    tenant: str | None = None,
+    groups: list[str] | None = None,
+) -> tuple[Path, str | None]:
     """Ingest one file. Returns (path, error) so one failure cannot stop the run."""
+    name = _relative_name(path, root)
     async with semaphore:
         try:
-            result = await enqueue_document(path.name, path.read_bytes())
-            print(f"  ok    {path.name}  ({result['chunks']} chunks)")
+            content = await asyncio.to_thread(path.read_bytes)
+            result = await enqueue_document(name, content, tenant=tenant, acl_groups=groups)
+            print(f"  ok    {name}  ({result['chunks']} chunks)")
             return path, None
         except Exception as e:
             message = f"{type(e).__name__}: {e}"
-            print(f"  FAIL  {path.name}  {message}")
+            print(f"  FAIL  {name}  {message}")
             return path, message
 
 
@@ -59,7 +84,14 @@ async def main() -> int:
     parser.add_argument(
         "--no-meta", action="store_true", help="Skip the top-level README/LEARN docs"
     )
+    parser.add_argument("--tenant", default=None, help="Tenant (default: DEFAULT_TENANT)")
+    parser.add_argument(
+        "--groups",
+        default=None,
+        help="Comma-separated groups allowed to read the documents (default: public)",
+    )
     args = parser.parse_args()
+    groups = [g for g in args.groups.split(",") if g.strip()] if args.groups else None
 
     if not args.path.exists():
         print(f"No such directory: {args.path}")
@@ -68,12 +100,14 @@ async def main() -> int:
     paths = _collect(args.path, include_meta=not args.no_meta)
     if not paths:
         print(f"Nothing to ingest under {args.path}")
-        print(f"Supported types: {', '.join(sorted(SUPPORTED_SUFFIXES))}")
+        print(f"Supported types: {', '.join(sorted(SUPPORTED_EXTENSIONS))}")
         return 1
 
     print(f"Ingesting {len(paths)} file(s) from {args.path} ...\n")
     semaphore = asyncio.Semaphore(args.concurrency)
-    outcomes = await asyncio.gather(*(_ingest_one(p, semaphore) for p in paths))
+    outcomes = await asyncio.gather(
+        *(_ingest_one(p, args.path, semaphore, args.tenant, groups) for p in paths)
+    )
 
     failures = [(p, err) for p, err in outcomes if err]
     print(f"\n{len(outcomes) - len(failures)}/{len(outcomes)} files ingested.")

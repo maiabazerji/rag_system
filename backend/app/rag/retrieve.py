@@ -11,40 +11,46 @@ retrieval in the fuse-two-retrievers sense.
 """
 from __future__ import annotations
 
+from app.access import AccessScope
 from app.logging_config import get_structured_logger
 from app.rag.embed import embed_query_async
-from app.rag.store import search
+from app.rag.store import StoreUnavailable, search
 from app.schemas import Chunk
+from app.tracing import instrument
 
 logger = get_structured_logger(__name__)
 
 _RESERVED = {"chunk_id", "doc_id", "text"}
 
 
-async def dense_search(query: str, top_k: int = 50) -> list[Chunk]:
+@instrument.retrieval
+async def dense_search(
+    query: str, top_k: int = 50, access: AccessScope | None = None
+) -> list[Chunk]:
     """Retrieve relevant chunks from the vector store using dense vector search.
 
     Encodes the query to a vector embedding, then searches the Qdrant vector store
     for the top-k most similar chunks. Reconstructs Chunk objects from vector store
     payloads.
 
-    This function gracefully degrades: if the vector store is unavailable,
-    it returns an empty list instead of raising an exception. This allows the
-    answer generation step to proceed with no context (producing a refusal or
-    empty answer).
+    A vector store outage raises :class:`StoreUnavailable` (served as a 503) so
+    it is never mistaken for "no relevant documents". Other failures, such as
+    an embedding error, degrade to an empty list.
 
     Args:
         query: The search query string (e.g., a user question or refined search term).
         top_k: Number of chunks to retrieve (default 50). Callers typically retrieve
             more here and rerank to a smaller number later.
+        access: Search only the chunks this scope may read. ``None`` searches
+            everything and is for internal jobs only.
 
     Returns:
         List of Chunk objects sorted by vector similarity (most similar first).
         Chunks include id, doc_id, text, token count, and document metadata.
-        Returns empty list on any error (vector store down, embedding error, etc.).
+        Returns an empty list on non-store errors (e.g. an embedding failure).
 
     Raises:
-        No exceptions. All errors are caught and logged, with empty list returned.
+        StoreUnavailable: The vector store is down or its circuit breaker is open.
 
     Example:
         >>> chunks = await dense_search("What is machine learning?", top_k=10)
@@ -53,7 +59,7 @@ async def dense_search(query: str, top_k: int = 50) -> list[Chunk]:
     """
     try:
         vec = await embed_query_async(query)
-        hits = await search(vec, top_k=top_k)
+        hits = await search(vec, top_k=top_k, access=access)
         chunks = []
         for h in hits:
             chunk_id = h.payload.get("chunk_id")
@@ -78,6 +84,8 @@ async def dense_search(query: str, top_k: int = 50) -> list[Chunk]:
             },
         )
         return chunks
+    except StoreUnavailable:
+        raise
     except Exception as e:
         logger.warning(
             f"Retrieval failed: {type(e).__name__}: {e}. Proceeding with empty context.",

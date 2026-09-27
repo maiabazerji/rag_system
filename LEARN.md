@@ -42,8 +42,9 @@ data/ ─► ingest ─► chunk ─► embed ─► Qdrant (vector DB)
 
 | Piece              | File                                                | What it does |
 |--------------------|-----------------------------------------------------|--------------|
-| **Chunking**       | `backend/app/rag/ingest.py:chunk_text`              | Splits documents into `CHUNK_SIZE_TOKENS`-word windows (default 600) with `CHUNK_OVERLAP_TOKENS` overlap (default 80). Smaller chunks = sharper retrieval; overlap stops sentences being chopped mid-thought. |
-| **Embeddings**     | `backend/app/rag/embed.py`                          | Uses `BAAI/bge-small-en-v1.5` (a free local model) to turn text into a 384-dim vector. Nearby vectors = similar meaning. |
+| **Parsing**        | `backend/app/rag/parsers/`                          | One module per format (PDF with optional OCR, docx, pptx, odt/ods, eml, HTML, text, CSV), a registry that picks one by extension, MIME type or file signature, and the one list of supported types. Output is markdown-ish text plus file metadata. |
+| **Chunking**       | `backend/app/rag/chunking.py:chunk_structured`      | Cuts at headings (markdown and French legal divisions) first, then into `CHUNK_SIZE_TOKENS`-word pieces (default 600) with `CHUNK_OVERLAP_TOKENS` overlap (default 80), never inside a table row. Each chunk records its `heading_path`. Smaller chunks = sharper retrieval; overlap stops sentences being chopped mid-thought. |
+| **Embeddings**     | `backend/app/rag/embed.py`                          | Uses `intfloat/multilingual-e5-small` (a free local multilingual model) to turn text into a 384-dim vector, adding the `query: ` / `passage: ` markers E5 expects. Nearby vectors = similar meaning, across languages. |
 | **Vector store**   | `backend/app/rag/store.py`                          | Qdrant (a vector DB). One vector per chunk + the original text as payload. |
 | **Vector search**  | `backend/app/rag/retrieve.py:dense_search`          | Embed the question → return the top `RETRIEVAL_TOP_K` chunks by cosine similarity. Dense only; the lexical signal enters at the rerank step. |
 | **Rerank**         | `backend/app/rag/rerank.py:rerank_async`            | Re-scores the candidates down to `RERANK_TOP_K` with a cross-encoder (`RERANKER_MODEL`), which reads the question and chunk together instead of comparing two independent vectors. Falls back to BM25, then to plain truncation, if the model cannot load. |
@@ -316,9 +317,13 @@ require Anthropic** (they use Claude Haiku for cheap extraction + Claude's tool-
 ### 7.2 Start the stack
 
 ```bash
-cd infra
-docker compose up -d
+# from the project root; POSTGRES_PASSWORD must be set in .env
+docker compose --env-file .env -f infra/docker-compose.yml up -d
 ```
+
+Ports are published on 127.0.0.1 only. The embedding model and the cross-encoder
+download on first use into `.hf_cache/`; `python scripts/download_models.py
+--cache-dir .hf_cache` fetches them up front.
 
 Frontend: http://localhost:5173 · Backend: http://localhost:8011/health
 
@@ -365,7 +370,7 @@ If you want to *really* understand it, open these in this order, each builds on 
 This project demonstrates, on one codebase, three different production-grade approaches
 to RAG, all running against the same indexed corpus, all using the Anthropic API:
 
-- **Classic RAG** with hybrid retrieval + cross-encoder reranking
+- **Classic RAG** with dense retrieval + cross-encoder reranking
 - **Graph RAG** with LLM-driven triple extraction (Claude Haiku) and entity-walk retrieval
 - **Agentic RAG** built on Anthropic tool use (search / fetch / finish loop)
 - A **3-way compare UI** with latency, token cost, and reasoning traces side by side

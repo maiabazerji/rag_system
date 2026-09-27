@@ -14,8 +14,12 @@ from __future__ import annotations
 
 import time
 
+from app import monitoring
+from app.access import AccessScope
 from app.config import settings
+from app.i18n import localized
 from app.logging_config import get_structured_logger
+from app.prompts.loader import UnknownPromptVersionError
 from app.rag.providers import MissingKeyError, ProviderError
 from app.rag.response_clean import clean_response
 from app.rag.store import count as store_count
@@ -26,6 +30,36 @@ from app.tracing import start_trace
 
 logger = get_structured_logger(__name__)
 
+# Shown instead of a provider exception's text, which can carry upstream
+# response bodies, hostnames or request details. The details go to the logs.
+PROVIDER_UNAVAILABLE_MESSAGE = (
+    "The language model provider is unavailable right now. Try again shortly; "
+    "the details are in the backend logs."
+)
+
+
+def _is_store_unavailable(exc: BaseException) -> bool:
+    """True for the vector store's own "unavailable" error, which the app maps to 503.
+
+    Matched by name so this module does not depend on where the store defines it.
+    """
+    return type(exc).__name__ == "StoreUnavailable"
+
+
+def public_provider_error(exc: ProviderError, question: str | None = None) -> str:
+    """The client-safe message for a provider failure.
+
+    A missing API key is a configuration fault whose message this codebase
+    writes itself and which tells the operator exactly what to fix, so it is
+    passed through. Every other provider error gets a generic message, in the
+    question's language when a question is given.
+    """
+    if isinstance(exc, MissingKeyError):
+        return str(exc)
+    if question:
+        return localized("provider_unavailable", question)
+    return PROVIDER_UNAVAILABLE_MESSAGE
+
 
 def _refusal(
     question: str,
@@ -33,6 +67,7 @@ def _refusal(
     sources: list[Source] | None = None,
     provider: str | None = None,
     model: str | None = None,
+    trace_id: str | None = None,
 ) -> Answer:
     """Create a refusal Answer for error cases.
 
@@ -58,6 +93,7 @@ def _refusal(
         refusal=True,
         provider=provider,
         model=model,
+        trace_id=trace_id,
     )
 
 
@@ -97,8 +133,12 @@ async def answer_question(
     model: str | None = None,
     prompt_version: str | None = None,
     strategy: str = "classic",
+    access: AccessScope | None = None,
 ) -> Answer:
     """Answer a question using the specified RAG strategy.
+
+    Thin wrapper over :func:`answer_question_detailed` for callers that only
+    need the public :class:`Answer`.
 
     This is the primary public API for question answering. It orchestrates:
     1. Document availability checks
@@ -126,6 +166,9 @@ async def answer_question(
             If None, defaults to "default". Ignored by agentic RAG.
         strategy: RAG strategy to use ("classic", "graph", "agentic").
             Defaults to "classic".
+        access: The caller's read scope; retrieval only sees documents it
+            permits. ``None`` is unrestricted, for internal scripts only: API
+            routes always pass the requesting principal's scope.
 
     Returns:
         Answer with question, answer text, sources, confidence (0-1), refusal flag,
@@ -144,6 +187,37 @@ async def answer_question(
         >>> print(result.answer)
         >>> print(f"Confidence: {result.confidence}")
     """
+    answer, _ = await answer_question_detailed(
+        question,
+        top_k=top_k,
+        provider=provider,
+        model=model,
+        prompt_version=prompt_version,
+        strategy=strategy,
+        access=access,
+    )
+    return answer
+
+
+async def answer_question_detailed(
+    question: str,
+    top_k: int | None = None,
+    provider: str | None = None,
+    model: str | None = None,
+    prompt_version: str | None = None,
+    strategy: str = "classic",
+    access: AccessScope | None = None,
+) -> tuple[Answer, StrategyResult | None]:
+    """Like :func:`answer_question`, but also return the raw StrategyResult.
+
+    The evaluation harness needs what the public Answer leaves out: the full
+    context the generator saw and the ranked retrieved chunk ids (both in
+    ``StrategyResult.extra``).
+
+    Returns:
+        ``(answer, result)``; ``result`` is ``None`` when the strategy never ran
+        or failed.
+    """
     # Graph and agentic strategies require Anthropic features (tool use, entity extraction).
     # Override provider selection and surface this to caller via returned provider field.
     if strategy in ("graph", "agentic"):
@@ -155,7 +229,7 @@ async def answer_question(
     top_k = settings.rerank_top_k if top_k is None else top_k
 
     try:
-        doc_count = await store_count()
+        doc_count = await store_count(access)
         if doc_count == 0:
             logger.info(
                 "No documents indexed",
@@ -165,13 +239,16 @@ async def answer_question(
                     "model": model,
                 },
             )
+            monitoring.observe_refusal(strategy, "no_documents")
             return _refusal(
                 question,
-                "No documents uploaded yet. Go to Ingest to upload files, then I can answer your questions.",
+                localized("no_documents", question),
                 provider=effective_provider,
                 model=model,
-            )
+            ), None
     except Exception as e:
+        if _is_store_unavailable(e):
+            raise
         # Qdrant might be slow or unreachable; proceed anyway and let the strategy handle it
         logger.warning(
             f"Document count check failed: {type(e).__name__}: {e}",
@@ -185,6 +262,7 @@ async def answer_question(
     with start_trace(
         name=f"ask:{strategy}",
         inputs={"question": question, "strategy": strategy, "provider": effective_provider, "model": model},
+        principal_id=access.principal_id if access else None,
     ) as trace:
         try:
             strat = get_strategy(strategy)
@@ -193,7 +271,14 @@ async def answer_question(
                 f"Unknown strategy: {strategy}",
                 extra_fields={"error_type": "invalid_strategy"},
             )
-            return _refusal(question, str(e), provider=effective_provider, model=model)
+            return trace.finish(
+                _refusal(
+                    question, str(e), provider=effective_provider, model=model, trace_id=trace.id
+                ),
+                reason="invalid_strategy",
+            ), None
+        # Only classic honours a non-Anthropic provider; see Strategy.provider.
+        strat.provider = effective_provider
 
         logger.info(
             "Strategy started",
@@ -213,17 +298,34 @@ async def answer_question(
                 top_k=top_k,
                 model=model,
                 prompt_version=prompt_version,
+                access=access,
             )
         except (MissingKeyError, ProviderError) as e:
             logger.warning(
-                f"Provider error: {type(e).__name__}",
+                f"Provider error: {type(e).__name__}: {e}",
                 extra_fields={
                     "error_type": type(e).__name__,
                     "strategy": strategy,
                     "provider": effective_provider,
                 },
             )
-            return _refusal(question, str(e), provider=effective_provider, model=model)
+            return trace.finish(
+                _refusal(
+                    question,
+                    public_provider_error(e, question),
+                    provider=effective_provider,
+                    model=model,
+                    trace_id=trace.id,
+                ),
+                reason="provider_error",
+            ), None
+        except UnknownPromptVersionError as e:
+            return trace.finish(
+                _refusal(
+                    question, str(e), provider=effective_provider, model=model, trace_id=trace.id
+                ),
+                reason="invalid_prompt_version",
+            ), None
         except Exception as e:
             logger.exception(
                 f"Strategy '{strategy}' failed: {type(e).__name__}: {e}",
@@ -234,15 +336,19 @@ async def answer_question(
                     "model": model,
                 },
             )
-            return _refusal(
-                question,
-                "Something went wrong answering this question. "
-                "The details are in the backend logs.",
-                provider=effective_provider,
-                model=model,
-            )
+            return trace.finish(
+                _refusal(
+                    question,
+                    localized("internal_error", question),
+                    provider=effective_provider,
+                    model=model,
+                    trace_id=trace.id,
+                ),
+                reason="error",
+            ), None
         latency_ms = int((time.perf_counter() - t0) * 1000)
         result.latency_ms = latency_ms
+        result.trace_id = trace.id
 
         logger.info(
             "Strategy completed",
@@ -261,6 +367,8 @@ async def answer_question(
 
         for event in result.trace:
             trace.log(event.get("step", "step"), event)
+        # Which chunks grounded the answer, so an erasure can find this trace.
+        trace.log("sources", {"chunk_ids": [src.chunk_id for src in result.sources]})
         trace.log(
             "result",
             {
@@ -271,7 +379,7 @@ async def answer_question(
             },
         )
 
-        return Answer(
+        answer = Answer(
             question=question,
             answer=clean_response(result.answer),
             sources=result.sources,
@@ -282,7 +390,9 @@ async def answer_question(
             latency_ms=latency_ms,
             input_tokens=result.input_tokens,
             output_tokens=result.output_tokens,
+            trace_id=trace.id,
         )
+        return trace.finish(answer), result
 
 
 async def run_strategy_raw(
@@ -292,6 +402,7 @@ async def run_strategy_raw(
     model: str | None = None,
     top_k: int | None = None,
     prompt_version: str = "default",
+    access: AccessScope | None = None,
 ) -> tuple[StrategyResult | None, str | None]:
     """Execute a strategy and return raw StrategyResult + telemetry.
 
@@ -307,6 +418,7 @@ async def run_strategy_raw(
         model: Model to use. If None, defaults to Anthropic model for the strategy.
         top_k: Max chunks in context. Defaults to 8.
         prompt_version: Prompt template version. Defaults to "default".
+        access: The caller's read scope (see :func:`answer_question`).
 
     Returns:
         Tuple of (StrategyResult or None, error_message or None).
@@ -327,7 +439,7 @@ async def run_strategy_raw(
     model = model or _default_model("anthropic", strategy)
     top_k = settings.rerank_top_k if top_k is None else top_k
     try:
-        doc_count = await store_count()
+        doc_count = await store_count(access)
         if doc_count == 0:
             logger.info(
                 "No documents indexed for strategy comparison",
@@ -335,6 +447,8 @@ async def run_strategy_raw(
             )
             return None, "No documents indexed yet."
     except Exception as e:
+        if _is_store_unavailable(e):
+            raise
         # Qdrant might be slow; proceed anyway
         logger.warning(
             f"Document count check failed in strategy comparison: {type(e).__name__}: {e}",
@@ -367,33 +481,62 @@ async def run_strategy_raw(
         },
     )
 
-    t0 = time.perf_counter()
-    try:
-        result = await strat.run(
-            question, top_k=top_k, model=model, prompt_version=prompt_version
-        )
-    except (MissingKeyError, ProviderError) as e:
-        logger.warning(
-            f"Provider error in strategy comparison: {type(e).__name__}",
-            extra_fields={
-                "error_type": type(e).__name__,
-                "strategy": strategy,
-                "context": "strategy_comparison",
-            },
-        )
-        return None, str(e)
-    except Exception as e:
-        logger.exception(
-            f"Strategy '{strategy}' failed during comparison: {type(e).__name__}: {e}",
-            extra_fields={
-                "error_type": type(e).__name__,
-                "strategy": strategy,
-                "context": "strategy_comparison",
-            },
-        )
-        return None, f"This strategy failed ({type(e).__name__}). See the backend logs."
+    with start_trace(
+        name=f"compare:{strategy}",
+        inputs={"question": question, "strategy": strategy, "provider": "anthropic", "model": model},
+        principal_id=access.principal_id if access else None,
+    ) as trace:
+        t0 = time.perf_counter()
+        try:
+            result = await strat.run(
+                question,
+                top_k=top_k,
+                model=model,
+                prompt_version=prompt_version,
+                access=access,
+            )
+        except (MissingKeyError, ProviderError) as e:
+            logger.warning(
+                f"Provider error in strategy comparison: {type(e).__name__}: {e}",
+                extra_fields={
+                    "error_type": type(e).__name__,
+                    "strategy": strategy,
+                    "context": "strategy_comparison",
+                },
+            )
+            trace.log("error", {"error_type": type(e).__name__})
+            trace.fail(public_provider_error(e, question), reason="provider_error")
+            return None, public_provider_error(e, question)
+        except UnknownPromptVersionError as e:
+            trace.fail(str(e), reason="invalid_prompt_version")
+            return None, str(e)
+        except Exception as e:
+            logger.exception(
+                f"Strategy '{strategy}' failed during comparison: {type(e).__name__}: {e}",
+                extra_fields={
+                    "error_type": type(e).__name__,
+                    "strategy": strategy,
+                    "context": "strategy_comparison",
+                },
+            )
+            trace.log("error", {"error_type": type(e).__name__})
+            trace.fail(type(e).__name__)
+            return None, f"This strategy failed ({type(e).__name__}). See the backend logs."
 
-    result.latency_ms = int((time.perf_counter() - t0) * 1000)
+        result.latency_ms = int((time.perf_counter() - t0) * 1000)
+        result.trace_id = trace.id
+        for event in result.trace:
+            trace.log(event.get("step", "step"), event)
+        trace.log(
+            "result",
+            {
+                "latency_ms": result.latency_ms,
+                "input_tokens": result.input_tokens,
+                "output_tokens": result.output_tokens,
+                "iterations": result.iterations,
+            },
+        )
+        trace.finish(result)
 
     logger.info(
         "Strategy comparison completed",
