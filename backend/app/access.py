@@ -20,7 +20,7 @@ payload with :meth:`AccessScope.permits`, so the rule lives in one place.
 from __future__ import annotations
 
 from collections.abc import Iterable, Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any, Literal
 
 from fastapi import HTTPException
@@ -65,7 +65,7 @@ class AccessScope:
     groups: frozenset[str]
     # Who is reading, so traces can be found for erasure and access requests.
     # Not part of the access decision.
-    principal_id: str | None = None
+    principal_id: str | None = field(default=None, compare=False)
 
     def permits(self, payload: Mapping[str, Any] | None) -> bool:
         """Whether a chunk with this payload is readable within the scope."""

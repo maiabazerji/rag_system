@@ -241,6 +241,7 @@ class TestEraseDocument:
             "traces": 1,
             "eval_runs": 2,
             "usage": 0,
+            "audit": 0,
         }
         # Only docA went; its other revision and other documents stay.
         assert vectors.doc_ids() == ["docA2", "docB", "legacy"]
@@ -517,7 +518,7 @@ class TestRetention:
 
         report = await retention.run_retention(NOW)
 
-        assert report.targets == {"traces": 1, "eval_runs": 1}
+        assert report.targets == {"traces": 1, "eval_runs": 1, "audit": 0}
         assert report.cutoffs["traces"] == (NOW - timedelta(days=7)).isoformat(timespec="seconds")
         assert tracing.get_trace(traces["usesA"]) is None
         assert not old.exists() and new.exists()
@@ -620,7 +621,7 @@ class TestRetentionEndpoint:
         resp = client.post("/privacy/retention/run", headers=ADMIN)
         assert resp.status_code == 200
         body = resp.json()
-        assert set(body["targets"]) == {"traces", "eval_runs"}
+        assert set(body["targets"]) == {"traces", "eval_runs", "audit"}
         assert body["errors"] == {}
 
 
