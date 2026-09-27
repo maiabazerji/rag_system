@@ -43,7 +43,7 @@ data/ ─► ingest ─► chunk ─► embed ─► Qdrant (vector DB)
 | Piece              | File                                                | What it does |
 |--------------------|-----------------------------------------------------|--------------|
 | **Chunking**       | `backend/app/rag/ingest.py:chunk_text`              | Splits documents into `CHUNK_SIZE_TOKENS`-word windows (default 600) with `CHUNK_OVERLAP_TOKENS` overlap (default 80). Smaller chunks = sharper retrieval; overlap stops sentences being chopped mid-thought. |
-| **Embeddings**     | `backend/app/rag/embed.py`                          | Uses `BAAI/bge-small-en-v1.5` (a free local model) to turn text into a 384-dim vector. Nearby vectors = similar meaning. |
+| **Embeddings**     | `backend/app/rag/embed.py`                          | Uses `intfloat/multilingual-e5-small` (a free local multilingual model) to turn text into a 384-dim vector, adding the `query: ` / `passage: ` markers E5 expects. Nearby vectors = similar meaning, across languages. |
 | **Vector store**   | `backend/app/rag/store.py`                          | Qdrant (a vector DB). One vector per chunk + the original text as payload. |
 | **Vector search**  | `backend/app/rag/retrieve.py:dense_search`          | Embed the question → return the top `RETRIEVAL_TOP_K` chunks by cosine similarity. Dense only; the lexical signal enters at the rerank step. |
 | **Rerank**         | `backend/app/rag/rerank.py:rerank_async`            | Re-scores the candidates down to `RERANK_TOP_K` with a cross-encoder (`RERANKER_MODEL`), which reads the question and chunk together instead of comparing two independent vectors. Falls back to BM25, then to plain truncation, if the model cannot load. |

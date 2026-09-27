@@ -299,6 +299,8 @@ async def run_evaluation(
         "requested_model": model,
         "prompt_version": prompt_version,
         "judge_model": settings.judge_model if judge_answers else None,
+        "embedding_model": settings.embedding_model,
+        "reranker_model": settings.reranker_model,
         "n": len(examples),
         "judged": judge_answers,
         "n_scored": len(scored),

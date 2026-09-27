@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { fetchHealth, getApiKey, onUnauthorized, setApiKey } from "../api/client";
+import { useI18n } from "../i18n";
 
 /**
  * Shows an API key field when the backend requires one.
@@ -13,6 +14,7 @@ import { fetchHealth, getApiKey, onUnauthorized, setApiKey } from "../api/client
  */
 export default function ApiKeyGate() {
   const queryClient = useQueryClient();
+  const { t, rich } = useI18n();
   const [authRequired, setAuthRequired] = useState<boolean | null>(null);
   const [healthFailed, setHealthFailed] = useState(false);
   const [rejected, setRejected] = useState(false);
@@ -35,8 +37,8 @@ export default function ApiKeyGate() {
 
   useEffect(() => {
     if (!saved) return;
-    const t = setTimeout(() => setSaved(false), 2000);
-    return () => clearTimeout(t);
+    const timer = setTimeout(() => setSaved(false), 2000);
+    return () => clearTimeout(timer);
   }, [saved]);
 
   if (!authRequired && !healthFailed && !rejected) return null;
@@ -61,15 +63,17 @@ export default function ApiKeyGate() {
   }
 
   const unreachable = healthFailed && !authRequired && !rejected;
-  const title = rejected
-    ? stored
-      ? "The backend rejected the saved API key"
-      : "This backend requires an API key"
-    : unreachable
-      ? "Could not reach the backend"
-      : stored
-        ? "API key saved"
-        : "This backend requires an API key";
+  const title = t(
+    rejected
+      ? stored
+        ? "apikey.rejected"
+        : "apikey.required"
+      : unreachable
+        ? "apikey.unreachable"
+        : stored
+          ? "apikey.saved"
+          : "apikey.required",
+  );
 
   return (
     <div className="mb-6 rounded border border-bg-border bg-bg-surface px-4 py-3">
@@ -77,30 +81,25 @@ export default function ApiKeyGate() {
         <div className="min-w-0">
           <div className="text-sm font-medium text-zinc-200">{title}</div>
           <p className="text-xs text-zinc-500 mt-1 leading-relaxed max-w-prose">
-            {unreachable ? (
-              <>
-                <code className="font-mono">GET /health</code> failed, so it is unknown whether
-                an API key is needed. Check the backend is running; if it requires a key,
-                paste it below.
-              </>
-            ) : stored && !rejected ? (
-              <>
-                Requests are sent with <code className="font-mono">Authorization: Bearer …</code>.
-                The key is kept in this browser only.
-              </>
-            ) : (
-              <>
-                Create one with{" "}
-                <code className="font-mono">
-                  python scripts/setup_auth.py --create-key "my-laptop"
-                </code>
-                , then paste it below.
-              </>
-            )}
+            {unreachable
+              ? rich("apikey.unreachableHelp", {
+                  endpoint: <code className="font-mono">GET /health</code>,
+                })
+              : stored && !rejected
+                ? rich("apikey.storedHelp", {
+                    header: <code className="font-mono">Authorization: Bearer …</code>,
+                  })
+                : rich("apikey.createHelp", {
+                    command: (
+                      <code className="font-mono">
+                        python scripts/setup_auth.py --create-key "my-laptop"
+                      </code>
+                    ),
+                  })}
           </p>
         </div>
         {saved && (
-          <span className="text-xs text-emerald-400 font-mono shrink-0">saved</span>
+          <span className="text-xs text-emerald-400 font-mono shrink-0">{t("apikey.savedBadge")}</span>
         )}
       </div>
 
@@ -112,7 +111,7 @@ export default function ApiKeyGate() {
           placeholder="sk_…"
           autoComplete="off"
           spellCheck={false}
-          aria-label="API key"
+          aria-label={t("apikey.label")}
           className="flex-1 min-w-[16rem] rounded border border-bg-border bg-bg-base px-3 py-1.5 text-sm font-mono text-zinc-200 placeholder:text-zinc-600 focus:outline-none focus:border-accent"
         />
         <button
@@ -120,7 +119,7 @@ export default function ApiKeyGate() {
           disabled={!key.trim()}
           className="rounded border border-bg-border px-3 py-1.5 text-sm text-zinc-200 hover:border-accent disabled:opacity-40 disabled:hover:border-bg-border transition-colors"
         >
-          Save key
+          {t("apikey.saveKey")}
         </button>
         {stored && (
           <button
@@ -128,7 +127,7 @@ export default function ApiKeyGate() {
             onClick={clear}
             className="rounded border border-transparent px-3 py-1.5 text-sm text-zinc-500 hover:text-zinc-300 transition-colors"
           >
-            Clear
+            {t("common.clear")}
           </button>
         )}
       </form>

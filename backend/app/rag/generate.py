@@ -15,6 +15,7 @@ from __future__ import annotations
 import time
 
 from app.config import settings
+from app.i18n import localized
 from app.logging_config import get_structured_logger
 from app.prompts.loader import UnknownPromptVersionError
 from app.rag.providers import MissingKeyError, ProviderError
@@ -43,15 +44,18 @@ def _is_store_unavailable(exc: BaseException) -> bool:
     return type(exc).__name__ == "StoreUnavailable"
 
 
-def public_provider_error(exc: ProviderError) -> str:
+def public_provider_error(exc: ProviderError, question: str | None = None) -> str:
     """The client-safe message for a provider failure.
 
     A missing API key is a configuration fault whose message this codebase
     writes itself and which tells the operator exactly what to fix, so it is
-    passed through. Every other provider error gets a generic message.
+    passed through. Every other provider error gets a generic message, in the
+    question's language when a question is given.
     """
     if isinstance(exc, MissingKeyError):
         return str(exc)
+    if question:
+        return localized("provider_unavailable", question)
     return PROVIDER_UNAVAILABLE_MESSAGE
 
 
@@ -229,7 +233,7 @@ async def answer_question_detailed(
             )
             return _refusal(
                 question,
-                "No documents uploaded yet. Go to Ingest to upload files, then I can answer your questions.",
+                localized("no_documents", question),
                 provider=effective_provider,
                 model=model,
             ), None
@@ -293,7 +297,7 @@ async def answer_question_detailed(
             )
             return _refusal(
                 question,
-                public_provider_error(e),
+                public_provider_error(e, question),
                 provider=effective_provider,
                 model=model,
                 trace_id=trace.id,
@@ -314,8 +318,7 @@ async def answer_question_detailed(
             )
             return _refusal(
                 question,
-                "Something went wrong answering this question. "
-                "The details are in the backend logs.",
+                localized("internal_error", question),
                 provider=effective_provider,
                 model=model,
                 trace_id=trace.id,

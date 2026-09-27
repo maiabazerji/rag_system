@@ -17,6 +17,11 @@ from qdrant_client.http import models as qm
 
 from app.config import settings
 from app.middleware.request_id import get_request_id
+from app.rag.collection_model import (
+    EmbeddingModelMismatch,
+    check_collection_model,
+    collection_stamp,
+)
 from app.rag.embed import embedding_dim
 from app.resilience import CircuitBreaker, async_timeout_wrapper
 
@@ -41,6 +46,16 @@ class StoreUnavailable(RuntimeError):
 async def store_unavailable_handler(request: Request, exc: Exception) -> JSONResponse:
     """FastAPI exception handler turning `StoreUnavailable` into a 503."""
     logger.warning(f"Vector store unavailable on {request.url.path}: {exc}")
+    if isinstance(exc.__cause__, EmbeddingModelMismatch):
+        return JSONResponse(
+            status_code=503,
+            content={
+                "code": "embedding_model_mismatch",
+                "message": "The vector index was built with a different embedding model.",
+                "detail": str(exc.__cause__),
+                "request_id": get_request_id(),
+            },
+        )
     return JSONResponse(
         status_code=503,
         content={
@@ -55,10 +70,13 @@ async def store_unavailable_handler(request: Request, exc: Exception) -> JSONRes
 async def client() -> AsyncQdrantClient:
     global _client
     if _client is None:
-        _client = AsyncQdrantClient(
+        c = AsyncQdrantClient(
             url=settings.qdrant_url, api_key=settings.qdrant_api_key or None
         )
-        await _ensure_collection(_client)
+        # Publish the client only once the collection checks out, so a failed
+        # check (say, an embedding model mismatch) is not skipped next time.
+        await _ensure_collection(c)
+        _client = c
     return _client
 
 
@@ -84,22 +102,30 @@ async def _ensure_collection(c: AsyncQdrantClient) -> None:
                 timeout=5.0,
                 service_name="Qdrant",
             )
-            current = info.config.params.vectors.size
-            if current != dim:
-                raise RuntimeError(
-                    f"Qdrant collection '{settings.qdrant_collection}' has dim={current} "
-                    f"but embedding model '{settings.embedding_model}' produces dim={dim}. "
-                    "Recreate the collection (delete it via Qdrant API or wipe the volume)."
+            if check_collection_model(info, dim):
+                # Empty and unstamped: record the model before anything is written.
+                await async_timeout_wrapper(
+                    c.update_collection(
+                        collection_name=settings.qdrant_collection,
+                        metadata=collection_stamp(dim),
+                    ),
+                    timeout=5.0,
+                    service_name="Qdrant",
                 )
             return
         await async_timeout_wrapper(
             c.create_collection(
                 collection_name=settings.qdrant_collection,
                 vectors_config=qm.VectorParams(size=dim, distance=qm.Distance.COSINE),
+                metadata=collection_stamp(dim),
             ),
             timeout=5.0,
             service_name="Qdrant",
         )
+    except EmbeddingModelMismatch as e:
+        # A configuration error, not an outage, so it does not trip the breaker.
+        logger.error(f"Embedding model mismatch: {e}")
+        raise
     except Exception as e:
         logger.error(f"Failed to ensure Qdrant collection: {type(e).__name__}: {e}")
         _qdrant_breaker.record_failure()

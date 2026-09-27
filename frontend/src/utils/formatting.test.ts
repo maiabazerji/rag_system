@@ -1,5 +1,29 @@
 import { describe, expect, it } from "vitest";
-import { cleanAnswer } from "./formatting";
+import {
+  cleanAnswer,
+  formatConfidence,
+  formatLatency,
+  formatScore,
+  formatTokens,
+} from "./formatting";
+
+describe("locale-aware numbers", () => {
+  const plain = (s: string) => s.replace(/\s/g, " ");
+
+  it("keeps the English output", () => {
+    expect(formatTokens(1500)).toBe("1.5K");
+    expect(formatLatency(1234)).toBe("1.23s");
+    expect(formatLatency(250)).toBe("250ms");
+    expect(formatConfidence(0.85)).toBe("85%");
+  });
+
+  it("uses French separators", () => {
+    expect(formatTokens(1500, "fr-FR")).toBe("1,5K");
+    expect(plain(formatLatency(1234, "fr-FR"))).toBe("1,23s");
+    expect(plain(formatConfidence(0.85, "fr-FR"))).toBe("85 %");
+    expect(formatScore(0.8, 2, "fr-FR")).toBe("0,80");
+  });
+});
 
 describe("cleanAnswer", () => {
   it("keeps headings as text instead of dropping them", () => {

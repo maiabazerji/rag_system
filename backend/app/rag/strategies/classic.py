@@ -31,6 +31,7 @@ Use cases:
 from __future__ import annotations
 
 from app.config import settings
+from app.i18n import localized
 from app.logging_config import get_structured_logger
 from app.prompts import render_prompt
 from app.rag.providers.base import generate_with_usage
@@ -125,7 +126,7 @@ class ClassicRAG(Strategy):
                 },
             )
             return StrategyResult(
-                answer="No relevant context found in the indexed documents.",
+                answer=localized("no_context", question),
                 sources=[Source(chunk_id="none", quote="")],
                 refusal=True,
                 confidence=0.0,

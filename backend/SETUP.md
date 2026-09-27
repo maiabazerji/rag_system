@@ -113,16 +113,22 @@ backend/app/
 
 `GENERATOR_PROVIDER` names a provider whose key is missing. Either set the key or change the provider. This is raised at server startup, not at import.
 
-### `Qdrant collection 'evalrag' has dim=384 but embedding model produces dim=1024`
+### `Qdrant collection 'evalrag' was built with embedding model ...` (or `has dim=384 ...`)
 
-You changed `EMBEDDING_MODEL`. Vectors from different models are not comparable, so the collection has to be rebuilt:
+You changed `EMBEDDING_MODEL`, or upgraded from a version whose default was the English-only `BAAI/bge-small-en-v1.5`. Vectors from different models are not comparable even at the same dimension, so the backend refuses to search the collection (HTTP 503, `code: "embedding_model_mismatch"`) and never deletes it for you. Either ingest into a new collection:
+
+```bash
+QDRANT_COLLECTION=evalrag_e5 python scripts/ingest.py   # and set it in .env
+```
+
+or wipe and rebuild:
 
 ```bash
 docker compose --env-file .env -f infra/docker-compose.yml down -v   # wipes Qdrant and Postgres
 docker compose --env-file .env -f infra/docker-compose.yml up -d
 ```
 
-Then re-ingest.
+Then re-ingest. A collection created before the model was recorded is refused until then too; if you are sure it was built with the configured model, the error message shows the one `curl -X PATCH` that records it instead.
 
 ### Every answer is "No documents uploaded yet"
 

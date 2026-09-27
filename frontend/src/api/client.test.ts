@@ -20,6 +20,7 @@ import {
   setApiKey,
   upload,
 } from "./client";
+import { setCurrentLanguage } from "../i18n/core";
 
 function jsonResponse(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), {
@@ -76,6 +77,28 @@ describe("api client", () => {
       });
       expect(getApiKey()).toBeNull();
       spy.mockRestore();
+    });
+  });
+
+  describe("language", () => {
+    afterEach(() => setCurrentLanguage("en"));
+
+    it("sends Accept-Language for the active UI language", async () => {
+      setCurrentLanguage("fr");
+      await post("/ask", { question: "Que mesure BM25 ?" });
+      expect(lastRequestHeaders()["Accept-Language"]).toBe("fr,en;q=0.5");
+      await get("/ingest/stats");
+      expect(lastRequestHeaders()["Accept-Language"]).toBe("fr,en;q=0.5");
+      await upload("/ingest", new File(["body"], "a.txt"));
+      expect(lastRequestHeaders()["Accept-Language"]).toBe("fr,en;q=0.5");
+    });
+
+    it("words its own errors in the active language", async () => {
+      setCurrentLanguage("fr");
+      globalThis.fetch = vi.fn(async () =>
+        jsonResponse({ detail: "slow down" }, 429),
+      ) as unknown as typeof fetch;
+      await expect(post("/ask", {})).rejects.toThrow(/Limite de requêtes atteinte/);
     });
   });
 

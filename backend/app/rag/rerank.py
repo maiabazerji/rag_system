@@ -25,6 +25,8 @@ from typing import TYPE_CHECKING, Any
 from rank_bm25 import BM25Okapi
 
 from app.config import settings
+from app.i18n import STOPWORDS
+from app.i18n import tokenize as _unicode_tokens
 from app.logging_config import get_structured_logger
 from app.schemas import Chunk
 
@@ -32,6 +34,23 @@ if TYPE_CHECKING:  # pragma: no cover
     from sentence_transformers import CrossEncoder
 
 logger = get_structured_logger(__name__)
+
+# English and French function words carry no topical signal for BM25; dropping
+# them keeps "le", "de", "the" from dominating short queries.
+BM25_STOPWORDS: frozenset[str] = STOPWORDS["en"] | STOPWORDS["fr"]
+
+
+def bm25_tokenize(text: str) -> list[str]:
+    """Tokenize for BM25: Unicode words, lowercased, accents folded, stopwords dropped.
+
+    Folding makes "requête", "requete" and "REQUÊTE" the same term, and ``\\w+``
+    keeps accented letters inside words instead of splitting on them. If a text
+    is nothing but stopwords, they are kept so it still has something to match.
+    """
+    tokens = _unicode_tokens(text)
+    content = [t for t in tokens if t not in BM25_STOPWORDS]
+    return content or tokens
+
 
 _executor = ThreadPoolExecutor(max_workers=2, thread_name_prefix="rerank")
 _cross_encoder_model: CrossEncoder | None = None
@@ -183,13 +202,13 @@ def _rerank_with_bm25(query: str, chunks: list[Chunk], top_k: int) -> list[Chunk
 
     try:
         # Tokenize texts for BM25
-        tokenized_chunks = [chunk.text.lower().split() for chunk in chunks]
+        tokenized_chunks = [bm25_tokenize(chunk.text) for chunk in chunks]
 
         # Create BM25 model
         bm25 = BM25Okapi(tokenized_chunks)
 
         # Score query
-        query_tokens = query.lower().split()
+        query_tokens = bm25_tokenize(query)
         scores = bm25.get_scores(query_tokens)
 
         # Sort chunks by score (descending)
