@@ -18,6 +18,7 @@ Key concepts:
 from __future__ import annotations
 
 import asyncio
+import time
 from concurrent.futures import ThreadPoolExecutor
 from typing import TYPE_CHECKING, Any
 
@@ -35,24 +36,34 @@ logger = get_structured_logger(__name__)
 _executor = ThreadPoolExecutor(max_workers=2, thread_name_prefix="rerank")
 _cross_encoder_model: CrossEncoder | None = None
 _cross_encoder_error: str | None = None
+# When the last load failed. A failure is retried after the cooldown rather
+# than cached for the life of the process: the usual causes (a model download
+# interrupted by a network blip, a cold cache volume) are transient, and a
+# permanent fall back to BM25 silently degrades every query until a restart.
+_cross_encoder_failed_at: float | None = None
+CROSS_ENCODER_RETRY_SECONDS = 300.0
 
 
 def _load_cross_encoder() -> CrossEncoder | None:
     """Load and cache the cross-encoder model.
 
     Loads the cross-encoder model on first call and caches it globally.
-    On failure, caches the error and returns None (fallback to BM25).
+    On failure, returns None (fallback to BM25) and does not try again until
+    ``CROSS_ENCODER_RETRY_SECONDS`` have passed.
 
     Returns:
-        CrossEncoder instance if successful, None if loading failed.
-            Subsequent calls return cached result (success or failure).
+        CrossEncoder instance if successful, None if loading failed or a
+            recent failure is still cooling down.
     """
-    global _cross_encoder_model, _cross_encoder_error
+    global _cross_encoder_model, _cross_encoder_error, _cross_encoder_failed_at
 
     if _cross_encoder_model is not None:
         return _cross_encoder_model
 
-    if _cross_encoder_error is not None:
+    if (
+        _cross_encoder_failed_at is not None
+        and time.monotonic() - _cross_encoder_failed_at < CROSS_ENCODER_RETRY_SECONDS
+    ):
         return None
 
     try:
@@ -60,6 +71,8 @@ def _load_cross_encoder() -> CrossEncoder | None:
         from sentence_transformers import CrossEncoder
 
         _cross_encoder_model = CrossEncoder(settings.reranker_model)
+        _cross_encoder_error = None
+        _cross_encoder_failed_at = None
         logger.info(
             "Cross-encoder model loaded",
             extra_fields={"model": settings.reranker_model},
@@ -67,6 +80,7 @@ def _load_cross_encoder() -> CrossEncoder | None:
         return _cross_encoder_model
     except Exception as e:
         _cross_encoder_error = str(e)
+        _cross_encoder_failed_at = time.monotonic()
         logger.warning(
             f"Failed to load cross-encoder model, will use BM25 fallback: {e}",
             extra_fields={

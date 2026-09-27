@@ -38,7 +38,11 @@ class StrategyResult:
         trace: List of dicts containing strategy-specific reasoning trace (tool calls,
             graph walks, retrieval steps) for UI inspection. Defaults to empty list.
         extra: Dict for strategy-specific metadata and extra information. Defaults to
-            empty dict.
+            empty dict. Every strategy that retrieves sets the same evaluation keys:
+            ``retrieved_ids`` (ranked chunk ids of the context it used),
+            ``retrieved_docs`` (the filename behind each of those ids) and
+            ``context_text`` (the context exactly as the generator saw it).
+        trace_id: Id of the request trace, retrievable from ``/traces/{id}``.
 
     Example:
         >>> result = StrategyResult(
@@ -60,6 +64,7 @@ class StrategyResult:
     iterations: int = 1
     trace: list[dict] = field(default_factory=list)
     extra: dict = field(default_factory=dict)
+    trace_id: str | None = None
 
 
 class Strategy(ABC):
@@ -88,6 +93,9 @@ class Strategy(ABC):
     """
 
     name: str = "base"
+    # Generation provider. Only the classic strategy honours it; graph and
+    # agentic need Anthropic features and always run there.
+    provider: str = "anthropic"
 
     @abstractmethod
     async def run(

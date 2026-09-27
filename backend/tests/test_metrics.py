@@ -180,10 +180,10 @@ class TestRunEvaluation:
             '{"question": "one"}\n{"question": "two"}\n', encoding="utf-8"
         )
 
-        answer = AsyncMock(return_value=_fake_answer())
+        answer = AsyncMock(return_value=(_fake_answer(), None))
 
         with (
-            patch("app.eval.metrics.answer_question", new=answer),
+            patch("app.eval.metrics.answer_question_detailed", new=answer),
             patch(
                 "app.eval.metrics.score_example",
                 new=AsyncMock(side_effect=[EvalScore(**SCORES), None]),
@@ -202,10 +202,10 @@ class TestRunEvaluation:
         monkeypatch.setattr("app.eval.metrics.RUNS_DIR", tmp_path / "runs")
         (tmp_path / "d.jsonl").write_text('{"question": "one"}\n', encoding="utf-8")
 
-        answer = AsyncMock(return_value=_fake_answer())
+        answer = AsyncMock(return_value=(_fake_answer(), None))
 
         with (
-            patch("app.eval.metrics.answer_question", new=answer),
+            patch("app.eval.metrics.answer_question_detailed", new=answer),
             patch("app.eval.metrics.score_example", new=AsyncMock(return_value=None)),
         ):
             result = await run_evaluation(dataset="d")

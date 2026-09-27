@@ -59,10 +59,25 @@ def score_retrieval(
         >>> score.recall  # did retrieval surface the document at all
         1.0
     """
+    return score_retrieval_documents(expected_sources, retrieved_documents(sources))
+
+
+def score_retrieval_documents(
+    expected_sources: list[str] | None, retrieved: list[str]
+) -> RetrievalScore | None:
+    """Score retrieval for one example from a ranked list of documents.
+
+    Args:
+        expected_sources: Documents the golden example expects.
+        retrieved: Documents behind the retrieved context, best-ranked first
+            and deduplicated.
+
+    Returns:
+        A :class:`RetrievalScore`, or ``None`` when nothing is expected.
+    """
     if not expected_sources:
         return None
 
-    retrieved = retrieved_documents(sources)
     expected_keys = {_normalize(e) for e in expected_sources}
     retrieved_keys = [_normalize(r) for r in retrieved]
 

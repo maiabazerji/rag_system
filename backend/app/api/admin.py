@@ -2,6 +2,9 @@
 
 Every route requires the ``X-Admin-Key`` header to match ``ADMIN_KEY``. While
 that setting is unset the whole router returns 503.
+
+Handlers are plain ``def``: they make blocking SQLAlchemy calls, and FastAPI
+runs sync handlers in its threadpool instead of on the event loop.
 """
 from __future__ import annotations
 
@@ -70,7 +73,7 @@ class APIKeyDetail(BaseModel):
         "stored -- only its SHA-256 hash is kept. Save it immediately."
     ),
 )
-async def create_key(request: CreateKeyRequest) -> APIKeyInfo:
+def create_key(request: CreateKeyRequest) -> APIKeyInfo:
     """Create an API key and return it in plaintext (once).
 
     Args:
@@ -96,7 +99,7 @@ async def create_key(request: CreateKeyRequest) -> APIKeyInfo:
     summary="List API keys",
     description="Lists every API key with its request and token usage over the last 24 hours.",
 )
-async def list_keys() -> list[APIKeyDetail]:
+def list_keys() -> list[APIKeyDetail]:
     """List all API keys with 24-hour usage totals."""
     return [APIKeyDetail(**key) for key in list_api_keys()]
 
@@ -106,7 +109,7 @@ async def list_keys() -> list[APIKeyDetail]:
     summary="Deactivate an API key",
     description="Deactivates a key. It stops working on the very next request.",
 )
-async def deactivate_key(key_id: int) -> dict:
+def deactivate_key(key_id: int) -> dict:
     """Deactivate an API key.
 
     Args:
@@ -128,7 +131,7 @@ async def deactivate_key(key_id: int) -> dict:
     summary="Check auth database connectivity",
     description="Verifies that the API key database is reachable.",
 )
-async def health() -> dict:
+def health() -> dict:
     """Check that the auth database answers a trivial query."""
     try:
         with session_scope() as db:

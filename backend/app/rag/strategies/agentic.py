@@ -44,6 +44,7 @@ from app.schemas import Source
 logger = get_structured_logger(__name__)
 
 _RESERVED = {"chunk_id", "doc_id", "text"}
+_MAX_SEARCH_TOP_K = 12
 
 _SYSTEM = (
     "You are a research agent answering questions strictly from a private document corpus.\n"
@@ -66,7 +67,12 @@ _TOOLS = [
             "type": "object",
             "properties": {
                 "query": {"type": "string", "description": "what to search for"},
-                "top_k": {"type": "integer", "default": 5, "minimum": 1, "maximum": 12},
+                "top_k": {
+                    "type": "integer",
+                    "default": 5,
+                    "minimum": 1,
+                    "maximum": _MAX_SEARCH_TOP_K,
+                },
             },
             "required": ["query"],
         },
@@ -99,6 +105,21 @@ _TOOLS = [
         },
     },
 ]
+
+
+def _retrieval_extra(seen_chunks: dict[str, dict]) -> dict:
+    """Describe everything the agent read, in the order it first saw it.
+
+    The agent's "retrieved context" is every chunk its searches surfaced, so
+    that is what retrieval metrics and the judge are given -- the same basis as
+    the reranked context of the other strategies.
+    """
+    return {
+        "chunks_explored": list(seen_chunks.keys()),
+        "retrieved_ids": list(seen_chunks.keys()),
+        "retrieved_docs": [v.get("filename") for v in seen_chunks.values()],
+        "context_text": "\n\n".join(f"[{cid}]\n{v['text']}" for cid, v in seen_chunks.items()),
+    }
 
 
 class AgenticRAG(Strategy):
@@ -194,7 +215,12 @@ class AgenticRAG(Strategy):
                     },
                 )
                 return json.dumps([], ensure_ascii=False)
-            k = int(args.get("top_k", 5))
+            try:
+                k = int(args.get("top_k", 5))
+            except (TypeError, ValueError):
+                k = 5
+            # The schema says 1-12, but tool input is model output: clamp it.
+            k = max(1, min(k, _MAX_SEARCH_TOP_K))
             logger.debug(
                 "Search tool invoked",
                 extra_fields={
@@ -332,6 +358,7 @@ class AgenticRAG(Strategy):
             },
             max_iters=settings.agentic_max_iters,
             max_tokens=settings.max_answer_tokens,
+            terminal_tools={"finish"},
         )
 
         if final:
@@ -369,17 +396,33 @@ class AgenticRAG(Strategy):
                 output_tokens=out["output_tokens"],
                 iterations=out["iterations"],
                 trace=out["trace"],
-                extra={"chunks_explored": list(seen_chunks.keys())},
+                extra=_retrieval_extra(seen_chunks),
             )
 
-        # Agent never called finish but has substantial output
-        has_answer = out["text"] and len(out["text"].strip()) > 50
+        # The agent never called `finish`. If the loop stopped on a provider
+        # error or the step limit, its text is a diagnostic, not an answer.
+        stop_reason = out.get("stop_reason", "end_turn")
+        failed = bool(out.get("error")) or stop_reason in ("provider_error", "max_iters")
+        text = (out.get("text") or "").strip()
+        if failed:
+            answer = (
+                "The agent could not finish: the model provider failed mid-run. "
+                "Try again shortly."
+                if stop_reason == "provider_error"
+                else "The agent reached its step limit without finding a grounded answer."
+            )
+            has_answer = False
+        else:
+            # The model ended its turn with prose instead of calling `finish`.
+            has_answer = len(text) > 50
+            answer = text or "(agent stopped without finishing)"
         logger.info(
             "Agentic RAG strategy completed without finish",
             extra_fields={
                 "strategy": "agentic",
                 "model": model,
                 "has_answer": has_answer,
+                "stop_reason": stop_reason,
                 "input_tokens": out["input_tokens"],
                 "output_tokens": out["output_tokens"],
                 "iterations": out["iterations"],
@@ -389,7 +432,7 @@ class AgenticRAG(Strategy):
             },
         )
         return StrategyResult(
-            answer=out["text"] or "(agent stopped without finishing)",
+            answer=answer,
             sources=[
                 Source(
                     chunk_id=c,
@@ -400,9 +443,10 @@ class AgenticRAG(Strategy):
             ]
             or [Source(chunk_id="none", quote="")],
             refusal=not has_answer,
-            confidence=0.8 if has_answer else 0.3,
+            confidence=0.5 if has_answer else 0.0,
             input_tokens=out["input_tokens"],
             output_tokens=out["output_tokens"],
             iterations=out["iterations"],
             trace=out["trace"],
+            extra={**_retrieval_extra(seen_chunks), "stop_reason": stop_reason},
         )

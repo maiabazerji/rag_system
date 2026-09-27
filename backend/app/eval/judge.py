@@ -1,11 +1,17 @@
 """LLM-as-judge scoring for RAG answers.
 
-Scores an answer along four dimensions using Claude as an impartial judge:
+Scores an answer along five dimensions using Claude as an impartial judge:
 
 1. Faithfulness: are claims grounded in retrieved context (no hallucination)?
 2. Answer Relevance: does the answer address the user's question?
 3. Context Precision: are the retrieved chunks relevant and well ranked?
 4. Context Recall: is all the information needed to answer present in context?
+5. Answer Correctness: does the answer agree with the golden ideal answer?
+   Only scored when the example has one; otherwise it is ``None``.
+
+The judge sees the full context the generator actually used (not the short
+source quotes shown in the UI), and runs at temperature 0 where the model
+accepts it, so repeated runs of the same answer score the same.
 
 Failure policy: when the judge cannot produce a score, this module returns
 ``None`` rather than a plausible-looking number. A broken judge must never be
@@ -28,19 +34,27 @@ from app.rag.providers.anthropic_provider import generate_with_usage
 
 logger = logging.getLogger(__name__)
 
-DIMENSIONS = (
+# Dimensions the judge must always score.
+REQUIRED_DIMENSIONS = (
     "faithfulness",
     "answer_relevance",
     "context_precision",
     "context_recall",
 )
+# Scored only when the golden example carries an ideal answer.
+OPTIONAL_DIMENSIONS = ("answer_correctness",)
+DIMENSIONS = REQUIRED_DIMENSIONS + OPTIONAL_DIMENSIONS
+
+# Upper bound on context characters sent to the judge. Generous enough for the
+# full reranked context of every strategy; it only guards against runaway input.
+MAX_JUDGE_CONTEXT_CHARS = 60_000
 
 JUDGE_SYSTEM = (
     "You are an impartial evaluator of retrieval-augmented answers. "
     "You reply with a single JSON object and nothing else -- no prose, no code fences."
 )
 
-JUDGE_PROMPT = """Score the answer below on four dimensions.
+JUDGE_PROMPT = """Score the answer below on {n_dimensions} dimensions.
 
 **Faithfulness (0-1):** What fraction of claims in the answer are grounded in the retrieved context?
 - 1.0 = all claims supported by context
@@ -61,17 +75,24 @@ JUDGE_PROMPT = """Score the answer below on four dimensions.
 - 1.0 = everything needed to answer is in context
 - 0.5 = some needed info is missing
 - 0.0 = critical info missing
-
+{correctness_rubric}
 Question: {question}
 
-Retrieved Context:
+Retrieved Context (exactly what the answering system was given):
 {context}
-
+{ideal_block}
 Generated Answer:
 {answer}
 
 Respond with exactly this JSON shape:
-{{"faithfulness": <0-1>, "answer_relevance": <0-1>, "context_precision": <0-1>, "context_recall": <0-1>, "reasoning": "brief justification"}}"""
+{json_shape}"""
+
+CORRECTNESS_RUBRIC = """
+**Answer Correctness (0-1):** Does the answer agree with the reference answer?
+- 1.0 = states the same facts as the reference, nothing contradicting it
+- 0.5 = partially correct or missing key facts from the reference
+- 0.0 = contradicts the reference or is wrong
+"""
 
 
 def _extract_json(text: str) -> dict[str, Any]:
@@ -121,21 +142,49 @@ def _clamp_score(raw: Any, dimension: str) -> float:
     return max(0.0, min(1.0, value))
 
 
+def _build_prompt(
+    question: str, answer: str, context: list[str], ideal_answer: str | None
+) -> str:
+    """Render the judge prompt, with the correctness dimension when possible."""
+    context_str = "\n\n".join(f"[{i}] {c}" for i, c in enumerate(context))
+    if len(context_str) > MAX_JUDGE_CONTEXT_CHARS:
+        context_str = context_str[:MAX_JUDGE_CONTEXT_CHARS] + "\n[... context truncated ...]"
+
+    dims = list(REQUIRED_DIMENSIONS)
+    if ideal_answer:
+        dims += list(OPTIONAL_DIMENSIONS)
+    shape = ", ".join(f'"{d}": <0-1>' for d in dims)
+    return JUDGE_PROMPT.format(
+        n_dimensions=len(dims),
+        correctness_rubric=CORRECTNESS_RUBRIC if ideal_answer else "",
+        question=question,
+        context=context_str or "(no context)",
+        ideal_block=f"\nReference Answer:\n{ideal_answer}\n" if ideal_answer else "",
+        answer=answer,
+        json_shape="{" + shape + ', "reasoning": "brief justification"}',
+    )
+
+
 async def judge(
-    question: str, answer: str, context: list[str]
+    question: str,
+    answer: str,
+    context: list[str],
+    ideal_answer: str | None = None,
 ) -> dict[str, Any] | None:
-    """Score a RAG answer on four dimensions using Claude.
+    """Score a RAG answer using Claude.
 
     Args:
         question: The question that was answered.
         answer: The answer text produced by the RAG system.
-        context: Retrieved context chunks given to the generator. Only the
-            first five are included in the prompt.
+        context: The context the generator was given, in full.
+        ideal_answer: The golden reference answer, if the example has one.
+            Enables the ``answer_correctness`` dimension.
 
     Returns:
-        Dict with a float in [0, 1] for each of the four dimensions plus a
-        ``reasoning`` string -- or ``None`` if the judge call failed, its
-        response could not be parsed, or a score was missing. Callers must
+        Dict with a float in [0, 1] for each required dimension,
+        ``answer_correctness`` (a float, or ``None`` without an ideal answer)
+        and a ``reasoning`` string -- or ``None`` if the judge call failed,
+        its response could not be parsed, or a score was missing. Callers must
         treat ``None`` as "not measured", never as a score.
 
     Raises:
@@ -146,12 +195,7 @@ async def judge(
         >>> if scores is None:
         ...     print("judge unavailable -- example excluded from aggregate")
     """
-    context_str = "\n\n".join(f"[{i}] {c}" for i, c in enumerate(context[:5]))
-    prompt = JUDGE_PROMPT.format(
-        question=question,
-        context=context_str or "(no context)",
-        answer=answer,
-    )
+    prompt = _build_prompt(question, answer, context, ideal_answer)
 
     try:
         result = await generate_with_usage(
@@ -159,6 +203,7 @@ async def judge(
             prompt=prompt,
             system=JUDGE_SYSTEM,
             max_tokens=1024,
+            temperature=0.0,
         )
     except Exception as e:
         logger.warning(
@@ -171,8 +216,10 @@ async def judge(
     try:
         parsed = _extract_json(result["text"])
         scores: dict[str, Any] = {
-            dim: _clamp_score(parsed.get(dim), dim) for dim in DIMENSIONS
+            dim: _clamp_score(parsed.get(dim), dim) for dim in REQUIRED_DIMENSIONS
         }
+        for dim in OPTIONAL_DIMENSIONS:
+            scores[dim] = _clamp_score(parsed.get(dim), dim) if ideal_answer else None
     except ValueError as e:
         logger.warning(
             "Judge response unusable (%s); example will be excluded from aggregates.", e

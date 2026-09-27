@@ -10,6 +10,7 @@ from app.auth import init_db as init_auth_db
 from app.config import settings
 from app.logging_config import get_structured_logger, setup_logging
 from app.middleware.request_id import RequestIDMiddleware, get_request_id
+from app.rag.generate import public_provider_error
 from app.rag.providers import MissingKeyError, ProviderError
 from app.rag.providers.anthropic_provider import close_client as close_anthropic_client
 
@@ -106,7 +107,8 @@ async def global_exception_handler(request: Request, exc: Exception):
             content={
                 "code": "provider_error",
                 "message": "External service unavailable.",
-                "detail": str(exc),
+                # Never the raw exception text: it can carry upstream bodies.
+                "detail": public_provider_error(exc),
                 "request_id": request_id,
             },
         )
@@ -140,7 +142,6 @@ async def health() -> dict:
         "providers": {
             "anthropic": bool(settings.anthropic_api_key),
             "openai": bool(settings.openai_api_key),
-            "langfuse": bool(settings.langfuse_public_key and settings.langfuse_secret_key),
             "wandb": bool(settings.wandb_api_key),
         },
     }

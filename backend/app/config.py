@@ -1,4 +1,5 @@
 import logging
+from pathlib import Path
 from urllib.parse import urlparse
 
 from pydantic import Field, field_validator
@@ -6,18 +7,18 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 logger = logging.getLogger(__name__)
 
-# Anthropic models this project has been exercised against. Selecting a model
+# Anthropic models this project has been exercised against. Configuring a model
 # outside this set is a warning, not an error -- new models ship faster than
-# this list is updated. Retired IDs are deliberately absent.
+# this list is updated -- but per-request `model` overrides are restricted to
+# this set plus the configured models and EXTRA_ALLOWED_MODELS. Retired IDs are
+# deliberately absent.
 VALID_ANTHROPIC_MODELS = {
     "claude-fable-5-1",
+    "claude-opus-5-5",
     "claude-opus-5",
-    "claude-opus-4-8",
-    "claude-opus-4-7",
-    "claude-opus-4-6",
     "claude-sonnet-5",
-    "claude-sonnet-4-6",
-    "claude-haiku-4-5",
+    "claude-haiku-4-5-20251001",
+    "claude-haiku-4-5",  # alias of the snapshot above
 }
 
 # OpenAI models
@@ -36,6 +37,11 @@ VALID_STRATEGIES = {"classic", "graph", "agentic"}
 
 # Wandb modes
 VALID_WANDB_MODES = {"online", "offline", "disabled"}
+
+# Repository root when running from a checkout (backend/app/config.py -> repo).
+# In a container the package may be installed elsewhere, which is why the data
+# directory is a setting rather than derived from this path alone.
+_REPO_ROOT = Path(__file__).resolve().parents[2]
 
 
 def _validate_url(value: str, name: str, *, schemes: tuple[str, ...] | None = None) -> str:
@@ -170,10 +176,10 @@ class Settings(BaseSettings):
 
     # Evaluation Models
     judge_model: str = Field(
-        default="claude-opus-5", description="Claude model for LLM-as-judge evaluation."
+        default="claude-opus-5-5", description="Claude model for LLM-as-judge evaluation."
     )
     graph_extraction_model: str = Field(
-        default="claude-haiku-4-5",
+        default="claude-haiku-4-5-20251001",
         description="Claude model for knowledge graph extraction.",
     )
     agentic_model: str = Field(
@@ -210,7 +216,23 @@ class Settings(BaseSettings):
         description="Directory for knowledge graph data. Use an absolute path in Docker.",
     )
 
+    # Per-request model overrides
+    extra_allowed_models: str = Field(
+        default="",
+        description=(
+            "Comma-separated model IDs accepted as per-request overrides in "
+            "addition to the built-in known-good list and the configured models."
+        ),
+    )
+
     # Evaluation
+    data_dir: str = Field(
+        default="",
+        description=(
+            "Directory holding golden/ datasets and eval_runs/. Defaults to the "
+            "repository's data/ directory; set an absolute path in Docker."
+        ),
+    )
     eval_concurrency: int = Field(
         default=4, ge=1, le=32, description="Golden examples evaluated in parallel."
     )
@@ -252,6 +274,43 @@ class Settings(BaseSettings):
     def cors_origin_list(self) -> list[str]:
         """CORS origins as a cleaned list, ignoring stray whitespace and blanks."""
         return [o.strip() for o in self.cors_origins.split(",") if o.strip()]
+
+    @property
+    def data_path(self) -> Path:
+        """Resolved data directory (see ``data_dir``).
+
+        Falls back to ``<repo>/data`` when it exists, else ``./data`` relative
+        to the working directory -- never to a path computed from the install
+        location, which in a container points somewhere unrelated.
+        """
+        if self.data_dir:
+            return Path(self.data_dir).expanduser()
+        repo_data = _REPO_ROOT / "data"
+        if repo_data.is_dir():
+            return repo_data
+        return Path("data").resolve()
+
+    def allowed_models(self, provider: str) -> set[str]:
+        """Model IDs a request may select for ``provider``.
+
+        The known-good list for the provider, plus every model this deployment
+        is configured to use, plus ``EXTRA_ALLOWED_MODELS``.
+        """
+        extra = {m.strip() for m in self.extra_allowed_models.split(",") if m.strip()}
+        if provider == "openai":
+            return VALID_OPENAI_MODELS | {self.openai_generator_model} | extra
+        if provider == "local":
+            return {self.ollama_model} | extra
+        return (
+            VALID_ANTHROPIC_MODELS
+            | {
+                self.generator_model,
+                self.agentic_model,
+                self.judge_model,
+                self.graph_extraction_model,
+            }
+            | extra
+        )
 
     @property
     def max_upload_bytes(self) -> int:

@@ -199,11 +199,11 @@ class TestPromptRendering:
         assert "a < b" in out
         assert "&" in out and "&amp;" not in out
 
-    def test_unknown_version_falls_back_to_default(self):
-        from app.prompts.loader import render_prompt
+    def test_unknown_version_is_an_error_not_a_silent_fallback(self):
+        from app.prompts.loader import UnknownPromptVersionError, render_prompt
 
-        out = render_prompt("no-such-version", question="q", context="c")
-        assert "q" in out and "c" in out
+        with pytest.raises(UnknownPromptVersionError):
+            render_prompt("no-such-version", question="q", context="c")
 
     def test_missing_variable_is_an_error_not_a_blank(self, tmp_path):
         from jinja2 import UndefinedError

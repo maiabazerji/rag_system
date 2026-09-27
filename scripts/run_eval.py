@@ -58,7 +58,11 @@ def _print_run(result: dict) -> None:
         print(f"\nAnswer quality (LLM judge, {result['n_scored']} examples):")
         width = max(len(d) for d in DIMENSIONS)
         for dimension in DIMENSIONS:
-            value = aggregate[dimension]
+            value = aggregate.get(dimension)
+            if value is None:
+                # answer_correctness needs ideal answers in the dataset.
+                print(f"  {dimension:<{width}}   -    (not scored)")
+                continue
             print(f"  {dimension:<{width}} {value:.3f}  {_bar(value)}")
     elif not retrieval:
         print("\nNothing could be measured.")
@@ -91,6 +95,7 @@ def _print_comparison(results: list[dict]) -> None:
         ("Answer relevance", "aggregate", "answer_relevance"),
         ("Context precision", "aggregate", "context_precision"),
         ("Context recall", "aggregate", "context_recall"),
+        ("Answer correctness", "aggregate", "answer_correctness"),
     ]
 
     header = f"{'Metric':<22}" + "".join(f"{r['strategy']:>13}" for r in results)
