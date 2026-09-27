@@ -10,6 +10,20 @@ Keys are stored as SHA-256 hashes. The plaintext key is shown once, at creation.
 Rate limiting and usage accounting both hang off a single row written by the
 :func:`require_api_key` dependency *before* the handler runs, so every protected
 endpoint is counted -- not only the ones whose handler remembers to log.
+
+The limit is on *units* per minute, not requests. A plain request costs one
+unit; endpoints that fan out to many model calls re-price their row with
+:func:`charge` before doing the work (one unit per compare variant, per
+strategy -- three for agentic -- and per evaluated example).
+
+Check-and-record is atomic: the key's own row is locked (``SELECT ... FOR
+UPDATE``) for the transaction that counts the window and writes the usage row,
+so concurrent requests on one key are serialized instead of all passing the
+check before any of them is recorded.
+
+The database calls here are synchronous. The dependencies are plain ``def`` so
+FastAPI runs them in its threadpool; async handlers call :func:`charge` and
+:func:`record_tokens` through ``run_in_threadpool``.
 """
 from __future__ import annotations
 
@@ -21,7 +35,7 @@ from datetime import UTC, datetime, timedelta
 from typing import Any
 
 from fastapi import Header, HTTPException, Request
-from sqlalchemy import DateTime, String, create_engine, func, select
+from sqlalchemy import DateTime, String, create_engine, func, inspect, select, text
 from sqlalchemy.orm import (
     DeclarativeBase,
     Mapped,
@@ -40,6 +54,15 @@ class Base(DeclarativeBase):
 
 KEY_PREFIX = "sk_"
 _ANONYMOUS: dict[str, Any] = {"id": None, "name": "anonymous", "usage_id": None}
+
+# Rate-limit units per run of a strategy. Agentic makes up to AGENTIC_MAX_ITERS
+# model calls per question, so it is priced above the single-call strategies.
+STRATEGY_UNITS: dict[str, int] = {"classic": 1, "graph": 1, "agentic": 3}
+
+
+def strategy_units(strategy: str) -> int:
+    """Rate-limit cost of running one question through ``strategy``."""
+    return STRATEGY_UNITS.get(strategy, 1)
 
 
 class APIKey(Base):
@@ -75,6 +98,8 @@ class APIKeyUsage(Base):
     tokens_input: Mapped[int] = mapped_column(default=0)
     tokens_output: Mapped[int] = mapped_column(default=0)
     model: Mapped[str | None] = mapped_column(String(256), default=None)
+    # Rate-limit units this request consumed (see `charge`).
+    units: Mapped[int] = mapped_column(default=1, server_default=text("1"))
 
 
 _engine = None
@@ -94,7 +119,23 @@ def init_db() -> None:
     _engine = create_engine(settings.postgres_url, echo=False, pool_pre_ping=True)
     _SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=_engine)
     Base.metadata.create_all(bind=_engine)
+    _add_missing_columns(_engine)
     logger.info("Auth database initialized")
+
+
+def _add_missing_columns(engine) -> None:
+    """Add columns introduced after a database was first created.
+
+    ``create_all`` creates missing tables but never alters existing ones, so a
+    database from an older release lacks ``api_key_usage.units``.
+    """
+    columns = {c["name"] for c in inspect(engine).get_columns("api_key_usage")}
+    if "units" not in columns:
+        with engine.begin() as conn:
+            conn.execute(
+                text("ALTER TABLE api_key_usage ADD COLUMN units INTEGER NOT NULL DEFAULT 1")
+            )
+        logger.info("Added api_key_usage.units column")
 
 
 @contextmanager
@@ -147,13 +188,21 @@ def _parse_bearer(authorization: str | None) -> str:
     return token.strip()
 
 
-def _authenticate(db: Session, key: str) -> APIKey:
+def _authenticate(db: Session, key: str, *, lock: bool = False) -> APIKey:
     """Look up an active API key by hash.
+
+    Args:
+        db: Open session.
+        key: The plaintext key from the request.
+        lock: Take a row lock on the key (``FOR UPDATE``) for the rest of the
+            transaction. Serializes rate-limit check-and-record per key.
 
     Raises:
         HTTPException: 401 if the key is unknown or deactivated.
     """
     stmt = select(APIKey).where(APIKey.key_hash == hash_key(key))
+    if lock:
+        stmt = stmt.with_for_update()
     row = db.execute(stmt).scalar_one_or_none()
 
     # Constant-time comparison on the hash keeps the failure path uniform even
@@ -165,42 +214,62 @@ def _authenticate(db: Session, key: str) -> APIKey:
     return row
 
 
-def _enforce_rate_limit(db: Session, api_key_id: int, rpm_limit: int) -> None:
-    """Count this key's requests in the last minute and reject over-limit ones.
+def _units_in_window(
+    db: Session, api_key_id: int, *, exclude_usage_id: int | None = None
+) -> int:
+    """Rate-limit units this key consumed in the last minute."""
+    one_minute_ago = datetime.now(UTC) - timedelta(minutes=1)
+    stmt = (
+        select(func.coalesce(func.sum(APIKeyUsage.units), 0))
+        .where(APIKeyUsage.api_key_id == api_key_id)
+        .where(APIKeyUsage.timestamp >= one_minute_ago)
+    )
+    if exclude_usage_id is not None:
+        stmt = stmt.where(APIKeyUsage.id != exclude_usage_id)
+    return int(db.execute(stmt).scalar_one())
+
+
+def _rate_limited(api_key_id: int, used: int, units: int, rpm_limit: int) -> HTTPException:
+    logger.warning(
+        "Rate limit exceeded",
+        extra_fields={
+            "api_key_id": api_key_id,
+            "units_in_window": used,
+            "units_requested": units,
+            "limit": rpm_limit,
+        },
+    )
+    return HTTPException(
+        status_code=429,
+        detail=f"Rate limit exceeded: {rpm_limit} requests per minute",
+        headers={"Retry-After": "60"},
+    )
+
+
+def _enforce_rate_limit(
+    db: Session, api_key_id: int, rpm_limit: int, units: int = 1
+) -> None:
+    """Reject the request if ``units`` more would exceed the per-minute limit.
+
+    Call with the key's row locked (``_authenticate(..., lock=True)``) and
+    record the usage in the same transaction, or the check can race.
 
     Raises:
         HTTPException: 429 if the key exceeded its per-minute allowance.
     """
-    one_minute_ago = datetime.now(UTC) - timedelta(minutes=1)
-    recent = db.execute(
-        select(func.count())
-        .select_from(APIKeyUsage)
-        .where(APIKeyUsage.api_key_id == api_key_id)
-        .where(APIKeyUsage.timestamp >= one_minute_ago)
-    ).scalar_one()
-
-    if recent >= rpm_limit:
-        logger.warning(
-            "Rate limit exceeded",
-            extra_fields={
-                "api_key_id": api_key_id,
-                "requests_in_window": recent,
-                "limit": rpm_limit,
-            },
-        )
-        raise HTTPException(
-            status_code=429,
-            detail=f"Rate limit exceeded: {rpm_limit} requests per minute",
-            headers={"Retry-After": "60"},
-        )
+    used = _units_in_window(db, api_key_id)
+    if used + units > rpm_limit:
+        raise _rate_limited(api_key_id, used, units, rpm_limit)
 
 
-async def require_api_key(
+def require_api_key(
     request: Request, authorization: str | None = Header(default=None)
 ) -> dict[str, Any]:
     """FastAPI dependency enforcing API key auth, rate limits and accounting.
 
     A no-op returning an anonymous principal when ``REQUIRE_API_KEY`` is off.
+    Synchronous on purpose: FastAPI runs it in the threadpool, so the blocking
+    database round trips do not stall the event loop.
 
     Args:
         request: The incoming request, used to record the endpoint path.
@@ -222,7 +291,7 @@ async def require_api_key(
 
     try:
         with session_scope() as db:
-            api_key = _authenticate(db, key)
+            api_key = _authenticate(db, key, lock=True)
             _enforce_rate_limit(db, api_key.id, api_key.requests_per_minute)
 
             api_key.last_used = datetime.now(UTC)
@@ -237,6 +306,54 @@ async def require_api_key(
         logger.error(
             f"Auth backend unavailable: {type(e).__name__}: {e}",
             extra_fields={"error_type": type(e).__name__, "endpoint": endpoint},
+        )
+        raise HTTPException(
+            status_code=503, detail="Authentication service is unavailable."
+        ) from e
+
+
+def charge(auth: dict[str, Any], units: int) -> None:
+    """Price this request at ``units`` rate-limit units, before doing the work.
+
+    :func:`require_api_key` records every request as one unit. Endpoints that
+    fan out (several variants, strategies or examples per request) call this to
+    re-price their usage row, atomically with the limit check.
+
+    A request larger than the whole per-minute allowance is admitted only when
+    the key has nothing else in the window, so a big evaluation remains
+    possible but then consumes the key's budget for the following minute.
+
+    A no-op for anonymous principals and for ``units <= 1``.
+
+    Args:
+        auth: The principal returned by :func:`require_api_key`.
+        units: Total cost of this request.
+
+    Raises:
+        HTTPException: 429 if the charge would exceed the key's limit, 503 if
+            the auth database is unreachable.
+    """
+    usage_id = auth.get("usage_id")
+    key_id = auth.get("id")
+    if usage_id is None or key_id is None or units <= 1:
+        return
+    try:
+        with session_scope() as db:
+            api_key = db.execute(
+                select(APIKey).where(APIKey.id == key_id).with_for_update()
+            ).scalar_one()
+            others = _units_in_window(db, key_id, exclude_usage_id=usage_id)
+            if others > 0 and others + units > api_key.requests_per_minute:
+                raise _rate_limited(key_id, others, units, api_key.requests_per_minute)
+            usage = db.get(APIKeyUsage, usage_id)
+            if usage is not None:
+                usage.units = units
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(
+            f"Auth backend unavailable while charging: {type(e).__name__}: {e}",
+            extra_fields={"error_type": type(e).__name__},
         )
         raise HTTPException(
             status_code=503, detail="Authentication service is unavailable."
@@ -389,16 +506,24 @@ def require_admin_key(x_admin_key: str | None = Header(default=None)) -> bool:
     return True
 
 
+# Short alias for the admin-only dependency.
+require_admin = require_admin_key
+
+
 __all__ = [
     "APIKey",
     "APIKeyUsage",
+    "STRATEGY_UNITS",
+    "charge",
     "create_api_key",
     "deactivate_api_key",
     "hash_key",
     "init_db",
     "list_api_keys",
     "record_tokens",
+    "require_admin",
     "require_admin_key",
     "require_api_key",
     "session_scope",
+    "strategy_units",
 ]

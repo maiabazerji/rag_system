@@ -1,8 +1,9 @@
 import asyncio
 
 from fastapi import APIRouter, Depends
+from fastapi.concurrency import run_in_threadpool
 
-from app.auth import record_tokens, require_api_key
+from app.auth import charge, record_tokens, require_api_key, strategy_units
 from app.logging_config import get_structured_logger
 from app.rag.generate import answer_question, run_strategy_raw
 from app.schemas import (
@@ -47,7 +48,13 @@ async def compare(req: CompareRequest, auth: dict = Depends(require_api_key)) ->
     Returns:
         The question and one result per variant, in request order. A variant
         that fails becomes a refusal row rather than failing the whole request.
+
+    Raises:
+        HTTPException: 429 if the variants together exceed the key's rate limit.
     """
+    await run_in_threadpool(
+        charge, auth, sum(strategy_units(v.strategy) for v in req.variants)
+    )
     results = await asyncio.gather(
         *(
             answer_question(
@@ -93,7 +100,9 @@ async def compare(req: CompareRequest, auth: dict = Depends(require_api_key)) ->
             total_out += r.output_tokens
             safe_results.append(r.model_dump())
 
-    record_tokens(auth, tokens_input=total_in, tokens_output=total_out)
+    await run_in_threadpool(
+        record_tokens, auth, tokens_input=total_in, tokens_output=total_out
+    )
     return {"question": req.question, "results": safe_results}
 
 
@@ -119,7 +128,12 @@ async def compare_strategies(
 
     Returns:
         The question and one comparison row per strategy, in request order.
+
+    Raises:
+        HTTPException: 429 if the strategies together exceed the key's rate
+            limit (agentic counts as three).
     """
+    await run_in_threadpool(charge, auth, sum(strategy_units(s) for s in req.strategies))
     results: list[StrategyComparison] = []
     total_in = total_out = 0
 
@@ -162,8 +176,11 @@ async def compare_strategies(
                 iterations=result.iterations,
                 trace=result.trace,
                 extra=result.extra,
+                trace_id=result.trace_id,
             )
         )
 
-    record_tokens(auth, tokens_input=total_in, tokens_output=total_out)
+    await run_in_threadpool(
+        record_tokens, auth, tokens_input=total_in, tokens_output=total_out, model=req.model
+    )
     return {"question": req.question, "results": [r.model_dump() for r in results]}

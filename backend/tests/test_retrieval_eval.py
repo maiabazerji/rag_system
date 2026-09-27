@@ -147,9 +147,9 @@ def golden(tmp_path, monkeypatch):
 class TestStrategyAwareEvaluation:
     async def test_strategy_reaches_the_pipeline(self, golden):
         """The regression: run_evaluation always evaluated 'classic'."""
-        answer = AsyncMock(return_value=_answer())
+        answer = AsyncMock(return_value=(_answer(), None))
         with (
-            patch("app.eval.metrics.answer_question", new=answer),
+            patch("app.eval.metrics.answer_question_detailed", new=answer),
             patch("app.eval.metrics.judge", new=AsyncMock(return_value=None)),
         ):
             result = await run_evaluation(dataset="d", strategy="agentic")
@@ -158,9 +158,9 @@ class TestStrategyAwareEvaluation:
         assert {c.kwargs["strategy"] for c in answer.await_args_list} == {"agentic"}
 
     async def test_defaults_to_classic(self, golden):
-        answer = AsyncMock(return_value=_answer())
+        answer = AsyncMock(return_value=(_answer(), None))
         with (
-            patch("app.eval.metrics.answer_question", new=answer),
+            patch("app.eval.metrics.answer_question_detailed", new=answer),
             patch("app.eval.metrics.judge", new=AsyncMock(return_value=None)),
         ):
             result = await run_evaluation(dataset="d")
@@ -169,9 +169,9 @@ class TestStrategyAwareEvaluation:
 
     async def test_retrieval_is_scored_even_when_the_judge_fails(self, golden):
         """Retrieval needs no model call, so it survives a dead judge."""
-        answer = AsyncMock(return_value=_answer(("a.md",)))
+        answer = AsyncMock(return_value=(_answer(("a.md",)), None))
         with (
-            patch("app.eval.metrics.answer_question", new=answer),
+            patch("app.eval.metrics.answer_question_detailed", new=answer),
             patch("app.eval.metrics.judge", new=AsyncMock(return_value=None)),
         ):
             result = await run_evaluation(dataset="d", strategy="graph")
@@ -185,7 +185,7 @@ class TestStrategyAwareEvaluation:
 
     async def test_per_example_carries_both_scores(self, golden):
         with (
-            patch("app.eval.metrics.answer_question", new=AsyncMock(return_value=_answer())),
+            patch("app.eval.metrics.answer_question_detailed", new=AsyncMock(return_value=(_answer(), None))),
             patch("app.eval.metrics.judge", new=AsyncMock(return_value=None)),
         ):
             result = await run_evaluation(dataset="d")
@@ -197,7 +197,7 @@ class TestStrategyAwareEvaluation:
 
     async def test_cost_block_is_reported(self, golden):
         with (
-            patch("app.eval.metrics.answer_question", new=AsyncMock(return_value=_answer())),
+            patch("app.eval.metrics.answer_question_detailed", new=AsyncMock(return_value=(_answer(), None))),
             patch("app.eval.metrics.judge", new=AsyncMock(return_value=None)),
         ):
             result = await run_evaluation(dataset="d")
@@ -209,8 +209,8 @@ class TestStrategyAwareEvaluation:
     async def test_refusals_are_counted(self, golden):
         with (
             patch(
-                "app.eval.metrics.answer_question",
-                new=AsyncMock(return_value=_answer(refusal=True)),
+                "app.eval.metrics.answer_question_detailed",
+                new=AsyncMock(return_value=(_answer(refusal=True), None)),
             ),
             patch("app.eval.metrics.judge", new=AsyncMock(return_value=None)),
         ):
@@ -221,7 +221,7 @@ class TestStrategyAwareEvaluation:
     async def test_run_file_is_named_per_strategy(self, golden):
         """Two strategies must not overwrite each other's run."""
         with (
-            patch("app.eval.metrics.answer_question", new=AsyncMock(return_value=_answer())),
+            patch("app.eval.metrics.answer_question_detailed", new=AsyncMock(return_value=(_answer(), None))),
             patch("app.eval.metrics.judge", new=AsyncMock(return_value=None)),
         ):
             await run_evaluation(dataset="d", strategy="classic")

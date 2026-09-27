@@ -4,7 +4,12 @@ import logging
 from dataclasses import dataclass
 from pathlib import Path
 
-from app.prompts.loader import get_prompt_manager, render_prompt
+from app.prompts.loader import (
+    UnknownPromptVersionError,
+    get_prompt_manager,
+    prompt_version_exists,
+    render_prompt,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -23,11 +28,21 @@ def load_prompt(version: str = "default") -> Prompt:
 
     Loads the raw template text without rendering variables.
     For safe template rendering with variables, use render_prompt() instead.
+
+    Raises:
+        UnknownPromptVersionError: If no template exists for ``version``.
     """
+    if not prompt_version_exists(version):
+        raise UnknownPromptVersionError(f"Unknown prompt_version '{version}'")
     path = PROMPTS_DIR / f"{version}.md"
-    if not path.exists():
-        path = PROMPTS_DIR / "default.md"
     return Prompt(name=path.stem, version=version, template=path.read_text(encoding="utf-8"))
 
 
-__all__ = ["Prompt", "load_prompt", "render_prompt", "get_prompt_manager"]
+__all__ = [
+    "Prompt",
+    "UnknownPromptVersionError",
+    "get_prompt_manager",
+    "load_prompt",
+    "prompt_version_exists",
+    "render_prompt",
+]

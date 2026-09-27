@@ -194,7 +194,11 @@ class GraphRAG(Strategy):
             },
         )
 
-        entities = await extract_question_entities(question)
+        extracted = await extract_question_entities(question)
+        # Entity extraction is a model call too; its tokens belong in the totals.
+        extract_in = int(getattr(extracted, "input_tokens", 0) or 0)
+        extract_out = int(getattr(extracted, "output_tokens", 0) or 0)
+        entities = list(extracted)
         logger.debug(
             "Question entities extracted",
             extra_fields={
@@ -288,6 +292,8 @@ class GraphRAG(Strategy):
                 sources=[Source(chunk_id="none", quote="")],
                 refusal=True,
                 confidence=0.0,
+                input_tokens=extract_in,
+                output_tokens=extract_out,
                 trace=trace,
             )
 
@@ -343,12 +349,15 @@ class GraphRAG(Strategy):
                 )
                 for c in ranked[:5]
             ],
-            input_tokens=out["input_tokens"],
-            output_tokens=out["output_tokens"],
+            input_tokens=out["input_tokens"] + extract_in,
+            output_tokens=out["output_tokens"] + extract_out,
             trace=trace,
             extra={
                 "entities": entities,
                 "related_entities": sorted(related_entities)[:10],
                 "subgraph": subgraph_text,
+                "retrieved_ids": [c.id for c in ranked],
+                "retrieved_docs": [c.metadata.get("filename") for c in ranked],
+                "context_text": augmented_ctx,
             },
         )

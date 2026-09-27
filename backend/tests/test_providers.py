@@ -34,6 +34,21 @@ def _response(text="Generated response text.", input_tokens=100, output_tokens=5
     return resp
 
 
+def _status_error(status: int) -> anthropic.APIStatusError:
+    """Build the SDK's typed error for an HTTP status, as the client raises it."""
+    import httpx
+
+    request = httpx.Request("POST", "https://api.anthropic.com/v1/messages")
+    response = httpx.Response(status, request=request)
+    cls = {
+        400: anthropic.BadRequestError,
+        404: anthropic.NotFoundError,
+        429: anthropic.RateLimitError,
+        503: anthropic.InternalServerError,
+    }[status]
+    return cls(f"HTTP {status}", response=response, body=None)
+
+
 @pytest.fixture
 def mock_client():
     """Patch the shared client with an AsyncMock and hand it to the test."""
@@ -111,6 +126,20 @@ class TestGenerateWithUsage:
         result = await ap.generate_with_usage(model="claude-sonnet-5", prompt="p")
         assert result["text"] == ""
 
+    async def test_temperature_is_sent_to_models_that_accept_it(self, mock_client):
+        await ap.generate_with_usage(
+            model="claude-haiku-4-5-20251001", prompt="p", temperature=0.0
+        )
+        assert mock_client.messages.create.call_args.kwargs["temperature"] == 0.0
+
+    @pytest.mark.parametrize(
+        "model", ["claude-opus-5-5", "claude-sonnet-5", "claude-fable-5-1", "claude-opus-5"]
+    )
+    async def test_temperature_is_dropped_for_models_that_reject_it(self, mock_client, model):
+        """These models 400 on sampling parameters; the judge must still run on them."""
+        await ap.generate_with_usage(model=model, prompt="p", temperature=0.0)
+        assert "temperature" not in mock_client.messages.create.call_args.kwargs
+
     async def test_generate_returns_just_the_text(self, mock_client):
         assert await ap.generate(model="claude-sonnet-5", prompt="p") == (
             "Generated response text."
@@ -134,11 +163,77 @@ class TestCircuitBreaker:
 
     async def test_failures_are_recorded(self, mock_client, settings, monkeypatch):
         monkeypatch.setattr(settings, "provider_max_retries", 0)
-        mock_client.messages.create = AsyncMock(side_effect=ValueError("nope"))
+        mock_client.messages.create = AsyncMock(side_effect=ConnectionError("down"))
 
-        with pytest.raises(ValueError):
-            await ap._create_message(model="claude-sonnet-5", max_tokens=10, messages=[])
+        with pytest.raises(ConnectionError):
+            await ap._create_message.__wrapped__(model="claude-sonnet-5", max_tokens=10, messages=[])
         assert ap._anthropic_breaker.failure_count == 1
+
+    @pytest.mark.parametrize("status", [400, 404, 429])
+    async def test_client_errors_and_rate_limits_do_not_count(
+        self, mock_client, settings, monkeypatch, status
+    ):
+        """A bad request or back-pressure is not an outage; it must not open the breaker."""
+        monkeypatch.setattr(settings, "provider_max_retries", 0)
+        err = _status_error(status)
+        mock_client.messages.create = AsyncMock(side_effect=err)
+        ap._anthropic_breaker.failure_count = 2
+
+        with pytest.raises(type(err)):
+            await ap._create_message.__wrapped__(model="claude-sonnet-5", max_tokens=10, messages=[])
+        # 4xx proves the service answered (reset); 429 proves nothing (unchanged).
+        assert ap._anthropic_breaker.failure_count == (2 if status == 429 else 0)
+        assert ap._anthropic_breaker.state == "closed"
+
+    async def test_server_errors_count(self, mock_client, settings, monkeypatch):
+        monkeypatch.setattr(settings, "provider_max_retries", 0)
+        mock_client.messages.create = AsyncMock(side_effect=_status_error(503))
+
+        with pytest.raises(anthropic.InternalServerError):
+            await ap._create_message.__wrapped__(model="claude-sonnet-5", max_tokens=10, messages=[])
+        assert ap._anthropic_breaker.failure_count == 1
+
+    async def test_half_open_admits_a_single_probe(self):
+        breaker = CircuitBreaker(failure_threshold=1, recovery_timeout=0.05)
+        breaker.record_failure()
+        await asyncio.sleep(0.06)
+
+        assert breaker.can_execute() is True  # the probe
+        assert breaker.can_execute() is False  # everyone else waits
+        assert breaker.can_execute() is False
+
+        breaker.record_success()
+        assert breaker.state == "closed"
+        assert breaker.can_execute() is True
+
+    async def test_a_failed_probe_reopens_the_breaker(self):
+        breaker = CircuitBreaker(failure_threshold=3, recovery_timeout=0.05)
+        for _ in range(3):
+            breaker.record_failure()
+        await asyncio.sleep(0.06)
+        assert breaker.can_execute() is True
+
+        breaker.record_failure()
+        assert breaker.state == "open"
+        assert breaker.can_execute() is False
+
+    async def test_a_lost_probe_is_replaced_after_the_recovery_window(self):
+        breaker = CircuitBreaker(failure_threshold=1, recovery_timeout=0.05)
+        breaker.record_failure()
+        await asyncio.sleep(0.06)
+        assert breaker.can_execute() is True
+        assert breaker.can_execute() is False
+        await asyncio.sleep(0.06)  # the probe never reported back
+        assert breaker.can_execute() is True
+
+    async def test_a_released_probe_lets_the_next_caller_probe(self):
+        breaker = CircuitBreaker(failure_threshold=1, recovery_timeout=0.05)
+        breaker.record_failure()
+        await asyncio.sleep(0.06)
+        assert breaker.can_execute() is True
+        breaker.release_probe()
+        assert breaker.state == "half_open"
+        assert breaker.can_execute() is True
 
     async def test_opens_after_the_threshold(self):
         breaker = CircuitBreaker(failure_threshold=3, service_name="test")
@@ -345,6 +440,89 @@ class TestToolUseLoop:
 
         assert result["iterations"] == 0
         assert "provider error" in result["text"]
+        assert result["stop_reason"] == "provider_error"
+        assert result["error"] is True
+
+    async def test_the_step_limit_is_flagged_as_an_error(self, mock_client):
+        mock_client.messages.create = AsyncMock(return_value=self._tool_response())
+
+        result = await ap.tool_use_loop(
+            model="claude-sonnet-5",
+            system="s",
+            user_message="u",
+            tools=[{"name": "search"}],
+            tool_handlers={"search": AsyncMock(return_value="out")},
+            max_iters=2,
+        )
+
+        assert result["stop_reason"] == "max_iters"
+        assert result["error"] is True
+
+    async def test_a_normal_end_is_not_an_error(self, mock_client):
+        mock_client.messages.create = AsyncMock(return_value=_response("Done."))
+
+        result = await ap.tool_use_loop(
+            model="claude-sonnet-5",
+            system="s",
+            user_message="u",
+            tools=[],
+            tool_handlers={},
+        )
+
+        assert result["stop_reason"] == "end_turn"
+        assert result["error"] is False
+
+    async def test_a_terminal_tool_ends_the_loop_without_another_call(self, mock_client):
+        mock_client.messages.create = AsyncMock(
+            side_effect=[self._tool_response("finish", {"answer": "x"}), _response("never")]
+        )
+        finish = AsyncMock(return_value="ok")
+
+        result = await ap.tool_use_loop(
+            model="claude-sonnet-5",
+            system="s",
+            user_message="u",
+            tools=[{"name": "finish"}],
+            tool_handlers={"finish": finish},
+            max_iters=5,
+            terminal_tools={"finish"},
+        )
+
+        assert mock_client.messages.create.await_count == 1
+        assert finish.await_count == 1
+        assert result["stop_reason"] == "terminal_tool"
+        assert result["iterations"] == 1
+
+    async def test_a_failing_terminal_tool_lets_the_model_retry(self, mock_client):
+        mock_client.messages.create = AsyncMock(
+            side_effect=[self._tool_response("finish", {}), _response("Recovered.")]
+        )
+
+        result = await ap.tool_use_loop(
+            model="claude-sonnet-5",
+            system="s",
+            user_message="u",
+            tools=[{"name": "finish"}],
+            tool_handlers={"finish": AsyncMock(side_effect=ValueError("bad"))},
+            max_iters=5,
+            terminal_tools={"finish"},
+        )
+
+        assert mock_client.messages.create.await_count == 2
+        assert result["stop_reason"] == "end_turn"
+
+    async def test_a_missing_key_is_raised_not_folded_into_the_text(
+        self, settings, monkeypatch
+    ):
+        monkeypatch.setattr(settings, "anthropic_api_key", "")
+        with pytest.raises(MissingKeyError):
+            await ap.tool_use_loop(
+                model="claude-sonnet-5",
+                system="s",
+                user_message="u",
+                tools=[],
+                tool_handlers={},
+            )
 
 
 @pytest.mark.asyncio
