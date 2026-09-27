@@ -105,6 +105,48 @@ it on yours.
 
 ---
 
+## Advisor: which strategy fits my project?
+
+The **Advisor** page (`/advisor`, API `POST /advise`) takes a plain-language
+project description, in English, French or any other language, and ranks the
+three strategies for it.
+
+1. **Profile.** Claude reads the description and fills a structured profile:
+   corpus size, document types, languages, question mix (single-fact /
+   relational / exploratory), latency budget, cost sensitivity, update rate,
+   residency and compliance needs, and how entity-rich the documents are.
+   Anything you pass in `overrides` wins over what was extracted. With no API
+   key, or if the call fails, a keyword heuristic takes over and the response
+   says `profile.source: "heuristic"`.
+2. **Score.** `app/advisor/scoring.py` is deterministic and has no model calls.
+   Each score is a base value plus named contributions, and each contribution
+   comes with a sentence explaining it. The weights come from the baseline
+   above. Classic is the default for single-fact questions, tight latency and
+   cost-sensitive projects. Graph only pulls ahead on large, entity-rich
+   corpora with relational questions, and it gets a smaller `RETRIEVAL_TOP_K`.
+   Agentic, at ~1.9x tokens and with more refusals, is recommended only for
+   ambiguous multi-step research with a generous budget. The response also
+   includes a suggested config for each strategy, a hybrid-routing plan when
+   the question mix is split, and generic hosting notes: EU residency, GDPR,
+   on-prem, and multilingual embeddings such as `BAAI/bge-m3`. These notes are
+   guidance, not legal advice.
+3. **Validate.** The ranking is a prior, not a measurement. Ingest a sample of
+   your documents, then send 10-20 real questions to `POST /advise/validate`.
+   A question can include an `ideal_answer`, entered as `question || ideal
+   answer` in the UI. By default the endpoint runs the top two strategies. It
+   returns refusals, latency, tokens, token-F1 against the ideal answer and a
+   judge score for each strategy, and names the `measured_winner`. The limit
+   is 20 questions and 3 strategies per call.
+
+```bash
+curl -X POST localhost:8000/advise -H 'Content-Type: application/json' -d '{
+  "description": "20 000 contrats PDF en français, questions sur les liens entre fournisseurs et filiales, réponse en moins de 5 s, hébergement UE.",
+  "overrides": {"cost_sensitivity": "medium", "compliance": ["EU only", "GDPR"]}
+}'
+```
+
+---
+
 ## Quickstart (Docker)
 
 Brings up frontend, backend, Qdrant and Postgres together.

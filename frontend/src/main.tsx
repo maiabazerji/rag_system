@@ -8,12 +8,14 @@ import EvalPage from "./pages/Eval";
 import Regressions from "./pages/Regressions";
 import Ingest from "./pages/Ingest";
 import Data from "./pages/Data";
+import Advisor from "./pages/Advisor";
 import ApiKeyGate from "./components/ApiKeyGate";
 import {
   BeakerIcon,
   ChatIcon,
   CompareIcon,
   DatabaseIcon,
+  SparkleIcon,
   TrendIcon,
   UploadIcon,
 } from "./components/Icons";
@@ -28,6 +30,7 @@ const NAV = [
   { to: "/data", label: "Data", Icon: DatabaseIcon },
   { to: "/eval", label: "Evaluation", Icon: BeakerIcon },
   { to: "/regressions", label: "Regressions", Icon: TrendIcon },
+  { to: "/advisor", label: "Advisor", Icon: SparkleIcon },
 ];
 
 function Wordmark() {
@@ -136,6 +139,7 @@ ReactDOM.createRoot(document.getElementById("root")!).render(
             <Route path="/data" element={<Data />} />
             <Route path="/eval" element={<EvalPage />} />
             <Route path="/regressions" element={<Regressions />} />
+            <Route path="/advisor" element={<Advisor />} />
           </Routes>
         </Layout>
       </BrowserRouter>
