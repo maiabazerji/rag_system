@@ -109,7 +109,7 @@ it on yours.
 
 Brings up frontend, backend, Qdrant and Postgres together.
 
-> **Note.** The Compose file lives at `infra/docker-compose.yml`, not at the project root. Every command needs `-f infra/docker-compose.yml`, or `cd infra` first, or `$env:COMPOSE_FILE`. A bare `docker compose down` from the root fails with `no configuration file provided`.
+> **Note.** The Compose file lives at `infra/docker-compose.yml`, not at the project root, and Compose only auto-loads a `.env` sitting next to it. Run every command from the project root as `docker compose --env-file .env -f infra/docker-compose.yml ...`. Without `--env-file`, Compose stops with `required variable POSTGRES_PASSWORD is missing a value`; a bare `docker compose down` fails with `no configuration file provided`.
 
 ### 1. Configure
 
@@ -123,17 +123,40 @@ copy .env.example .env
 cp .env.example .env
 ```
 
-Open `.env` and set `ANTHROPIC_API_KEY`. Everything else has a working default. Without a key the stack still starts and the UI still loads, but every answer comes back as a refusal.
+Open `.env` and check these:
 
-### 2. Start
+| Variable | Required? | Notes |
+|---|---|---|
+| `ANTHROPIC_API_KEY` | Yes, for answers | Without it the stack starts and the UI loads, but every answer is a refusal |
+| `POSTGRES_PASSWORD` | Yes | Compose refuses to start without it. `.env.example` ships a development value; change it |
+| `LANGFUSE_NEXTAUTH_SECRET`, `LANGFUSE_SALT` | Only with `--profile tracing` | Blank by default; Langfuse will not start until both are set |
+| `QDRANT_API_KEY` | No | Blank leaves Qdrant unauthenticated (fine on loopback). Add it to `.env` to turn Qdrant auth on; the backend must then send it too |
+| `HF_HUB_OFFLINE`, `TRANSFORMERS_OFFLINE` | No | Default `0`. Add them as `1` only after the models are downloaded (step 2) |
+
+Everything else has a working default.
+
+### 2. Models (optional)
+
+The backend needs two Hugging Face models: the embedder (`EMBEDDING_MODEL`) and the cross-encoder reranker (`RERANKER_MODEL`), about 470 MB together. By default it downloads them on first use into `.hf_cache/` at the project root, which Compose bind-mounts, so they survive rebuilds. To fetch them up front instead (useful when Docker's DNS is flaky, and required before turning on offline mode):
 
 ```bash
-docker compose -f infra/docker-compose.yml up -d --build
+pip install huggingface_hub
+python scripts/download_models.py --cache-dir .hf_cache
 ```
 
-Add `--profile tracing` if you also want Langfuse. The first build downloads a couple of GB; later starts take seconds.
+Then you may set `HF_HUB_OFFLINE=1` and `TRANSFORMERS_OFFLINE=1` in `.env`. Do not set them on an empty cache: the embedder cannot load, and the reranker silently degrades to BM25.
 
-### 3. Open
+### 3. Start
+
+```bash
+docker compose --env-file .env -f infra/docker-compose.yml up -d --build
+```
+
+Add `--profile tracing` if you also want Langfuse (after setting its two secrets). The first build downloads a couple of GB; later starts take seconds.
+
+Every port is published on **127.0.0.1 only**, so nothing is reachable from other machines on your network. That is deliberate: the services run with development credentials and, by default, no API key.
+
+### 4. Open
 
 | App | URL | Notes |
 |---|---|---|
@@ -142,27 +165,27 @@ Add `--profile tracing` if you also want Langfuse. The first build downloads a c
 | Health | <http://localhost:8011/health> | Which providers are configured |
 | Langfuse | <http://localhost:3100> | Only with `--profile tracing` |
 
-### 4. Ingest and evaluate
+### 5. Ingest and evaluate
 
 ```bash
-docker compose -f infra/docker-compose.yml exec backend python /scripts/ingest.py
-docker compose -f infra/docker-compose.yml exec backend python /scripts/run_eval.py --dataset golden_v1
+docker compose --env-file .env -f infra/docker-compose.yml exec backend python /scripts/ingest.py
+docker compose --env-file .env -f infra/docker-compose.yml exec backend python /scripts/run_eval.py --dataset golden_v1
 ```
 
 Or drag files onto the Ingest page. Accepted types: `.pdf`, `.txt`, `.md`, `.markdown`, `.rst`, `.csv`, `.json`, up to `MAX_UPLOAD_MB` (25 MB by default).
 
-### 5. Logs, stop, wipe
+### 6. Logs, stop, wipe
 
 ```bash
-docker compose -f infra/docker-compose.yml logs -f backend      # follow logs
-docker compose -f infra/docker-compose.yml ps                   # what's running
-docker compose -f infra/docker-compose.yml down                 # stop (keeps data)
-docker compose -f infra/docker-compose.yml down -v              # also wipe volumes
+docker compose --env-file .env -f infra/docker-compose.yml logs -f backend      # follow logs
+docker compose --env-file .env -f infra/docker-compose.yml ps                   # what's running
+docker compose --env-file .env -f infra/docker-compose.yml down                 # stop (keeps data)
+docker compose --env-file .env -f infra/docker-compose.yml down -v              # also wipe volumes
 ```
 
 ### Port map (host → container)
 
-| Service | Host | Container | Why this host port |
+| Service | Host (127.0.0.1) | Container | Why this host port |
 |---|---|---|---|
 | Frontend | `5173` | `5173` | Vite default |
 | Backend | `8011` | `8000` | `8001` was taken on the author's machine |
@@ -223,7 +246,7 @@ Auth requires Postgres. It is the only thing that does, so with `REQUIRE_API_KEY
 | `MAX_UPLOAD_MB` | `25` | Upload ceiling |
 | `REQUIRE_API_KEY` | `false` | Enforce API keys |
 
-Changing `EMBEDDING_MODEL` changes the vector dimension. The backend refuses to start against a collection built with a different model and tells you so; recreate it with `docker compose -f infra/docker-compose.yml down -v`.
+Changing `EMBEDDING_MODEL` changes the vector dimension. The backend refuses to start against a collection built with a different model and tells you so; recreate it with `docker compose --env-file .env -f infra/docker-compose.yml down -v`.
 
 ---
 
@@ -243,6 +266,9 @@ pytest -q                # 258 tests
 ```bash
 cd frontend
 npm ci
+npm run lint             # ESLint (typescript-eslint + react-hooks)
+npm run typecheck        # tsc, including tests
+npm test                 # vitest
 npm run build            # typecheck + production build
 npm run dev              # dev server on :5173
 ```
@@ -251,7 +277,7 @@ The frontend needs Node 22.12 or newer; `vitest` 5 refuses to start on Node 20.
 
 The app imports without any configuration. `settings.validate_startup()` runs in the FastAPI lifespan rather than at import time, so linters, tests and tooling all work in a bare checkout.
 
-All three gates run in CI on every push and pull request ([`.github/workflows/ci.yml`](.github/workflows/ci.yml)).
+CI ([`.github/workflows/ci.yml`](.github/workflows/ci.yml)) runs on every push to `main` and every pull request: the backend gates above (ruff, mypy, pytest) plus mypy on `scripts/`, the frontend gates (lint, typecheck, tests, build), `docker compose config`, a build of both Dockerfiles, and dependency audits (`npm audit --audit-level=high` blocks; `pip-audit` reports without failing the run).
 
 More detail, including troubleshooting: [`backend/SETUP.md`](./backend/SETUP.md).
 
@@ -261,7 +287,7 @@ More detail, including troubleshooting: [`backend/SETUP.md`](./backend/SETUP.md)
 
 **Every answer is a refusal** → `ANTHROPIC_API_KEY` is unset. Check `GET /health`.
 
-**`Connection refused` from Postgres, Qdrant** → services aren't up. `docker compose -f infra/docker-compose.yml up -d`.
+**`Connection refused` from Postgres, Qdrant** → services aren't up. `docker compose --env-file .env -f infra/docker-compose.yml up -d`.
 
 **401 on every request** → `REQUIRE_API_KEY=true` and no key is set. See [Authentication](#authentication).
 

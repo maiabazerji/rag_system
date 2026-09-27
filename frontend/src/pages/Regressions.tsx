@@ -1,10 +1,11 @@
 import { useQuery } from "@tanstack/react-query";
-import { get } from "../api/client";
+import { errorMessage, get } from "../api/client";
+import ErrorAlert from "../components/ErrorAlert";
 
 type Reg = { metric: string; delta: number; from: string; to: string };
 
 export default function Regressions() {
-  const { data, isLoading } = useQuery({
+  const { data, isLoading, error, refetch } = useQuery({
     queryKey: ["regressions"],
     queryFn: () => get<Reg[]>("/eval/regressions"),
   });
@@ -20,7 +21,15 @@ export default function Regressions() {
 
       {isLoading && <div className="card text-zinc-400">Loading…</div>}
 
-      {!isLoading && (!data || data.length === 0) && (
+      {error && (
+        <ErrorAlert
+          error={`Failed to load regressions: ${errorMessage(error)}`}
+          onRetry={() => refetch()}
+        />
+      )}
+
+      {/* Only claim "no regressions" when the check actually ran. */}
+      {!isLoading && !error && (!data || data.length === 0) && (
         <div className="card text-center py-10">
           <div className="text-emerald-400 text-3xl">✓</div>
           <h2 className="text-white font-semibold mt-2">No regressions detected</h2>

@@ -1,11 +1,11 @@
 import { useRef, useState } from "react";
-import { post } from "../api/client";
+import { errorMessage, post } from "../api/client";
 import { SendIcon } from "../components/Icons";
 import LoadingSpinner from "../components/LoadingSpinner";
 import ErrorAlert from "../components/ErrorAlert";
 import Tooltip from "../components/Tooltip";
 import MetadataRow from "../components/MetadataRow";
-import { formatConfidence } from "../utils/formatting";
+import { cleanAnswer, formatConfidence } from "../utils/formatting";
 
 type Source = { chunk_id: string; quote: string };
 type Answer = {
@@ -19,9 +19,12 @@ type Answer = {
   latency_ms?: number;
   input_tokens?: number;
   output_tokens?: number;
+  /** Present when the backend recorded a trace; fetch it from GET /traces/{id}. */
+  trace_id?: string | null;
 };
 
-type Turn = { question: string; answer?: Answer; error?: string; loading?: boolean };
+/** `id` is stable, so a slow answer lands on its own turn even after a Clear. */
+type Turn = { id: number; question: string; answer?: Answer; error?: string; loading?: boolean };
 
 type Strategy = "classic" | "graph" | "agentic";
 const STRATEGIES: { id: Strategy; label: string; hint: string }[] = [
@@ -35,21 +38,38 @@ export default function Ask() {
   const [turns, setTurns] = useState<Turn[]>([]);
   const [strategy, setStrategy] = useState<Strategy>("classic");
   const inputRef = useRef<HTMLTextAreaElement>(null);
+  const nextId = useRef(0);
+  // A ref, not state: two Enter presses inside one render would both see
+  // stale state and send the question twice.
+  const inFlight = useRef(false);
+  const [busy, setBusy] = useState(false);
+
+  function updateTurn(id: number, patch: Omit<Turn, "id" | "question">) {
+    setTurns((t) => t.map((x) => (x.id === id ? { id, question: x.question, ...patch } : x)));
+  }
 
   async function submit() {
     const question = q.trim();
-    if (!question) return;
-    const idx = turns.length;
-    setTurns((t) => [...t, { question, loading: true }]);
+    if (!question || inFlight.current) return;
+    inFlight.current = true;
+    setBusy(true);
+    const id = nextId.current++;
+    setTurns((t) => [...t, { id, question, loading: true }]);
     setQ("");
     try {
       const a = await post<Answer>("/ask", { question, strategy });
-      setTurns((t) => t.map((x, i) => (i === idx ? { question, answer: a } : x)));
-    } catch (e: any) {
-      setTurns((t) => t.map((x, i) => (i === idx ? { question, error: String(e.message || e) } : x)));
+      updateTurn(id, { answer: a });
+    } catch (e) {
+      updateTurn(id, { error: errorMessage(e) });
     } finally {
+      inFlight.current = false;
+      setBusy(false);
       inputRef.current?.focus();
     }
+  }
+
+  function dismiss(id: number) {
+    setTurns((t) => t.filter((x) => x.id !== id));
   }
 
   return (
@@ -74,8 +94,8 @@ export default function Ask() {
       {turns.length === 0 && <EmptyState onPick={(s) => setQ(s)} />}
 
       <div className="flex flex-col gap-5">
-        {turns.map((t, i) => (
-          <TurnView key={i} turn={t} />
+        {turns.map((t) => (
+          <TurnView key={t.id} turn={t} onDismiss={() => dismiss(t.id)} />
         ))}
       </div>
 
@@ -120,9 +140,9 @@ export default function Ask() {
             placeholder="Type a question…  ⏎ to send  ·  shift+⏎ for newline"
             className="input !border-0 !bg-transparent resize-none focus:!ring-0 min-h-[44px] max-h-40"
           />
-          <button onClick={submit} disabled={!q.trim()} className="btn-primary h-11">
+          <button onClick={submit} disabled={!q.trim() || busy} className="btn-primary h-11">
             <SendIcon className="w-4 h-4" />
-            Ask
+            {busy ? "Asking…" : "Ask"}
           </button>
         </div>
       </div>
@@ -188,7 +208,7 @@ function EmptyState({ onPick }: { onPick: (s: string) => void }) {
   );
 }
 
-function TurnView({ turn }: { turn: Turn }) {
+function TurnView({ turn, onDismiss }: { turn: Turn; onDismiss: () => void }) {
   return (
     <div className="flex flex-col gap-3">
       <div className="self-end max-w-[85%] bg-accent/15 border border-accent/30 rounded-2xl rounded-tr-sm px-4 py-2.5 text-zinc-100">
@@ -198,10 +218,7 @@ function TurnView({ turn }: { turn: Turn }) {
       <div className="card animate-fade-in">
         {turn.loading && <LoadingSpinner message="Retrieving and generating answer..." />}
         {turn.error && (
-          <ErrorAlert
-            error={turn.error}
-            onDismiss={() => {}}
-          />
+          <ErrorAlert error={turn.error} onDismiss={onDismiss} />
         )}
         {turn.answer && <AnswerView a={turn.answer} />}
       </div>
@@ -209,22 +226,6 @@ function TurnView({ turn }: { turn: Turn }) {
   );
 }
 
-
-function cleanAnswer(text: string): string {
-  return text
-    .split("\n")
-    .filter(line => !line.match(/^#+\s/) && !line.match(/^>\s/) && line.trim() !== "---" && line.trim() !== "|" && line.trim() !== "")
-    .map(line => {
-      return line
-        .replace(/\*\*(.+?)\*\*/g, "$1")
-        .replace(/\*(.+?)\*/g, "$1")
-        .replace(/`(.+?)`/g, "$1")
-        .replace(/\[(.+?)\]\(.+?\)/g, "$1")
-        .replace(/According to \[[\w:]+\]\s*,?\s*/g, "");
-    })
-    .join("\n")
-    .trim();
-}
 
 function AnswerView({ a }: { a: Answer }) {
   const pct = Math.round(a.confidence * 100);
@@ -241,7 +242,9 @@ function AnswerView({ a }: { a: Answer }) {
         </Tooltip>
       </div>
 
-      <p className="text-zinc-200 leading-relaxed">{cleanAnswer(a.answer)}</p>
+      <p className="text-zinc-200 leading-relaxed whitespace-pre-wrap">{cleanAnswer(a.answer)}</p>
+
+      <SourcesList sources={a.sources} />
 
       <MetadataRow
         compact
@@ -251,8 +254,51 @@ function AnswerView({ a }: { a: Answer }) {
         output_tokens={a.output_tokens}
       />
 
+      {a.trace_id && (
+        <div className="text-[11px] text-zinc-500 font-mono">
+          trace{" "}
+          <a
+            href={`/api/traces/${encodeURIComponent(a.trace_id)}`}
+            target="_blank"
+            rel="noreferrer"
+            className="text-zinc-400 hover:text-accent underline decoration-dotted"
+            title="GET /traces/{id}: the retrieval, rerank and generation steps for this answer"
+          >
+            {a.trace_id}
+          </a>
+        </div>
+      )}
+
       {!a.refusal && <RatingWidget a={a} />}
     </div>
+  );
+}
+
+function SourcesList({ sources }: { sources: Source[] }) {
+  // The backend uses a single chunk_id "none" source to mean "nothing cited".
+  const real = sources.filter((s) => s.chunk_id && s.chunk_id !== "none");
+  if (real.length === 0) return null;
+  return (
+    <details className="text-xs border-t border-bg-border pt-3">
+      <summary className="cursor-pointer text-zinc-400 hover:text-zinc-200 select-none">
+        Sources ({real.length})
+      </summary>
+      <ol className="mt-2 space-y-2">
+        {real.map((s, i) => (
+          <li key={`${s.chunk_id}-${i}`} className="flex gap-2">
+            <span className="text-zinc-600 font-mono shrink-0">[{i + 1}]</span>
+            <div className="min-w-0">
+              <div className="font-mono text-[11px] text-accent break-all">{s.chunk_id}</div>
+              {s.quote && (
+                <blockquote className="text-zinc-300 whitespace-pre-wrap border-l-2 border-bg-border pl-2 mt-1">
+                  {s.quote}
+                </blockquote>
+              )}
+            </div>
+          </li>
+        ))}
+      </ol>
+    </details>
   );
 }
 
@@ -276,8 +322,8 @@ function RatingWidget({ a }: { a: Answer }) {
         model: a.model ?? null,
       });
       setState("saved");
-    } catch (e: any) {
-      setErr(String(e.message || e));
+    } catch (e) {
+      setErr(errorMessage(e));
       setState("error");
     }
   }
@@ -285,7 +331,7 @@ function RatingWidget({ a }: { a: Answer }) {
   if (state === "saved") {
     return (
       <div className="border-t border-bg-border pt-3 text-xs text-emerald-300">
-        Rated {rating}/5  -  thanks. Saved to data/human_ratings/ratings.jsonl.
+        Rated {rating}/5, thanks. Your rating was saved.
       </div>
     );
   }

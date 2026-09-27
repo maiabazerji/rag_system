@@ -6,7 +6,9 @@ const backendTarget = process.env.VITE_BACKEND_URL || "http://localhost:8000";
 export default defineConfig({
   plugins: [react()],
   server: {
-    host: true,
+    // Localhost only by default. The Docker image sets VITE_HOST=0.0.0.0 so the
+    // container's published port (itself bound to 127.0.0.1) can reach Vite.
+    host: process.env.VITE_HOST || "localhost",
     port: 5173,
     // A bind mount from a Windows or macOS host does not forward inotify events
     // into the container, so Vite never learns that a file changed: it goes on

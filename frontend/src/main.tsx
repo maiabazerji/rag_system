@@ -9,6 +9,7 @@ import Regressions from "./pages/Regressions";
 import Ingest from "./pages/Ingest";
 import Data from "./pages/Data";
 import ApiKeyGate from "./components/ApiKeyGate";
+import { ApiError, RequestTimeoutError } from "./api/client";
 import {
   BeakerIcon,
   ChatIcon,
@@ -19,7 +20,19 @@ import {
 } from "./components/Icons";
 import "./index.css";
 
-const qc = new QueryClient();
+const qc = new QueryClient({
+  defaultOptions: {
+    queries: {
+      // A 4xx (bad key, forbidden, not found) or a timeout will not fix itself
+      // on retry; a 5xx or a network blip might.
+      retry: (failureCount, error) => {
+        if (error instanceof RequestTimeoutError) return false;
+        if (error instanceof ApiError && error.status >= 400 && error.status < 500) return false;
+        return failureCount < 2;
+      },
+    },
+  },
+});
 
 const NAV = [
   { to: "/", label: "Ask", Icon: ChatIcon, end: true },

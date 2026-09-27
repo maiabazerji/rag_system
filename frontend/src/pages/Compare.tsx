@@ -1,5 +1,6 @@
-import { useEffect, useState, ReactNode } from "react";
-import { get, post } from "../api/client";
+import { useEffect, useRef, useState, ReactNode } from "react";
+import { useQuery } from "@tanstack/react-query";
+import { ApiError, errorMessage, get, getAdminKey, post, setAdminKey } from "../api/client";
 import LoadingSpinner from "../components/LoadingSpinner";
 import ErrorAlert from "../components/ErrorAlert";
 import Tooltip from "../components/Tooltip";
@@ -21,6 +22,37 @@ type StrategyOut = {
   extra: Record<string, unknown>;
 };
 type CompareOut = { question: string; results: StrategyOut[] };
+type GraphStats = { triples: number; entities: number };
+/** POST /graph/build answers 202 with a job; GET /graph/build/{id} reports on it. */
+type BuildJob = {
+  id?: string;
+  job_id?: string;
+  status: "queued" | "running" | "completed" | "failed";
+  total?: number;
+  completed?: number;
+  failures?: string[];
+  error?: string;
+};
+
+const POLL_INTERVAL_MS = 2000;
+
+/** Graph build and reset need the admin key on top of any API key. */
+function graphBuildError(e: unknown): string {
+  if (e instanceof ApiError && e.status === 403) {
+    return (
+      "Building the graph needs the backend's admin key (ADMIN_KEY). Enter it in the " +
+      `"Admin key" field below and try again.${e.detail ? ` (${e.detail})` : ""}`
+    );
+  }
+  if (e instanceof ApiError && e.status === 503) {
+    return (
+      "Graph build is unavailable: the backend has no ADMIN_KEY configured, or a backing " +
+      `service is down. Set ADMIN_KEY in .env and restart the backend.${e.detail ? ` (${e.detail})` : ""}`
+    );
+  }
+  return errorMessage(e);
+}
+const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
 const STRATEGIES: StrategyOut["strategy"][] = ["classic", "graph", "agentic"];
 
@@ -56,22 +88,25 @@ export default function Compare() {
   const [res, setRes] = useState<CompareOut | null>(null);
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
-  const [graphStats, setGraphStats] = useState<{ triples: number; entities: number } | null>(null);
   const [buildingGraph, setBuildingGraph] = useState(false);
+  const [buildProgress, setBuildProgress] = useState<string | null>(null);
+  const [showAdminKey, setShowAdminKey] = useState(false);
+  const { data: graphStats = null, refetch: refetchStats } = useQuery({
+    queryKey: ["graph-stats"],
+    queryFn: () => get<GraphStats>("/graph/stats"),
+  });
 
-  async function refreshStats() {
-    try {
-      setGraphStats(await get<{ triples: number; entities: number }>("/graph/stats"));
-    } catch {
-      /* ignore */
-    }
-  }
-
+  // Stops the build poller when the page unmounts.
+  const mounted = useRef(true);
   useEffect(() => {
-    refreshStats();
+    mounted.current = true;
+    return () => {
+      mounted.current = false;
+    };
   }, []);
 
   async function run() {
+    if (busy) return;
     setErr(null);
     setBusy(true);
     setRes(null);
@@ -81,22 +116,50 @@ export default function Compare() {
         strategies: STRATEGIES,
       });
       setRes(r);
-    } catch (e: any) {
-      setErr(String(e.message || e));
+    } catch (e) {
+      setErr(errorMessage(e));
     } finally {
       setBusy(false);
     }
   }
 
+  /** Start a build, then poll its job until it finishes. It can run for minutes. */
   async function buildGraph() {
+    if (buildingGraph) return;
+    setErr(null);
     setBuildingGraph(true);
+    setBuildProgress("queued");
     try {
-      await post("/graph/build", {});
-      await refreshStats();
-    } catch (e: any) {
-      setErr(String(e.message || e));
+      const started = await post<BuildJob>("/graph/build", {}, { admin: true });
+      const jobId = started.job_id ?? started.id;
+      if (!jobId) throw new Error("The backend did not return a graph build job id.");
+      let job = started;
+      while (mounted.current && job.status !== "completed" && job.status !== "failed") {
+        await sleep(POLL_INTERVAL_MS);
+        if (!mounted.current) return;
+        job = await get<BuildJob>(`/graph/build/${encodeURIComponent(jobId)}`, { admin: true });
+        setBuildProgress(
+          job.total ? `${job.completed ?? 0}/${job.total} chunks` : job.status,
+        );
+      }
+      if (!mounted.current) return;
+      if (job.status === "failed") {
+        setErr(`Graph build failed: ${job.error ?? "unknown error"}`);
+      } else if (job.failures && job.failures.length > 0) {
+        setErr(
+          `Graph built, but extraction failed for ${job.failures.length} chunk(s). Rebuild to retry them.`,
+        );
+      }
+      await refetchStats();
+    } catch (e) {
+      if (!mounted.current) return;
+      setErr(graphBuildError(e));
+      if (e instanceof ApiError && e.status === 403) setShowAdminKey(true);
     } finally {
-      setBuildingGraph(false);
+      if (mounted.current) {
+        setBuildingGraph(false);
+        setBuildProgress(null);
+      }
     }
   }
 
@@ -118,7 +181,7 @@ export default function Compare() {
           onKeyDown={(e) => {
             if (e.key === "Enter" && !e.shiftKey) {
               e.preventDefault();
-              if (q.trim()) run();
+              if (q.trim() && !busy) run();
             }
           }}
           rows={2}
@@ -141,6 +204,7 @@ export default function Compare() {
             <GraphStatus
               stats={graphStats}
               busy={buildingGraph}
+              progress={buildProgress}
               onBuild={buildGraph}
             />
             <button
@@ -157,11 +221,12 @@ export default function Compare() {
             error={err}
             onRetry={() => {
               setErr(null);
-              if (q.trim()) run();
+              if (q.trim() && !busy) run();
             }}
             onDismiss={() => setErr(null)}
           />
         )}
+        <AdminKeyField open={showAdminKey} onToggle={setShowAdminKey} />
       </div>
 
       {res && <WinnersBar results={res.results} />}
@@ -175,13 +240,77 @@ export default function Compare() {
   );
 }
 
+/** Optional admin key, sent as X-Admin-Key on graph build. Kept in this browser only. */
+function AdminKeyField({ open, onToggle }: { open: boolean; onToggle: (open: boolean) => void }) {
+  const [value, setValue] = useState(getAdminKey() ?? "");
+  const [stored, setStored] = useState(!!getAdminKey());
+
+  function save(e: React.FormEvent) {
+    e.preventDefault();
+    setAdminKey(value);
+    setStored(!!value.trim());
+  }
+
+  function clear() {
+    setAdminKey(null);
+    setValue("");
+    setStored(false);
+  }
+
+  return (
+    <details
+      open={open}
+      onToggle={(e) => onToggle((e.currentTarget as HTMLDetailsElement).open)}
+      className="text-xs text-zinc-500"
+    >
+      <summary className="cursor-pointer select-none hover:text-zinc-300">
+        Admin key {stored ? "(saved)" : "(needed to build the graph)"}
+      </summary>
+      <form onSubmit={save} className="mt-2 flex gap-2 flex-wrap items-center">
+        <input
+          type="password"
+          value={value}
+          onChange={(e) => setValue(e.target.value)}
+          placeholder="ADMIN_KEY from .env"
+          autoComplete="off"
+          spellCheck={false}
+          aria-label="Admin key"
+          className="flex-1 min-w-[14rem] rounded border border-bg-border bg-bg-base px-3 py-1.5 text-sm font-mono text-zinc-200 placeholder:text-zinc-600 focus:outline-none focus:border-accent"
+        />
+        <button
+          type="submit"
+          disabled={!value.trim()}
+          className="rounded border border-bg-border px-3 py-1.5 text-sm text-zinc-200 hover:border-accent disabled:opacity-40 transition-colors"
+        >
+          Save
+        </button>
+        {stored && (
+          <button
+            type="button"
+            onClick={clear}
+            className="rounded px-3 py-1.5 text-sm text-zinc-500 hover:text-zinc-300 transition-colors"
+          >
+            Clear
+          </button>
+        )}
+        <span className="basis-full text-[11px] text-zinc-600">
+          Sent as <code className="font-mono">X-Admin-Key</code> with graph builds only, and kept in
+          this browser.
+        </span>
+      </form>
+    </details>
+  );
+}
+
 function GraphStatus({
   stats,
   busy,
+  progress,
   onBuild,
 }: {
-  stats: { triples: number; entities: number } | null;
+  stats: GraphStats | null;
   busy: boolean;
+  progress: string | null;
   onBuild: () => void;
 }) {
   const ready = !!stats && stats.triples > 0;
@@ -213,7 +342,7 @@ function GraphStatus({
         }`}
         aria-label="Extract entity relationships from indexed documents"
       >
-        {busy ? "Building…" : ready ? "Rebuild" : "Build graph"}
+        {busy ? `Building… ${progress ?? ""}`.trim() : ready ? "Rebuild" : "Build graph"}
       </button>
     </div>
   );

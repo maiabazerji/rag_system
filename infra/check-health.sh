@@ -1,4 +1,5 @@
 #!/bin/bash
+# Probe every EvalRAG service on the ports Compose publishes (127.0.0.1 only).
 
 # Colors for output
 RED='\033[0;31m'
@@ -9,53 +10,54 @@ NC='\033[0m' # No Color
 echo "Checking EvalRAG services..."
 echo ""
 
+# -f makes curl fail on an HTTP error status, so a 500 is not reported as OK.
+probe() {
+    curl -fsS --max-time 5 "$1" > /dev/null 2>&1
+}
+
 # Check backend health
 echo -n "Backend... "
-if curl -s http://localhost:8011/health > /dev/null 2>&1; then
+if probe http://127.0.0.1:8011/health; then
     echo -e "${GREEN}✓ OK${NC}"
 else
     echo -e "${RED}✗ DOWN${NC}"
     echo "  Try: docker logs evalrag-backend-1"
 fi
 
-# Check Qdrant
+# Check Qdrant. /healthz needs no API key, so this works with QDRANT_API_KEY set.
 echo -n "Qdrant (Vector DB)... "
-if curl -s http://localhost:6333/health > /dev/null 2>&1; then
+if probe http://127.0.0.1:6333/healthz; then
     echo -e "${GREEN}✓ OK${NC}"
 else
     echo -e "${RED}✗ DOWN${NC}"
+    echo "  Try: docker logs evalrag-qdrant-1"
 fi
 
 # Check Postgres
 echo -n "Postgres (Database)... "
-if nc -z localhost 5434 2>/dev/null; then
+if docker exec evalrag-postgres-1 pg_isready -U evalrag -d evalrag > /dev/null 2>&1 \
+    || nc -z 127.0.0.1 5434 2>/dev/null; then
     echo -e "${GREEN}✓ OK${NC}"
 else
     echo -e "${RED}✗ DOWN${NC}"
-fi
-
-# Check Redis
-echo -n "Redis (Cache)... "
-if redis-cli -p 6381 ping > /dev/null 2>&1; then
-    echo -e "${GREEN}✓ OK${NC}"
-else
-    echo -e "${RED}✗ DOWN${NC}"
+    echo "  Try: docker logs evalrag-postgres-1"
 fi
 
 # Check Frontend
 echo -n "Frontend... "
-if curl -s http://localhost:5173 > /dev/null 2>&1; then
+if probe http://127.0.0.1:5173; then
     echo -e "${GREEN}✓ OK${NC}"
 else
     echo -e "${RED}✗ DOWN${NC}"
+    echo "  Try: docker logs evalrag-frontend-1"
 fi
 
-# Check Langfuse
+# Check Langfuse (only runs with --profile tracing)
 echo -n "Langfuse (Tracing)... "
-if curl -s http://localhost:3100 > /dev/null 2>&1; then
+if probe http://127.0.0.1:3100/api/public/health; then
     echo -e "${GREEN}✓ OK${NC}"
 else
-    echo -e "${YELLOW}~ OPTIONAL${NC}"
+    echo -e "${YELLOW}~ OPTIONAL (not running; start with --profile tracing)${NC}"
 fi
 
 echo ""
