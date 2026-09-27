@@ -370,3 +370,93 @@ async def delete_stale_revisions(source_key: str, keep_doc_id: str) -> StaleRevi
         logger.error(f"Qdrant stale-revision cleanup failed: {type(e).__name__}: {e}")
         _qdrant_breaker.record_failure()
         return StaleRevisions()
+
+
+_SCROLL_PAGE = 256
+
+
+async def scroll_payloads(
+    selector: qm.Filter, fields: list[str] | None = None
+) -> list[dict]:
+    """Read the payload of every point matching ``selector``, across all pages.
+
+    Unlike search, this does not degrade to an empty result: its callers
+    (erasure, subject access) must not mistake an outage for "nothing stored".
+
+    Args:
+        selector: Which points to read.
+        fields: Payload keys to fetch. ``None`` fetches the whole payload.
+
+    Raises:
+        StoreUnavailable: If the circuit breaker is open.
+        Exception: Any Qdrant failure, after recording it on the breaker.
+    """
+    if not _qdrant_breaker.can_execute():
+        raise StoreUnavailable("Qdrant service is unavailable (circuit breaker open)")
+    try:
+        c = await client()
+        payloads: list[dict] = []
+        offset = None
+        while True:
+            points, offset = await async_timeout_wrapper(
+                c.scroll(
+                    collection_name=settings.qdrant_collection,
+                    scroll_filter=selector,
+                    limit=_SCROLL_PAGE,
+                    offset=offset,
+                    with_payload=fields if fields is not None else True,
+                    with_vectors=False,
+                ),
+                timeout=10.0,
+                service_name="Qdrant",
+            )
+            payloads.extend(p.payload or {} for p in points)
+            if offset is None:
+                break
+        _qdrant_breaker.record_success()
+        return payloads
+    except Exception as e:
+        logger.error(f"Qdrant scroll failed: {type(e).__name__}: {e}")
+        _qdrant_breaker.record_failure()
+        raise
+
+
+async def delete_matching(selector: qm.Filter) -> int:
+    """Delete every point matching ``selector``.
+
+    Returns:
+        The number of points deleted. 0 when nothing matched, so repeating a
+        deletion is harmless.
+
+    Raises:
+        StoreUnavailable: If the circuit breaker is open.
+        Exception: Any Qdrant failure, after recording it on the breaker.
+    """
+    if not _qdrant_breaker.can_execute():
+        raise StoreUnavailable("Qdrant service is unavailable (circuit breaker open)")
+    try:
+        c = await client()
+        matched = await async_timeout_wrapper(
+            c.count(
+                collection_name=settings.qdrant_collection,
+                count_filter=selector,
+                exact=True,
+            ),
+            timeout=5.0,
+            service_name="Qdrant",
+        )
+        if matched.count:
+            await async_timeout_wrapper(
+                c.delete(
+                    collection_name=settings.qdrant_collection,
+                    points_selector=qm.FilterSelector(filter=selector),
+                ),
+                timeout=10.0,
+                service_name="Qdrant",
+            )
+        _qdrant_breaker.record_success()
+        return matched.count
+    except Exception as e:
+        logger.error(f"Qdrant delete failed: {type(e).__name__}: {e}")
+        _qdrant_breaker.record_failure()
+        raise

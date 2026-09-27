@@ -1,16 +1,18 @@
-from contextlib import asynccontextmanager
+import asyncio
+from contextlib import asynccontextmanager, suppress
 
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from pydantic import ValidationError
 
-from app.api import admin, ask, compare, eval_routes, graph, ingest, traces
+from app.api import admin, ask, compare, eval_routes, graph, ingest, privacy, traces
 from app.api import advisor as advisor_api
 from app.auth import init_db as init_auth_db
 from app.config import settings
 from app.logging_config import get_structured_logger, setup_logging
 from app.middleware.request_id import RequestIDMiddleware, get_request_id
+from app.privacy.retention import start_retention_task
 from app.rag.generate import public_provider_error
 from app.rag.providers import MissingKeyError, ProviderError
 from app.rag.providers.anthropic_provider import close_client as close_anthropic_client
@@ -46,9 +48,14 @@ async def lifespan(app: FastAPI):
     else:
         logger.info("Auth disabled; skipping auth database setup.")
 
+    # Daily purge of records past their retention period (docs/gdpr/README.md).
+    retention_task = start_retention_task()
     try:
         yield
     finally:
+        retention_task.cancel()
+        with suppress(asyncio.CancelledError):
+            await retention_task
         await close_anthropic_client()
         await close_store()
 
@@ -72,6 +79,7 @@ app.include_router(graph.router, prefix="/graph", tags=["graph"])
 app.include_router(eval_routes.router, prefix="/eval", tags=["eval"])
 app.include_router(traces.router, prefix="/traces", tags=["traces"])
 app.include_router(advisor_api.router, prefix="/advise", tags=["advisor"])
+app.include_router(privacy.router, prefix="/privacy", tags=["privacy"])
 
 
 @app.exception_handler(Exception)

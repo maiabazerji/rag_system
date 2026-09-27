@@ -287,6 +287,12 @@ Auth requires Postgres. It is the only thing that does, so with `REQUIRE_API_KEY
 | `AGENTIC_MAX_ITERS` | `15` | Bounds worst-case cost of one agentic question |
 | `MAX_UPLOAD_MB` | `25` | Upload ceiling |
 | `REQUIRE_API_KEY` | `false` | Enforce API keys |
+| `PII_MODE_INGEST` | `mask` | `off`, `mask` or `reject` personal data found in uploads |
+| `RETENTION_TRACES_DAYS` | `7` | Days before request traces are purged (`0` = never) |
+
+### Privacy (GDPR)
+
+Uploads are scanned for personal data (emails, French phone numbers, NIR, IBAN, SIREN/SIRET, card numbers, IPv4) and masked before chunking; logs and traces are masked too. Admin-only endpoints under `/privacy` erase a document, a source or a principal everywhere it is stored, export what is held about a principal, and run the retention purge that otherwise runs daily. [`docs/gdpr/README.md`](docs/gdpr/README.md) covers what is stored where, retention defaults, procedures with `curl` examples and subprocessors; [`docs/gdpr/ropa_template.md`](docs/gdpr/ropa_template.md) is a record-of-processing template. Neither is legal advice.
 
 Changing `EMBEDDING_MODEL` changes the vector dimension. The backend refuses to start against a collection built with a different model and tells you so; recreate it with `docker compose --env-file .env -f infra/docker-compose.yml down -v`.
 

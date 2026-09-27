@@ -9,11 +9,13 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+from datetime import UTC, datetime
 from io import BytesIO
 from pathlib import Path
 
 from app.config import settings
 from app.logging_config import get_structured_logger
+from app.privacy.pii import redact
 from app.rag import graph_store
 from app.rag.embed import embed_texts_async
 from app.rag.store import delete_stale_revisions, upsert
@@ -138,16 +140,23 @@ async def enqueue_document(filename: str, content: bytes, owner: str = "local") 
             document's ``source_key``, which scopes stale-revision cleanup.
 
     Returns:
-        The document id, filename, number of chunks indexed, and how much of a
-        superseded revision was cleared from the vector store and the graph.
+        The document id, filename, number of chunks indexed, how much of a
+        superseded revision was cleared from the vector store and the graph,
+        and how many pieces of personal data of each type were masked.
 
     Raises:
         ValueError: If the file cannot be parsed or contains no extractable text.
+        PIIRejected: If it contains personal data and PII_MODE_INGEST is 'reject'.
     """
     # PDF parsing is CPU-bound and can take seconds; keep it off the event loop.
     text = await asyncio.to_thread(load_document, filename, content)
+    # Personal data is masked (or the document refused) before the text is
+    # hashed, chunked, embedded or stored anywhere. Only counts are kept.
+    pii = redact(text, settings.pii_mode_ingest)
+    text = pii.text
     doc_id = _doc_id(text)
     key = source_key(owner, filename)
+    ingested_at = datetime.now(UTC).isoformat(timespec="seconds")
 
     chunks = [
         Chunk(
@@ -155,7 +164,13 @@ async def enqueue_document(filename: str, content: bytes, owner: str = "local") 
             doc_id=doc_id,
             text=c,
             tokens=len(c.split()),
-            metadata={"filename": filename, "source_key": key},
+            metadata={
+                "filename": filename,
+                "source_key": key,
+                "owner": owner,
+                "ingested_at": ingested_at,
+                "pii_counts": pii.counts,
+            },
         )
         for i, c in enumerate(chunk_text(text))
     ]
@@ -182,6 +197,7 @@ async def enqueue_document(filename: str, content: bytes, owner: str = "local") 
             "chunks": len(chunks),
             "stale_chunks_removed": stale.points,
             "stale_triples_removed": stale_triples,
+            "pii_counts": pii.counts,
         },
     )
     return {
@@ -190,4 +206,5 @@ async def enqueue_document(filename: str, content: bytes, owner: str = "local") 
         "chunks": len(chunks),
         "stale_chunks_removed": stale.points,
         "stale_triples_removed": stale_triples,
+        "pii_counts": pii.counts,
     }

@@ -149,6 +149,10 @@ async def _run_example(
         "output_tokens": ans.output_tokens,
         "score": score.model_dump() if score is not None else None,
         "retrieval": retrieval.model_dump() if retrieval is not None else None,
+        # Documents behind the answer, so an erasure request can find this row.
+        "doc_ids": sorted(
+            {src.chunk_id.split(":", 1)[0] for src in ans.sources if ":" in src.chunk_id}
+        ),
     }
 
 
