@@ -11,6 +11,7 @@ from app.schemas import (
     Source,
     StrategyComparison,
 )
+from app.tracing import start_trace
 
 logger = get_structured_logger(__name__)
 router = APIRouter(dependencies=[Depends(require_api_key)])
@@ -124,21 +125,24 @@ async def compare_strategies(
     total_in = total_out = 0
 
     for name in req.strategies:
-        try:
-            result, err = await run_strategy_raw(
-                req.question, strategy=name, model=req.model
-            )
-        except Exception as e:
-            logger.exception(
-                f"Strategy {name} raised: {type(e).__name__}: {e}",
-                extra_fields={"error_type": type(e).__name__, "strategy": name},
-            )
-            results.append(
-                _failed_comparison(
-                    name, req.question, "This strategy failed. Check the backend logs."
+        with start_trace(
+            name=f"compare:{name}",
+            inputs={"question": req.question, "strategy": name, "model": req.model},
+        ) as trace:
+            try:
+                result, err = await run_strategy_raw(
+                    req.question, strategy=name, model=req.model
                 )
-            )
-            continue
+            except Exception as e:
+                logger.exception(
+                    f"Strategy {name} raised: {type(e).__name__}: {e}",
+                    extra_fields={"error_type": type(e).__name__, "strategy": name},
+                )
+                result, err = None, "This strategy failed. Check the backend logs."
+            if result is not None and not err:
+                trace.finish(result)
+            else:
+                trace.fail(err or "No result returned.")
 
         if err or result is None:
             results.append(

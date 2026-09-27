@@ -26,6 +26,7 @@ from rank_bm25 import BM25Okapi
 from app.config import settings
 from app.logging_config import get_structured_logger
 from app.schemas import Chunk
+from app.tracing import instrument
 
 if TYPE_CHECKING:  # pragma: no cover
     from sentence_transformers import CrossEncoder
@@ -270,6 +271,7 @@ def rerank(query: str, chunks: list[Chunk], top_k: int = 8) -> list[Chunk]:
     return _rerank_with_cross_encoder(query, chunks, top_k)
 
 
+@instrument.rerank
 async def rerank_async(query: str, chunks: list[Chunk], top_k: int = 8) -> list[Chunk]:
     """Async wrapper around :func:`rerank`.
 

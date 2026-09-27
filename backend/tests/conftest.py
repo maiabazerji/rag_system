@@ -29,6 +29,12 @@ TEST_SETTINGS = {
     "chunk_overlap_tokens": 20,
     "rerank_top_k": 8,
     "eval_concurrency": 2,
+    # Telemetry off unless a test turns it on, whatever the developer's .env says.
+    "telemetry_mode": "off",
+    "langfuse_public_key": "",
+    "langfuse_secret_key": "",
+    "wandb_enabled": False,
+    "metrics_enabled": False,
 }
 
 
@@ -53,6 +59,16 @@ def settings(monkeypatch):
     for key, value in TEST_SETTINGS.items():
         monkeypatch.setattr(app_settings, key, value, raising=True)
     return app_settings
+
+
+@pytest.fixture(autouse=True)
+def _reset_trace_exporter():
+    """Drop any Langfuse exporter a test configured, so none outlives it."""
+    from app.tracing import langfuse_exporter
+
+    langfuse_exporter.shutdown()
+    yield
+    langfuse_exporter.shutdown()
 
 
 @pytest.fixture(autouse=True)

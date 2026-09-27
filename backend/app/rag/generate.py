@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import time
 
+from app import monitoring
 from app.config import settings
 from app.logging_config import get_structured_logger
 from app.rag.providers import MissingKeyError, ProviderError
@@ -165,6 +166,7 @@ async def answer_question(
                     "model": model,
                 },
             )
+            monitoring.observe_refusal(strategy, "no_documents")
             return _refusal(
                 question,
                 "No documents uploaded yet. Go to Ingest to upload files, then I can answer your questions.",
@@ -193,7 +195,10 @@ async def answer_question(
                 f"Unknown strategy: {strategy}",
                 extra_fields={"error_type": "invalid_strategy"},
             )
-            return _refusal(question, str(e), provider=effective_provider, model=model)
+            return trace.finish(
+                _refusal(question, str(e), provider=effective_provider, model=model),
+                reason="invalid_strategy",
+            )
 
         logger.info(
             "Strategy started",
@@ -223,7 +228,10 @@ async def answer_question(
                     "provider": effective_provider,
                 },
             )
-            return _refusal(question, str(e), provider=effective_provider, model=model)
+            return trace.finish(
+                _refusal(question, str(e), provider=effective_provider, model=model),
+                reason="provider_error",
+            )
         except Exception as e:
             logger.exception(
                 f"Strategy '{strategy}' failed: {type(e).__name__}: {e}",
@@ -234,12 +242,15 @@ async def answer_question(
                     "model": model,
                 },
             )
-            return _refusal(
-                question,
-                "Something went wrong answering this question. "
-                "The details are in the backend logs.",
-                provider=effective_provider,
-                model=model,
+            return trace.finish(
+                _refusal(
+                    question,
+                    "Something went wrong answering this question. "
+                    "The details are in the backend logs.",
+                    provider=effective_provider,
+                    model=model,
+                ),
+                reason="error",
             )
         latency_ms = int((time.perf_counter() - t0) * 1000)
         result.latency_ms = latency_ms
@@ -271,7 +282,7 @@ async def answer_question(
             },
         )
 
-        return Answer(
+        answer = Answer(
             question=question,
             answer=clean_response(result.answer),
             sources=result.sources,
@@ -283,6 +294,7 @@ async def answer_question(
             input_tokens=result.input_tokens,
             output_tokens=result.output_tokens,
         )
+        return trace.finish(answer)
 
 
 async def run_strategy_raw(

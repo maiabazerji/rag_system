@@ -5,13 +5,15 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from pydantic import ValidationError
 
-from app.api import admin, ask, compare, eval_routes, graph, ingest, traces
+from app.api import admin, ask, compare, eval_routes, graph, ingest, metrics, traces
 from app.auth import init_db as init_auth_db
 from app.config import settings
 from app.logging_config import get_structured_logger, setup_logging
 from app.middleware.request_id import RequestIDMiddleware, get_request_id
+from app.monitoring import MetricsMiddleware
 from app.rag.providers import MissingKeyError, ProviderError
 from app.rag.providers.anthropic_provider import close_client as close_anthropic_client
+from app.tracing import langfuse_exporter, policy
 
 setup_logging()
 logger = get_structured_logger(__name__)
@@ -25,6 +27,11 @@ async def lifespan(app: FastAPI):
     linters and tooling can import the app without a configured environment.
     """
     settings.validate_startup()
+
+    telemetry = policy.evaluate(settings)
+    policy.log_decision(telemetry)
+    policy.apply_wandb_env(telemetry, settings)
+    langfuse_exporter.configure(settings)
 
     if settings.require_api_key or settings.admin_key:
         try:
@@ -46,11 +53,13 @@ async def lifespan(app: FastAPI):
         yield
     finally:
         await close_anthropic_client()
+        langfuse_exporter.shutdown()
 
 
 app = FastAPI(title="EvalRAG", version="0.3.0", lifespan=lifespan)
 
 app.add_middleware(RequestIDMiddleware)
+app.add_middleware(MetricsMiddleware)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=settings.cors_origin_list,
@@ -65,6 +74,7 @@ app.include_router(compare.router, prefix="/compare", tags=["compare"])
 app.include_router(graph.router, prefix="/graph", tags=["graph"])
 app.include_router(eval_routes.router, prefix="/eval", tags=["eval"])
 app.include_router(traces.router, prefix="/traces", tags=["traces"])
+app.include_router(metrics.router, prefix="/metrics", tags=["metrics"])
 
 
 @app.exception_handler(Exception)
@@ -132,7 +142,12 @@ async def global_exception_handler(request: Request, exc: Exception):
 
 @app.get("/health", tags=["health"])
 async def health() -> dict:
-    """Report liveness, which providers are configured, and whether auth is on."""
+    """Report liveness, which providers are configured, and whether auth is on.
+
+    ``langfuse`` and ``wandb`` are true only when the telemetry policy actually
+    lets them export, not merely when keys are present.
+    """
+    telemetry = policy.evaluate(settings)
     return {
         "status": "ok",
         "version": app.version,
@@ -140,7 +155,12 @@ async def health() -> dict:
         "providers": {
             "anthropic": bool(settings.anthropic_api_key),
             "openai": bool(settings.openai_api_key),
-            "langfuse": bool(settings.langfuse_public_key and settings.langfuse_secret_key),
-            "wandb": bool(settings.wandb_api_key),
+            "langfuse": telemetry.langfuse.enabled,
+            "wandb": telemetry.wandb.enabled,
+        },
+        "telemetry": {
+            "mode": telemetry.mode,
+            "wandb_mode": telemetry.wandb_mode,
+            "metrics": settings.metrics_enabled,
         },
     }

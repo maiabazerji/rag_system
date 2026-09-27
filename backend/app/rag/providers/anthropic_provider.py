@@ -15,6 +15,7 @@ from app.config import settings
 from app.logging_config import get_structured_logger
 from app.rag.providers.base import MissingKeyError, ProviderError
 from app.resilience import CircuitBreaker, async_timeout_wrapper, with_retry
+from app.tracing import instrument
 
 logger = get_structured_logger(__name__)
 
@@ -96,6 +97,7 @@ def _text_of(response: Any) -> str:
     ).strip()
 
 
+@instrument.llm_call
 @with_retry(max_retries=settings.provider_max_retries, backoff_factor=2.0, jitter=True)
 async def _create_message(**kwargs: Any) -> Any:
     """Issue one Messages API call with a timeout, tracking the circuit breaker.
@@ -304,13 +306,17 @@ async def tool_use_loop(
         tool_results: list[dict] = []
         for tu in tool_uses:
             handler = tool_handlers.get(tu.name)
-            if handler is None:
-                content, is_error = f"unknown tool {tu.name!r}", True
-            else:
-                try:
-                    content, is_error = await handler(tu.input), False
-                except Exception as e:  # surfaced to the model so it can recover
-                    content, is_error = f"{type(e).__name__}: {e}", True
+            with instrument.tool_call(tu.name, tu.input) as tool_span:
+                if handler is None:
+                    content, is_error = f"unknown tool {tu.name!r}", True
+                else:
+                    try:
+                        content, is_error = await handler(tu.input), False
+                    except Exception as e:  # surfaced to the model so it can recover
+                        content, is_error = f"{type(e).__name__}: {e}", True
+                if tool_span is not None:
+                    tool_span.output = str(content)
+                    tool_span.error = "tool_error" if is_error else None
             tool_results.append(
                 {
                     "type": "tool_result",
