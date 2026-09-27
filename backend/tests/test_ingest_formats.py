@@ -3,12 +3,12 @@ import asyncio
 from unittest.mock import AsyncMock, patch
 
 import pytest
+from document_builders import make_docx, make_pdf
 
 from app.rag import parsers
 from app.rag.ingest import enqueue_document
 from app.rag.parsers import SUPPORTED_EXTENSIONS
 from app.rag.store import StaleRevisions
-from tests.test_parsers import make_docx, make_pdf
 
 
 class TestFormatsRoute:
