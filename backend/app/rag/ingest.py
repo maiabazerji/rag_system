@@ -6,6 +6,9 @@ Document ids are derived from the file's normalised text, so re-uploading an
 unchanged file is idempotent. Because a changed file gets a *new* id, and so a
 new set of point ids, indexing it cannot overwrite the previous revision in
 place; the old chunks are deleted explicitly after the new ones land.
+
+Every chunk carries the document's ``tenant`` and ``acl_groups``, which
+retrieval filters on (see ``app.access``).
 """
 from __future__ import annotations
 
@@ -14,6 +17,7 @@ import hashlib
 from datetime import UTC, datetime
 from pathlib import Path
 
+from app.access import PUBLIC_GROUP, normalize_groups
 from app.config import settings
 from app.logging_config import get_structured_logger
 from app.privacy.pii import redact
@@ -26,7 +30,7 @@ from app.schemas import Chunk
 logger = get_structured_logger(__name__)
 
 
-def _doc_id(text: str) -> str:
+def _doc_id(text: str, namespace: str = "") -> str:
     """Derive a stable document id from a document's normalised text.
 
     Hashing the extracted text rather than the raw bytes means a file whose
@@ -35,8 +39,24 @@ def _doc_id(text: str) -> str:
     re-indexes onto the same points instead of being stored a second time.
     Chunking collapses whitespace anyway, so two files that normalise alike
     really do produce byte-identical chunks.
+
+    ``namespace`` separates copies of the same text indexed under different
+    access scopes. Point ids derive from the doc id, so without it a second
+    tenant uploading the same file would overwrite the first tenant's points
+    (and their ACL). The default-tenant public scope uses an empty namespace,
+    which keeps the ids of documents indexed before ACLs existed.
     """
-    return hashlib.sha256(" ".join(text.split()).encode("utf-8")).hexdigest()[:16]
+    normalised = " ".join(text.split())
+    if namespace:
+        normalised = f"{namespace}\x00{normalised}"
+    return hashlib.sha256(normalised.encode("utf-8")).hexdigest()[:16]
+
+
+def _acl_namespace(tenant: str, acl_groups: list[str]) -> str:
+    """The doc-id namespace for an access scope; empty for default-tenant public."""
+    if tenant == settings.default_tenant and acl_groups == [PUBLIC_GROUP]:
+        return ""
+    return f"{tenant}\x00{','.join(acl_groups)}"
 
 
 def _redact_metadata(metadata: dict[str, str | int]) -> dict[str, str | int]:
@@ -67,7 +87,14 @@ def source_key(owner: str, path: str) -> str:
     return f"{owner}:{Path(path).as_posix()}"
 
 
-async def enqueue_document(filename: str, content: bytes, owner: str = "local") -> dict:
+async def enqueue_document(
+    filename: str,
+    content: bytes,
+    owner: str = "local",
+    *,
+    tenant: str | None = None,
+    acl_groups: list[str] | None = None,
+) -> dict:
     """Chunk, embed and index a document.
 
     Args:
@@ -76,6 +103,9 @@ async def enqueue_document(filename: str, content: bytes, owner: str = "local") 
         content: Raw file bytes.
         owner: Who is indexing it. Together with ``filename`` it forms the
             document's ``source_key``, which scopes stale-revision cleanup.
+        tenant: Tenant the document belongs to. Defaults to DEFAULT_TENANT.
+        acl_groups: Groups allowed to read it. Defaults to ``["public"]``.
+            Routes resolve both with ``app.access.resolve_document_acl``.
 
     Returns:
         The document id, filename, number of chunks indexed, how much of a
@@ -93,7 +123,9 @@ async def enqueue_document(filename: str, content: bytes, owner: str = "local") 
     # File metadata (an email's From/To, a document's author) is masked too.
     pii = redact(parsed.text, settings.pii_mode_ingest)
     text = pii.text
-    doc_id = _doc_id(text)
+    tenant = tenant or settings.default_tenant
+    groups = list(normalize_groups(acl_groups)) or [PUBLIC_GROUP]
+    doc_id = _doc_id(text, _acl_namespace(tenant, groups))
     key = source_key(owner, filename)
     ingested_at = datetime.now(UTC).isoformat(timespec="seconds")
     doc_metadata = _redact_metadata(parsed.metadata.as_dict())
@@ -112,6 +144,8 @@ async def enqueue_document(filename: str, content: bytes, owner: str = "local") 
                 "pii_counts": pii.counts,
                 "heading_path": c.heading_path,
                 "doc_metadata": doc_metadata,
+                "tenant": tenant,
+                "acl_groups": groups,
             },
         )
         for i, c in enumerate(chunk_structured(text))
@@ -146,6 +180,8 @@ async def enqueue_document(filename: str, content: bytes, owner: str = "local") 
     return {
         "doc_id": doc_id,
         "filename": filename,
+        "tenant": tenant,
+        "acl_groups": groups,
         "chunks": len(chunks),
         "stale_chunks_removed": stale.points,
         "stale_triples_removed": stale_triples,

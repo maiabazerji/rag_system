@@ -190,12 +190,20 @@ def purge_eval_runs(before: datetime) -> int:
     return deleted
 
 
+def purge_audit(before: datetime) -> int:
+    """Delete audit events older than ``before``, when the audit log is in use."""
+    from app import audit, auth
+
+    return audit.purge_audit_events(before) if auth.db_ready() else 0
+
+
 def register_builtin_targets() -> None:
     """(Re)register the built-in targets. Called at import."""
     register_retention_target("traces", purge_traces, days_setting="retention_traces_days")
     register_retention_target(
         "eval_runs", purge_eval_runs, days_setting="retention_eval_runs_days"
     )
+    register_retention_target("audit", purge_audit, days_setting="retention_audit_days")
 
 
 register_builtin_targets()

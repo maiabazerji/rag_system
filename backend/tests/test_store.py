@@ -141,7 +141,7 @@ class TestFetchChunks:
         ):
             await AgenticRAG().run("q", top_k=8, model="claude-sonnet-5", prompt_version="v1")
 
-        mock_fetch.assert_awaited_once_with(["d:1"])
+        mock_fetch.assert_awaited_once_with(["d:1"], access=None)
         mock_search.assert_not_awaited()
         assert captured["out"] == "chunk body"
 
@@ -346,7 +346,8 @@ class TestGraphAdminRoutes:
 
     def test_stats_stays_open_to_api_key_holders(self, client, settings, monkeypatch, graph):
         monkeypatch.setattr(settings, "admin_key", "correct-horse")
-        assert client.get("/graph/stats").status_code == 200
+        with patch("app.api.graph.readable_doc_ids", new=AsyncMock(return_value=set())):
+            assert client.get("/graph/stats").status_code == 200
 
 
 class TestGraphStoreConsistency:

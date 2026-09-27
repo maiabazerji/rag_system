@@ -1,9 +1,9 @@
 from fastapi import APIRouter, Depends, HTTPException
 
-from app.auth import require_api_key
+from app.auth import require_principal
 from app.tracing import get_trace
 
-router = APIRouter(dependencies=[Depends(require_api_key)])
+router = APIRouter(dependencies=[Depends(require_principal)])
 
 
 @router.get("/{trace_id}", summary="Fetch a request trace")

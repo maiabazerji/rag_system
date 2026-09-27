@@ -258,3 +258,34 @@ def mock_cross_encoder():
 
     mock.predict = predict_side_effect
     return mock
+
+
+class _InlineExecutor:
+    """Runs submitted work immediately, so background writes are visible at once."""
+
+    def submit(self, fn, *args, **kwargs):
+        from concurrent.futures import Future
+
+        future: Future = Future()
+        future.set_result(fn(*args, **kwargs))
+        return future
+
+
+@pytest.fixture
+def auth_db(tmp_path, monkeypatch):
+    """A throwaway SQLite auth database, with audit events written inline."""
+    from sqlalchemy import create_engine
+    from sqlalchemy.orm import sessionmaker
+
+    import app.audit as audit
+    from app import auth
+
+    engine = create_engine(f"sqlite:///{tmp_path / 'auth.db'}")
+    auth.Base.metadata.create_all(bind=engine)
+    monkeypatch.setattr(auth, "_engine", engine)
+    monkeypatch.setattr(
+        auth, "_SessionLocal", sessionmaker(autocommit=False, autoflush=False, bind=engine)
+    )
+    monkeypatch.setattr(audit, "_executor", _InlineExecutor())
+    yield engine
+    auth.Base.metadata.drop_all(bind=engine)

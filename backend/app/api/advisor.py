@@ -4,6 +4,7 @@ from __future__ import annotations
 from fastapi import APIRouter, Depends
 from fastapi.concurrency import run_in_threadpool
 
+from app.access import Principal
 from app.advisor.profile import build_profile
 from app.advisor.schemas import (
     AdviseRequest,
@@ -14,10 +15,11 @@ from app.advisor.schemas import (
 )
 from app.advisor.scoring import compliance_notes, hybrid_routing, score_strategies
 from app.advisor.validate import default_strategies, run_validation
-from app.auth import charge, record_tokens, require_api_key, strategy_units
+from app.audit import audited
+from app.auth import charge, record_tokens, require_principal, strategy_units
 from app.config import settings
 
-router = APIRouter(dependencies=[Depends(require_api_key)])
+router = APIRouter(dependencies=[Depends(require_principal)])
 
 
 @router.post(
@@ -29,17 +31,20 @@ router = APIRouter(dependencies=[Depends(require_api_key)])
         "tradeoffs and a suggested starting configuration."
     ),
 )
-async def advise(req: AdviseRequest, auth: dict = Depends(require_api_key)) -> AdviseResponse:
+async def advise(
+    req: AdviseRequest, principal: Principal = Depends(require_principal)
+) -> AdviseResponse:
     """Profile the project and score the strategies.
 
     Profile extraction uses Claude when a key is configured and falls back to
     keyword rules otherwise (``profile.source`` says which). Scoring is
     deterministic.
     """
-    profile, tokens_in, tokens_out = await build_profile(req.description, req.overrides)
+    with audited(principal, "advise"):
+        profile, tokens_in, tokens_out = await build_profile(req.description, req.overrides)
     await run_in_threadpool(
         record_tokens,
-        auth,
+        principal,
         tokens_input=tokens_in,
         tokens_output=tokens_out,
         model=settings.generator_model if profile.source == "llm" else None,
@@ -81,15 +86,20 @@ async def advise(req: AdviseRequest, auth: dict = Depends(require_api_key)) -> A
     ),
 )
 async def validate(
-    req: ValidateRequest, auth: dict = Depends(require_api_key)
+    req: ValidateRequest, principal: Principal = Depends(require_principal)
 ) -> ValidateResponse:
-    """Run the questions and aggregate refusals, latency, tokens and quality."""
+    """Run the questions and aggregate refusals, latency, tokens and quality.
+
+    Retrieval is limited to the documents the caller may read.
+    """
     strategies = req.strategies or default_strategies(req.profile)
+    with audited(principal, "advise", strategy=",".join(strategies)) as event:
+        await run_in_threadpool(
+            charge, principal, len(req.questions) * sum(strategy_units(s) for s in strategies)
+        )
+        response, tokens_in, tokens_out = await run_validation(req, access=principal.scope())
+        event.detail = f"validate questions={len(req.questions)}"
     await run_in_threadpool(
-        charge, auth, len(req.questions) * sum(strategy_units(s) for s in strategies)
-    )
-    response, tokens_in, tokens_out = await run_validation(req)
-    await run_in_threadpool(
-        record_tokens, auth, tokens_input=tokens_in, tokens_output=tokens_out
+        record_tokens, principal, tokens_input=tokens_in, tokens_output=tokens_out
     )
     return response

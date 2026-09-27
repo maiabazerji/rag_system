@@ -1,8 +1,9 @@
 """Per-principal views of the Postgres usage table, for access and erasure requests.
 
-Until principals exist as their own entity, a principal is identified by its
-API key: ``principal_id`` is either the key's numeric row id (what
-:func:`app.auth.require_api_key` returns as ``id``) or its name.
+Usage is recorded per API key. ``principal_id`` is the principal's id as
+:class:`app.access.Principal` spells it (``key:<id>``), or for convenience the
+key's bare numeric row id or its name. OIDC users (``oidc:<sub>``) have no
+usage rows.
 """
 from __future__ import annotations
 
@@ -16,6 +17,9 @@ from app.auth import APIKey, APIKeyUsage, session_scope
 
 def _keys(db: Session, principal_id: str) -> list[APIKey]:
     stmt = select(APIKey)
+    if principal_id.startswith("oidc:") or principal_id == "local":
+        return []
+    principal_id = principal_id.removeprefix("key:")
     if principal_id.isdigit():
         stmt = stmt.where(APIKey.id == int(principal_id))
     else:

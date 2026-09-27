@@ -33,6 +33,7 @@ from __future__ import annotations
 
 import json
 
+from app.access import AccessScope
 from app.config import settings
 from app.logging_config import get_structured_logger
 from app.rag.embed import embed_query_async
@@ -162,6 +163,7 @@ class AgenticRAG(Strategy):
         top_k: int,
         model: str,
         prompt_version: str,
+        access: AccessScope | None = None,
     ) -> StrategyResult:
         """Execute agentic RAG: run Claude in a tool-use loop to answer the question.
 
@@ -173,6 +175,9 @@ class AgenticRAG(Strategy):
             top_k: Not used directly; controls context size in final generation.
             model: Language model for Claude (must support tool use).
             prompt_version: Not used for agentic RAG (uses _SYSTEM instead).
+            access: The caller's read scope. Both tools are restricted to it,
+                so the agent cannot search for or fetch (by guessed id) a
+                chunk the caller may not read.
 
         Returns:
             StrategyResult with answer from tool calls, sources, confidence,
@@ -232,7 +237,7 @@ class AgenticRAG(Strategy):
                 },
             )
             vec = await embed_query_async(q)
-            hits = await vector_search(vec, top_k=k)
+            hits = await vector_search(vec, top_k=k, access=access)
             previews = []
             for h in hits:
                 cid = h.payload.get("chunk_id")
@@ -289,7 +294,7 @@ class AgenticRAG(Strategy):
                     },
                 )
                 return cached["text"]
-            hits = await fetch_chunks([cid])
+            hits = await fetch_chunks([cid], access=access)
             for h in hits:
                 if h.payload.get("chunk_id") == cid:
                     text = h.payload.get("text")

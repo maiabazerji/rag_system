@@ -309,6 +309,15 @@ def erase_usage(request: ErasureRequest) -> int:
     return delete_usage(request.principal_id)
 
 
+def erase_audit(request: ErasureRequest) -> int:
+    """Delete the principal's audit events. Documents have none of their own."""
+    from app import audit, auth
+
+    if request.principal_id is None or not auth.db_ready():
+        return 0
+    return audit.erase_principal_audit(request.principal_id)
+
+
 def register_builtin_targets() -> None:
     """(Re)register the built-in targets. Called at import."""
     register_erasure_target("vectors", erase_vectors)
@@ -316,6 +325,7 @@ def register_builtin_targets() -> None:
     register_erasure_target("traces", erase_trace_records)
     register_erasure_target("eval_runs", erase_eval_runs)
     register_erasure_target("usage", erase_usage)
+    register_erasure_target("audit", erase_audit)
 
 
 register_builtin_targets()

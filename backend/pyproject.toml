@@ -31,6 +31,8 @@ dependencies = [
     # Monitoring: /metrics and the Langfuse OTLP exporter (docs/monitoring.md)
     "prometheus-client>=0.20,<1.0",
     "httpx>=0.27,<1.0",
+    # SSO: OIDC token validation (RS/PS/ES signatures need `crypto`)
+    "PyJWT[crypto]>=2.8,<3.0",
 ]
 
 [project.optional-dependencies]

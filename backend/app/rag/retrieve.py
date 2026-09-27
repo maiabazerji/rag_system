@@ -11,6 +11,7 @@ retrieval in the fuse-two-retrievers sense.
 """
 from __future__ import annotations
 
+from app.access import AccessScope
 from app.logging_config import get_structured_logger
 from app.rag.embed import embed_query_async
 from app.rag.store import StoreUnavailable, search
@@ -23,7 +24,9 @@ _RESERVED = {"chunk_id", "doc_id", "text"}
 
 
 @instrument.retrieval
-async def dense_search(query: str, top_k: int = 50) -> list[Chunk]:
+async def dense_search(
+    query: str, top_k: int = 50, access: AccessScope | None = None
+) -> list[Chunk]:
     """Retrieve relevant chunks from the vector store using dense vector search.
 
     Encodes the query to a vector embedding, then searches the Qdrant vector store
@@ -38,6 +41,8 @@ async def dense_search(query: str, top_k: int = 50) -> list[Chunk]:
         query: The search query string (e.g., a user question or refined search term).
         top_k: Number of chunks to retrieve (default 50). Callers typically retrieve
             more here and rerank to a smaller number later.
+        access: Search only the chunks this scope may read. ``None`` searches
+            everything and is for internal jobs only.
 
     Returns:
         List of Chunk objects sorted by vector similarity (most similar first).
@@ -54,7 +59,7 @@ async def dense_search(query: str, top_k: int = 50) -> list[Chunk]:
     """
     try:
         vec = await embed_query_async(query)
-        hits = await search(vec, top_k=top_k)
+        hits = await search(vec, top_k=top_k, access=access)
         chunks = []
         for h in hits:
             chunk_id = h.payload.get("chunk_id")

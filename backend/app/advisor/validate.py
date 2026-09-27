@@ -19,6 +19,7 @@ import re
 import statistics
 from collections import Counter
 
+from app.access import AccessScope
 from app.advisor.schemas import (
     ProjectProfile,
     StrategyName,
@@ -119,8 +120,13 @@ def pick_winner(cards: list[StrategyScorecard]) -> tuple[StrategyName | None, st
 
 async def run_validation(
     req: ValidateRequest,
+    access: AccessScope | None = None,
 ) -> tuple[ValidateResponse, int, int]:
     """Run every question through every strategy.
+
+    Args:
+        req: The questions, strategies and options.
+        access: Retrieve only documents this scope may read.
 
     Returns:
         The response plus the total input and output tokens spent by strategies.
@@ -132,7 +138,9 @@ async def run_validation(
     for name in strategies:
         for q in req.questions:
             try:
-                result, err = await run_strategy_raw(q.question, strategy=name, model=req.model)
+                result, err = await run_strategy_raw(
+                    q.question, strategy=name, model=req.model, access=access
+                )
             except Exception as e:
                 logger.exception(
                     f"Advisor validation: {name} raised {type(e).__name__}: {e}",

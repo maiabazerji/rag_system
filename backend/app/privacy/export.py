@@ -110,11 +110,21 @@ def traces(principal_id: str) -> dict[str, Any]:
     return {"count": len(items), "items": items}
 
 
+def audit_events(principal_id: str) -> dict[str, Any]:
+    """The principal's audit events, newest first (up to 1000)."""
+    from app import audit, auth
+
+    if not auth.db_ready():
+        return {"events": [], "total": 0}
+    return audit.list_audit_events(principal_id=principal_id, limit=1000)
+
+
 def register_builtin_sources() -> None:
     """(Re)register the built-in sections. Called at import."""
     register_export_source("documents", owned_documents)
     register_export_source("usage", usage)
     register_export_source("traces", traces)
+    register_export_source("audit", audit_events)
 
 
 register_builtin_sources()
