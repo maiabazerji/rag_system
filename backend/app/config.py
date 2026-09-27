@@ -268,6 +268,77 @@ class Settings(BaseSettings):
         description="Secret for /admin endpoints. They return 503 while unset.",
     )
 
+    # Access control: tenants, document groups and audit
+    default_tenant: str = Field(
+        default="default",
+        min_length=1,
+        max_length=128,
+        description=(
+            "Tenant for principals that carry none (API keys without one, OIDC "
+            "users when OIDC_TENANT_CLAIM is unset, local mode) and for chunks "
+            "indexed before tenants existed."
+        ),
+    )
+    acl_default_public: bool = Field(
+        default=False,
+        description=(
+            "Label uploads that name no groups as 'public' instead of with the "
+            "uploader's own groups."
+        ),
+    )
+    acl_legacy_public: bool = Field(
+        default=True,
+        description=(
+            "Treat chunks indexed before per-document ACLs existed (no "
+            "acl_groups payload) as 'public'. Turn off to hide them until "
+            "they are re-ingested with groups."
+        ),
+    )
+    audit_store_questions: bool = Field(
+        default=False,
+        description=(
+            "Store question text in the audit log. Off by default for privacy: "
+            "only a SHA-256 hash of the question is kept."
+        ),
+    )
+
+    # SSO via OpenID Connect (Microsoft Entra ID, ProConnect, Keycloak, ...)
+    oidc_issuer: str = Field(
+        default="",
+        description=(
+            "OIDC issuer URL. When set (and REQUIRE_API_KEY is on), a Bearer "
+            "JWT from this issuer is accepted alongside API keys."
+        ),
+    )
+    oidc_audience: str = Field(
+        default="", description="Expected 'aud' claim (the API's client id / app id URI)."
+    )
+    oidc_groups_claim: str = Field(
+        default="groups",
+        min_length=1,
+        description=(
+            "Claim holding the user's groups. Dotted paths reach nested claims, "
+            "e.g. 'realm_access.roles' for Keycloak or 'roles' for Entra app roles."
+        ),
+    )
+    oidc_admin_group: str = Field(
+        default="", description="Group whose members are admins. Empty: no OIDC admins."
+    )
+    oidc_tenant_claim: str = Field(
+        default="",
+        description=(
+            "Claim naming the user's tenant (e.g. 'tid' for Entra). Empty: every "
+            "OIDC user belongs to DEFAULT_TENANT."
+        ),
+    )
+    oidc_algorithms: str = Field(
+        default="RS256,PS256,ES256",
+        description="Comma-separated asymmetric JWS algorithms accepted on OIDC tokens.",
+    )
+    oidc_jwks_ttl_seconds: int = Field(
+        default=3600, ge=60, le=86400, description="How long fetched signing keys are cached."
+    )
+
     # CORS
     cors_origins: str = Field(
         default="http://localhost:5173",
@@ -335,6 +406,22 @@ class Settings(BaseSettings):
     @classmethod
     def _v_ollama(cls, v: str) -> str:
         return _validate_url(v, "OLLAMA_HOST", schemes=("http", "https"))
+
+    @field_validator("oidc_issuer")
+    @classmethod
+    def _v_oidc_issuer(cls, v: str) -> str:
+        # Kept verbatim (trailing slash included): `iss` must match it exactly.
+        v = v.strip()
+        return _validate_url(v, "OIDC_ISSUER", schemes=("https", "http")) if v else v
+
+    @property
+    def oidc_algorithm_list(self) -> list[str]:
+        """Accepted OIDC signing algorithms. Symmetric (HS*) and 'none' never are."""
+        return [
+            a.strip()
+            for a in self.oidc_algorithms.split(",")
+            if a.strip() and a.strip()[:2] in ("RS", "PS", "ES", "Ed")
+        ]
 
     @field_validator("postgres_url")
     @classmethod
@@ -427,6 +514,17 @@ class Settings(BaseSettings):
             warnings.append(
                 "REQUIRE_API_KEY is on but ADMIN_KEY is unset, so there is no way "
                 "to mint a key. Set ADMIN_KEY and use scripts/setup_auth.py."
+            )
+
+        if self.oidc_issuer and not self.oidc_audience:
+            errors.append(
+                "OIDC_ISSUER is set but OIDC_AUDIENCE is not; without it any token "
+                "the issuer mints for any application would be accepted."
+            )
+        if self.oidc_issuer and not self.require_api_key:
+            warnings.append(
+                "OIDC_ISSUER is set but REQUIRE_API_KEY is off, so tokens are "
+                "never checked and every caller is the local principal."
             )
 
         if not self.require_api_key:

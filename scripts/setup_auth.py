@@ -47,6 +47,9 @@ Examples:
   # Mint a key with a higher rate limit
   python scripts/setup_auth.py --create-key "ci" --rpm 60
 
+  # Mint a key that reads the 'hr' and 'finance' groups of tenant 'acme'
+  python scripts/setup_auth.py --create-key "hr-bot" --groups hr,finance --tenant acme
+
   # List keys with their 24-hour usage
   python scripts/setup_auth.py --list-keys
 
@@ -65,6 +68,15 @@ Examples:
         help="Requests per minute for the new key (default: 10)",
     )
     parser.add_argument(
+        "--groups",
+        default="",
+        metavar="G1,G2",
+        help="Comma-separated groups for the new key ('public' is implicit)",
+    )
+    parser.add_argument(
+        "--tenant", default=None, help="Tenant for the new key (default: DEFAULT_TENANT)"
+    )
+    parser.add_argument(
         "--list-keys", action="store_true", help="List all API keys and their usage"
     )
     parser.add_argument(
@@ -76,9 +88,11 @@ Examples:
     return parser
 
 
-def _create(name: str, rpm: int) -> None:
-    key = create_api_key(name, requests_per_minute=rpm)
-    print(f"\nCreated API key '{name}' ({rpm} requests/minute).\n")
+def _create(name: str, rpm: int, groups: list[str], tenant: str | None) -> None:
+    key = create_api_key(name, requests_per_minute=rpm, groups=groups, tenant=tenant)
+    print(f"\nCreated API key '{name}' ({rpm} requests/minute).")
+    print(f"  tenant: {tenant or settings.default_tenant}")
+    print(f"  groups: {', '.join(groups) or '(none; reads public documents only)'}\n")
     print(f"  {key}\n")
     print("This is the only time the key is shown -- save it now.")
     print("\nUse it from the UI (paste it into the API key field), or directly:")
@@ -98,6 +112,8 @@ def _list() -> None:
         usage = key["usage_24h"]
         print(f"  [{key['id']}] {key['name']}  ({status}, {key['requests_per_minute']} rpm)")
         print(f"      prefix:    {key['key_hint']}...")
+        print(f"      tenant:    {key['tenant']}")
+        print(f"      groups:    {', '.join(key['groups']) or '-'}")
         print(f"      created:   {key['created_at'] or 'unknown'}")
         print(f"      last used: {key['last_used'] or 'never'}")
         print(
@@ -123,7 +139,8 @@ def main() -> int:
 
     try:
         if args.create_key:
-            _create(args.create_key, args.rpm)
+            groups = [g.strip() for g in args.groups.split(",") if g.strip()]
+            _create(args.create_key, args.rpm, groups, args.tenant)
         if args.list_keys:
             _list()
         if args.deactivate_key is not None:

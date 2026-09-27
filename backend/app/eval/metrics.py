@@ -14,6 +14,7 @@ import uuid
 from collections import Counter
 from datetime import UTC, datetime
 
+from app.access import AccessScope
 from app.config import settings
 from app.eval.judge import DIMENSIONS, judge
 from app.eval.retrieval import (
@@ -114,6 +115,7 @@ async def _run_example(
     prompt_version: str | None,
     semaphore: asyncio.Semaphore,
     judge_answers: bool = True,
+    access: AccessScope | None = None,
 ) -> dict:
     """Answer one golden example, then score its retrieval and its answer."""
     async with semaphore:
@@ -123,6 +125,7 @@ async def _run_example(
             provider=provider,
             model=model,
             prompt_version=prompt_version,
+            access=access,
         )
         extra = result.extra if result is not None else {}
         # Retrieval is scored first and without a model call, so it is recorded
@@ -159,6 +162,7 @@ async def run_evaluation(
     model: str | None = None,
     prompt_version: str | None = None,
     judge_answers: bool = True,
+    access: AccessScope | None = None,
 ) -> dict:
     """Run a golden dataset end to end and aggregate the scores.
 
@@ -176,6 +180,8 @@ async def run_evaluation(
         judge_answers: When False, skip the LLM judge entirely. Retrieval is
             still scored (it needs no model call), which roughly halves the cost
             of a run at the price of the answer-quality dimensions.
+        access: Retrieve only documents this scope may read. The API passes
+            the caller's; ``None`` (scripts) is unrestricted.
 
     Returns:
         Dict with the run configuration, ``n`` examples attempted, ``n_scored``
@@ -227,6 +233,7 @@ async def run_evaluation(
                         prompt_version,
                         semaphore,
                         judge_answers,
+                        access,
                     )
                     for ex in examples
                 )

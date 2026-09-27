@@ -4,6 +4,9 @@ POST /graph/build       - start extracting triples from indexed chunks (async jo
 GET  /graph/build/{id}  - poll the status of a build job.
 GET  /graph/stats       - counts of triples, entities, indexed chunks.
 GET  /graph/entities    - search entities by substring.
+
+Stats and entities only count triples from documents the caller may read. The
+build is corpus-wide: it reads every chunk but returns only counts.
 POST /graph/reset       - wipe the graph (does not touch Qdrant; admin).
 """
 from __future__ import annotations
@@ -16,14 +19,16 @@ from typing import Any
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query
 
-from app.auth import require_admin_key, require_api_key
+from app.access import Principal
+from app.audit import ADMIN_KEY_PRINCIPAL, AuditRecord, emit
+from app.auth import require_admin_key, require_principal
 from app.logging_config import get_structured_logger
 from app.rag import graph_store
 from app.rag.graph_extract import extract_triples
-from app.rag.store import StoreUnavailable, scroll_chunks
+from app.rag.store import StoreUnavailable, readable_doc_ids, scroll_chunks
 
 logger = get_structured_logger(__name__)
-router = APIRouter(dependencies=[Depends(require_api_key)])
+router = APIRouter(dependencies=[Depends(require_principal)])
 
 # Build jobs are in-process and bounded; the graph itself is the durable artifact.
 _JOBS: OrderedDict[str, dict[str, Any]] = OrderedDict()
@@ -41,26 +46,30 @@ def _record_job(job_id: str, **fields: Any) -> None:
 
 
 @router.get("/stats", summary="Knowledge graph statistics")
-async def stats() -> dict:
-    """Return triple, entity and chunk counts for the current graph."""
-    return await asyncio.to_thread(graph_store.stats)
+async def stats(principal: Principal = Depends(require_principal)) -> dict:
+    """Return triple, entity and chunk counts for the part of the graph the caller may read."""
+    visible = await readable_doc_ids(principal.scope())
+    return await asyncio.to_thread(graph_store.stats, visible)
 
 
 @router.get("/entities", summary="Search graph entities")
 async def entities(
     q: str | None = Query(default=None, max_length=200, description="Substring filter"),
     limit: int = Query(default=50, ge=1, le=500, description="Max entities to return"),
+    principal: Principal = Depends(require_principal),
 ) -> dict:
     """List graph entities, optionally filtered by substring.
 
     Args:
         q: Case-insensitive substring to match.
         limit: Maximum number of entities to return.
+        principal: The caller; only entities from documents it may read are listed.
 
     Returns:
         The matching entities (truncated to `limit`) and the total match count.
     """
-    ents = (await asyncio.to_thread(graph_store.load)).entities
+    visible = await readable_doc_ids(principal.scope())
+    ents = (await asyncio.to_thread(graph_store.load)).entities_in(visible)
     if q:
         needle = q.lower().strip()
         ents = [e for e in ents if needle in e.lower()]
@@ -75,6 +84,11 @@ async def entities(
 async def reset() -> dict:
     """Delete every extracted triple. Does not touch the vector store."""
     await asyncio.to_thread(graph_store.reset)
+    emit(
+        AuditRecord(
+            principal_id=ADMIN_KEY_PRINCIPAL, tenant=None, action="admin", detail="graph_reset"
+        )
+    )
     logger.info("Knowledge graph reset")
     return await asyncio.to_thread(graph_store.stats)
 

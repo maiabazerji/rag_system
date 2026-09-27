@@ -13,6 +13,7 @@ from __future__ import annotations
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 
+from app.access import AccessScope
 from app.schemas import Source
 
 
@@ -105,6 +106,7 @@ class Strategy(ABC):
         top_k: int,
         model: str,
         prompt_version: str,
+        access: AccessScope | None = None,
     ) -> StrategyResult:
         """Execute the RAG strategy to answer a question.
 
@@ -116,6 +118,9 @@ class Strategy(ABC):
                 (e.g., "claude-sonnet-5", "gpt-4").
             prompt_version: Version/name of the prompt template to use for system/user
                 messages (e.g., "default", "v2"). Versioning allows A/B testing.
+            access: The caller's read scope. Every retrieval the strategy makes
+                must be restricted to it. ``None`` is unrestricted and is for
+                internal scripts only; API routes always pass a scope.
 
         Returns:
             StrategyResult containing the answer, sources, confidence, and telemetry.

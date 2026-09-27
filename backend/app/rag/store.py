@@ -15,6 +15,7 @@ from fastapi import Request
 from fastapi.responses import JSONResponse
 from qdrant_client.http import models as qm
 
+from app.access import PUBLIC_GROUP, AccessScope
 from app.config import settings
 from app.middleware.request_id import get_request_id
 from app.rag.embed import embedding_dim
@@ -91,19 +92,77 @@ async def _ensure_collection(c: AsyncQdrantClient) -> None:
                     f"but embedding model '{settings.embedding_model}' produces dim={dim}. "
                     "Recreate the collection (delete it via Qdrant API or wipe the volume)."
                 )
-            return
-        await async_timeout_wrapper(
-            c.create_collection(
-                collection_name=settings.qdrant_collection,
-                vectors_config=qm.VectorParams(size=dim, distance=qm.Distance.COSINE),
-            ),
-            timeout=5.0,
-            service_name="Qdrant",
-        )
+        else:
+            await async_timeout_wrapper(
+                c.create_collection(
+                    collection_name=settings.qdrant_collection,
+                    vectors_config=qm.VectorParams(size=dim, distance=qm.Distance.COSINE),
+                ),
+                timeout=5.0,
+                service_name="Qdrant",
+            )
     except Exception as e:
         logger.error(f"Failed to ensure Qdrant collection: {type(e).__name__}: {e}")
         _qdrant_breaker.record_failure()
         raise
+    await _ensure_payload_indexes(c)
+
+
+# Payload fields every access-controlled query filters on.
+_ACL_INDEXED_FIELDS = ("tenant", "acl_groups")
+
+
+async def _ensure_payload_indexes(c: AsyncQdrantClient) -> None:
+    """Index the access-control fields, so filtered search stays fast.
+
+    Creating an index that exists is a no-op in Qdrant, so this runs on every
+    start and also upgrades collections created before ACLs existed. A
+    failure is logged, not raised: filtering still works unindexed, only slower.
+    """
+    for field_name in _ACL_INDEXED_FIELDS:
+        try:
+            await async_timeout_wrapper(
+                c.create_payload_index(
+                    collection_name=settings.qdrant_collection,
+                    field_name=field_name,
+                    field_schema=qm.PayloadSchemaType.KEYWORD,
+                ),
+                timeout=10.0,
+                service_name="Qdrant",
+            )
+        except Exception as e:
+            logger.warning(
+                f"Could not create payload index on '{field_name}': {type(e).__name__}: {e}"
+            )
+
+
+def access_filter(access: AccessScope) -> qm.Filter:
+    """The Qdrant filter matching exactly the chunks ``access`` may read.
+
+    Mirrors :meth:`AccessScope.permits`: chunks without a ``tenant`` belong to
+    the default tenant, and chunks without ``acl_groups`` are public while
+    ``ACL_LEGACY_PUBLIC`` is on.
+    """
+    tenant_match: list[qm.Condition] = [
+        qm.FieldCondition(key="tenant", match=qm.MatchValue(value=access.tenant))
+    ]
+    if access.tenant == settings.default_tenant:
+        tenant_match.append(qm.IsEmptyCondition(is_empty=qm.PayloadField(key="tenant")))
+
+    group_match: list[qm.Condition] = [
+        qm.FieldCondition(key="acl_groups", match=qm.MatchAny(any=sorted(access.groups)))
+    ]
+    if settings.acl_legacy_public and PUBLIC_GROUP in access.groups:
+        group_match.append(qm.IsEmptyCondition(is_empty=qm.PayloadField(key="acl_groups")))
+
+    return qm.Filter(must=[qm.Filter(should=tenant_match), qm.Filter(should=group_match)])
+
+
+def _permitted(points: list, access: AccessScope | None) -> list:
+    """Re-check each point against ``access``: the filter's second line of defence."""
+    if access is None:
+        return points
+    return [p for p in points if access.permits(p.payload)]
 
 
 # A single document's superseded revisions, so one page always covers them.
@@ -165,7 +224,16 @@ async def upsert(chunks, vectors) -> None:
         raise StoreUnavailable(f"Qdrant upsert failed: {type(e).__name__}: {e}") from e
 
 
-async def search(vector, top_k: int = 8):
+async def search(vector, top_k: int = 8, access: AccessScope | None = None):
+    """Nearest chunks to ``vector``.
+
+    Args:
+        vector: The query embedding.
+        top_k: How many points to return.
+        access: Restrict to chunks this scope may read. ``None`` is
+            unrestricted and is for internal jobs only; request paths always
+            pass a scope.
+    """
     if not _qdrant_breaker.can_execute():
         raise StoreUnavailable("Qdrant service is unavailable (circuit breaker open)")
     try:
@@ -175,25 +243,31 @@ async def search(vector, top_k: int = 8):
                 collection_name=settings.qdrant_collection,
                 query=vector,
                 limit=top_k,
+                query_filter=access_filter(access) if access else None,
             ),
             timeout=5.0,
             service_name="Qdrant",
         )
         _qdrant_breaker.record_success()
-        return result.points
+        return _permitted(result.points, access)
     except Exception as e:
         logger.error(f"Qdrant search failed: {type(e).__name__}: {e}")
         _qdrant_breaker.record_failure()
         raise StoreUnavailable(f"Qdrant search failed: {type(e).__name__}: {e}") from e
 
 
-async def count() -> int:
+async def count(access: AccessScope | None = None) -> int:
+    """Number of indexed chunks, or of those ``access`` may read."""
     if not _qdrant_breaker.can_execute():
         raise StoreUnavailable("Qdrant service is unavailable (circuit breaker open)")
     try:
         c = await client()
         result = await async_timeout_wrapper(
-            c.count(collection_name=settings.qdrant_collection, exact=True),
+            c.count(
+                collection_name=settings.qdrant_collection,
+                count_filter=access_filter(access) if access else None,
+                exact=True,
+            ),
             timeout=5.0,
             service_name="Qdrant",
         )
@@ -205,15 +279,17 @@ async def count() -> int:
         raise StoreUnavailable(f"Qdrant count failed: {type(e).__name__}: {e}") from e
 
 
-async def fetch_chunks(chunk_ids: Iterable[str]) -> list:
+async def fetch_chunks(chunk_ids: Iterable[str], access: AccessScope | None = None) -> list:
     """Look chunks up by id.
 
     Args:
         chunk_ids: Chunk ids, as recorded in the ``chunk_id`` payload field.
+        access: Restrict to chunks this scope may read; the others are
+            skipped exactly like unknown ids. ``None`` is unrestricted.
 
     Returns:
-        The stored points (with payload) for the ids that exist; unknown ids
-        are skipped.
+        The stored points (with payload) for the ids that exist and are
+        readable; unknown ids are skipped.
 
     Raises:
         StoreUnavailable: If Qdrant is unreachable or its breaker is open.
@@ -223,27 +299,49 @@ async def fetch_chunks(chunk_ids: Iterable[str]) -> list:
         return []
     if not _qdrant_breaker.can_execute():
         raise StoreUnavailable("Qdrant service is unavailable (circuit breaker open)")
+    point_ids: list[qm.ExtendedPointId] = [_point_id(cid) for cid in ids]
     try:
         c = await client()
-        points = await async_timeout_wrapper(
-            c.retrieve(
-                collection_name=settings.qdrant_collection,
-                ids=[_point_id(cid) for cid in ids],
-                with_payload=True,
-                with_vectors=False,
-            ),
-            timeout=5.0,
-            service_name="Qdrant",
-        )
+        if access is None:
+            points = await async_timeout_wrapper(
+                c.retrieve(
+                    collection_name=settings.qdrant_collection,
+                    ids=point_ids,
+                    with_payload=True,
+                    with_vectors=False,
+                ),
+                timeout=5.0,
+                service_name="Qdrant",
+            )
+        else:
+            # `retrieve` takes no filter, so look the ids up with a filtered scroll.
+            scoped = access_filter(access)
+            points, _ = await async_timeout_wrapper(
+                c.scroll(
+                    collection_name=settings.qdrant_collection,
+                    scroll_filter=qm.Filter(
+                        must=[qm.HasIdCondition(has_id=point_ids), *(scoped.must or [])]
+                    ),
+                    limit=len(point_ids),
+                    with_payload=True,
+                    with_vectors=False,
+                ),
+                timeout=5.0,
+                service_name="Qdrant",
+            )
         _qdrant_breaker.record_success()
-        return list(points)
+        return _permitted(list(points), access)
     except Exception as e:
         logger.error(f"Qdrant retrieve failed: {type(e).__name__}: {e}")
         _qdrant_breaker.record_failure()
         raise StoreUnavailable(f"Qdrant retrieve failed: {type(e).__name__}: {e}") from e
 
 
-async def scroll_chunks(limit: int | None = None) -> list:
+async def scroll_chunks(
+    limit: int | None = None,
+    access: AccessScope | None = None,
+    with_payload: bool | list[str] = True,
+) -> list:
     """Enumerate stored chunks, paging through the whole collection.
 
     Unlike a similarity search this sees every point, however many there are,
@@ -251,6 +349,8 @@ async def scroll_chunks(limit: int | None = None) -> list:
 
     Args:
         limit: Stop after this many points. ``None`` reads the whole collection.
+        access: Enumerate only the chunks this scope may read.
+        with_payload: Payload to return: all of it, or only the named fields.
 
     Returns:
         The stored points, with payload.
@@ -272,13 +372,14 @@ async def scroll_chunks(limit: int | None = None) -> list:
                     collection_name=settings.qdrant_collection,
                     limit=page,
                     offset=offset,
-                    with_payload=True,
+                    with_payload=with_payload,
                     with_vectors=False,
+                    scroll_filter=access_filter(access) if access else None,
                 ),
                 timeout=10.0,
                 service_name="Qdrant",
             )
-            records.extend(points)
+            records.extend(_permitted(points, access))
             if offset is None:
                 break
         _qdrant_breaker.record_success()
@@ -287,6 +388,21 @@ async def scroll_chunks(limit: int | None = None) -> list:
         logger.error(f"Qdrant scroll failed: {type(e).__name__}: {e}")
         _qdrant_breaker.record_failure()
         raise StoreUnavailable(f"Qdrant scroll failed: {type(e).__name__}: {e}") from e
+
+
+async def readable_doc_ids(access: AccessScope) -> set[str]:
+    """Ids of every document ``access`` may read.
+
+    Used to prune derived data that lives outside Qdrant (the knowledge graph)
+    down to what the caller is allowed to see.
+
+    Raises:
+        StoreUnavailable: If Qdrant cannot be enumerated.
+    """
+    records = await scroll_chunks(
+        access=access, with_payload=["doc_id", "tenant", "acl_groups"]
+    )
+    return {r.payload["doc_id"] for r in records if r.payload and r.payload.get("doc_id")}
 
 
 async def delete_stale_revisions(source_key: str, keep_doc_id: str) -> StaleRevisions:

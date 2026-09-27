@@ -6,6 +6,9 @@ so the system can answer questions about itself.
 Usage:
     python scripts/ingest.py
     python scripts/ingest.py --path data/docs --concurrency 8
+    python scripts/ingest.py --path hr/ --tenant acme --groups hr,managers
+
+Without --tenant/--groups, documents go to DEFAULT_TENANT and are public.
 """
 from __future__ import annotations
 
@@ -49,14 +52,18 @@ def _relative_name(path: Path, root: Path) -> str:
 
 
 async def _ingest_one(
-    path: Path, root: Path, semaphore: asyncio.Semaphore
+    path: Path,
+    root: Path,
+    semaphore: asyncio.Semaphore,
+    tenant: str | None = None,
+    groups: list[str] | None = None,
 ) -> tuple[Path, str | None]:
     """Ingest one file. Returns (path, error) so one failure cannot stop the run."""
     name = _relative_name(path, root)
     async with semaphore:
         try:
             content = await asyncio.to_thread(path.read_bytes)
-            result = await enqueue_document(name, content)
+            result = await enqueue_document(name, content, tenant=tenant, acl_groups=groups)
             print(f"  ok    {name}  ({result['chunks']} chunks)")
             return path, None
         except Exception as e:
@@ -76,7 +83,14 @@ async def main() -> int:
     parser.add_argument(
         "--no-meta", action="store_true", help="Skip the top-level README/LEARN docs"
     )
+    parser.add_argument("--tenant", default=None, help="Tenant (default: DEFAULT_TENANT)")
+    parser.add_argument(
+        "--groups",
+        default=None,
+        help="Comma-separated groups allowed to read the documents (default: public)",
+    )
     args = parser.parse_args()
+    groups = [g for g in args.groups.split(",") if g.strip()] if args.groups else None
 
     if not args.path.exists():
         print(f"No such directory: {args.path}")
@@ -90,7 +104,9 @@ async def main() -> int:
 
     print(f"Ingesting {len(paths)} file(s) from {args.path} ...\n")
     semaphore = asyncio.Semaphore(args.concurrency)
-    outcomes = await asyncio.gather(*(_ingest_one(p, args.path, semaphore) for p in paths))
+    outcomes = await asyncio.gather(
+        *(_ingest_one(p, args.path, semaphore, args.tenant, groups) for p in paths)
+    )
 
     failures = [(p, err) for p, err in outcomes if err]
     print(f"\n{len(outcomes) - len(failures)}/{len(outcomes)} files ingested.")

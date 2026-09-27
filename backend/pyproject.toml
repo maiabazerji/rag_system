@@ -22,6 +22,8 @@ dependencies = [
     # API keys and usage accounting
     "sqlalchemy>=2.0,<3.0",
     "psycopg[binary]>=3.2,<4.0",
+    # SSO: OIDC token validation (RS/PS/ES signatures need `crypto`)
+    "PyJWT[crypto]>=2.8,<3.0",
 ]
 
 [project.optional-dependencies]

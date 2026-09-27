@@ -145,6 +145,8 @@ async def health() -> dict:
         "status": "ok",
         "version": app.version,
         "auth_required": settings.require_api_key,
+        # Lets a client offer SSO sign-in; null when only API keys are accepted.
+        "oidc_issuer": (settings.oidc_issuer or None) if settings.require_api_key else None,
         "providers": {
             "anthropic": bool(settings.anthropic_api_key),
             "openai": bool(settings.openai_api_key),

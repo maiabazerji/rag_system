@@ -30,6 +30,7 @@ Use cases:
 """
 from __future__ import annotations
 
+from app.access import AccessScope
 from app.config import settings
 from app.logging_config import get_structured_logger
 from app.prompts import render_prompt
@@ -67,6 +68,7 @@ class ClassicRAG(Strategy):
         top_k: int,
         model: str,
         prompt_version: str,
+        access: AccessScope | None = None,
     ) -> StrategyResult:
         """Execute classic RAG pipeline: retrieve, rerank, and generate.
 
@@ -75,6 +77,7 @@ class ClassicRAG(Strategy):
             top_k: Number of top chunks to include in context for generation.
             model: Language model ID for generation (e.g., "claude-sonnet-5").
             prompt_version: Prompt template version to use for formatting the context.
+            access: The caller's read scope; retrieval is restricted to it.
 
         Returns:
             StrategyResult with answer, sources, token counts, latency, and trace.
@@ -95,7 +98,9 @@ class ClassicRAG(Strategy):
             },
         )
 
-        candidates = await dense_search(question, top_k=settings.retrieval_top_k)
+        candidates = await dense_search(
+            question, top_k=settings.retrieval_top_k, access=access
+        )
         logger.debug(
             "Retrieval completed",
             extra_fields={

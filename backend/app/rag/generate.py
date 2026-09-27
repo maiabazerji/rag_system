@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import time
 
+from app.access import AccessScope
 from app.config import settings
 from app.logging_config import get_structured_logger
 from app.prompts.loader import UnknownPromptVersionError
@@ -127,6 +128,7 @@ async def answer_question(
     model: str | None = None,
     prompt_version: str | None = None,
     strategy: str = "classic",
+    access: AccessScope | None = None,
 ) -> Answer:
     """Answer a question using the specified RAG strategy.
 
@@ -159,6 +161,9 @@ async def answer_question(
             If None, defaults to "default". Ignored by agentic RAG.
         strategy: RAG strategy to use ("classic", "graph", "agentic").
             Defaults to "classic".
+        access: The caller's read scope; retrieval only sees documents it
+            permits. ``None`` is unrestricted, for internal scripts only: API
+            routes always pass the requesting principal's scope.
 
     Returns:
         Answer with question, answer text, sources, confidence (0-1), refusal flag,
@@ -184,6 +189,7 @@ async def answer_question(
         model=model,
         prompt_version=prompt_version,
         strategy=strategy,
+        access=access,
     )
     return answer
 
@@ -195,6 +201,7 @@ async def answer_question_detailed(
     model: str | None = None,
     prompt_version: str | None = None,
     strategy: str = "classic",
+    access: AccessScope | None = None,
 ) -> tuple[Answer, StrategyResult | None]:
     """Like :func:`answer_question`, but also return the raw StrategyResult.
 
@@ -217,7 +224,7 @@ async def answer_question_detailed(
     top_k = settings.rerank_top_k if top_k is None else top_k
 
     try:
-        doc_count = await store_count()
+        doc_count = await store_count(access)
         if doc_count == 0:
             logger.info(
                 "No documents indexed",
@@ -281,6 +288,7 @@ async def answer_question_detailed(
                 top_k=top_k,
                 model=model,
                 prompt_version=prompt_version,
+                access=access,
             )
         except (MissingKeyError, ProviderError) as e:
             logger.warning(
@@ -373,6 +381,7 @@ async def run_strategy_raw(
     model: str | None = None,
     top_k: int | None = None,
     prompt_version: str = "default",
+    access: AccessScope | None = None,
 ) -> tuple[StrategyResult | None, str | None]:
     """Execute a strategy and return raw StrategyResult + telemetry.
 
@@ -388,6 +397,7 @@ async def run_strategy_raw(
         model: Model to use. If None, defaults to Anthropic model for the strategy.
         top_k: Max chunks in context. Defaults to 8.
         prompt_version: Prompt template version. Defaults to "default".
+        access: The caller's read scope (see :func:`answer_question`).
 
     Returns:
         Tuple of (StrategyResult or None, error_message or None).
@@ -408,7 +418,7 @@ async def run_strategy_raw(
     model = model or _default_model("anthropic", strategy)
     top_k = settings.rerank_top_k if top_k is None else top_k
     try:
-        doc_count = await store_count()
+        doc_count = await store_count(access)
         if doc_count == 0:
             logger.info(
                 "No documents indexed for strategy comparison",
@@ -457,7 +467,11 @@ async def run_strategy_raw(
         t0 = time.perf_counter()
         try:
             result = await strat.run(
-                question, top_k=top_k, model=model, prompt_version=prompt_version
+                question,
+                top_k=top_k,
+                model=model,
+                prompt_version=prompt_version,
+                access=access,
             )
         except (MissingKeyError, ProviderError) as e:
             logger.warning(
