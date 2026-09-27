@@ -1,4 +1,7 @@
 """Prometheus metrics: what /metrics exposes, and who may read it."""
+import json
+import re
+from pathlib import Path
 from unittest.mock import AsyncMock, patch
 
 import pytest
@@ -121,3 +124,22 @@ class TestContent:
         assert _value(
             text, "evalrag_telemetry_dropped_total", exporter="langfuse", reason="queue_full"
         )
+
+
+def test_grafana_dashboard_only_uses_exported_metrics():
+    """The provisioned dashboard must not drift from the metric names."""
+    dashboard = (
+        Path(__file__).resolve().parents[2]
+        / "infra/monitoring/grafana/dashboards/evalrag-overview.json"
+    )
+    if not dashboard.exists():  # the backend image carries backend/ only
+        pytest.skip("infra/ not available")
+    panels = json.loads(dashboard.read_text())["panels"]
+    used = {
+        m for p in panels for t in p["targets"] for m in re.findall(r"\b(evalrag_\w+)", t["expr"])
+    }
+    families = list(monitoring.REGISTRY.collect())
+    exported = {f.name for f in families} | {s.name for f in families for s in f.samples}
+    for name in used:
+        base = re.sub(r"_(bucket|count|sum|total)$", "", name)
+        assert name in exported or base in exported, name

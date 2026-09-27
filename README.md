@@ -43,7 +43,7 @@ Everything in this table is implemented. The embedding model is a real SentenceT
 2. `answer_question` → [`generate.py`](backend/app/rag/generate.py) picks defaults, opens a trace, and calls `get_strategy(strategy).run(...)`
 3. The strategy retrieves in its own way but returns the same `StrategyResult` (answer, sources, latency, tokens, trace)
 4. All three generate through `AsyncAnthropic` ([`anthropic_provider.py`](backend/app/rag/providers/anthropic_provider.py)); the agentic strategy uses `tool_use_loop`
-5. The trace is retrievable from `/traces/{id}` (in memory, so it does not survive a restart)
+5. The trace is retrievable from `/traces/{id}` (in memory, so it does not survive a restart), and is exported to Langfuse when `TELEMETRY_MODE` allows it ([docs/monitoring.md](docs/monitoring.md))
 
 Retrieval is **dense-only**: the query is embedded and matched against Qdrant. The lexical BM25 signal enters one step later, in [`rerank.py`](backend/app/rag/rerank.py), as the reranker's fallback when the cross-encoder is unavailable. This is a dense-retrieve-then-rerank pipeline, not hybrid retrieval in the fuse-two-retrievers sense.
 
@@ -131,7 +131,7 @@ Open `.env` and set `ANTHROPIC_API_KEY`. Everything else has a working default. 
 docker compose -f infra/docker-compose.yml up -d --build
 ```
 
-Add `--profile tracing` if you also want Langfuse. The first build downloads a couple of GB; later starts take seconds.
+Add `--profile tracing` for a self-hosted Langfuse, or `--profile monitoring` for Prometheus and Grafana (see [docs/monitoring.md](docs/monitoring.md)). The first build downloads a couple of GB; later starts take seconds.
 
 ### 3. Open
 
@@ -141,6 +141,8 @@ Add `--profile tracing` if you also want Langfuse. The first build downloads a c
 | Backend | <http://localhost:8011/docs> | OpenAPI / Swagger UI |
 | Health | <http://localhost:8011/health> | Which providers are configured |
 | Langfuse | <http://localhost:3100> | Only with `--profile tracing` |
+| Prometheus | <http://localhost:9090> | Only with `--profile monitoring` |
+| Grafana | <http://localhost:3300> | Only with `--profile monitoring` |
 
 ### 4. Ingest and evaluate
 
@@ -222,6 +224,8 @@ Auth requires Postgres. It is the only thing that does, so with `REQUIRE_API_KEY
 | `AGENTIC_MAX_ITERS` | `15` | Bounds worst-case cost of one agentic question |
 | `MAX_UPLOAD_MB` | `25` | Upload ceiling |
 | `REQUIRE_API_KEY` | `false` | Enforce API keys |
+| `TELEMETRY_MODE` | `off` | Where traces may go: `off`, `self_hosted`, `cloud` ([details](docs/monitoring.md)) |
+| `METRICS_ENABLED` | `false` | Serve Prometheus metrics on `/metrics` |
 
 Changing `EMBEDDING_MODEL` changes the vector dimension. The backend refuses to start against a collection built with a different model and tells you so; recreate it with `docker compose -f infra/docker-compose.yml down -v`.
 
