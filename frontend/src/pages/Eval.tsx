@@ -1,5 +1,5 @@
-import { useQuery } from "@tanstack/react-query";
-import { get, post } from "../api/client";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { LONG_TIMEOUT_MS, errorMessage, get, post } from "../api/client";
 import LoadingSpinner from "../components/LoadingSpinner";
 import Tooltip from "../components/Tooltip";
 import ErrorAlert from "../components/ErrorAlert";
@@ -32,19 +32,22 @@ function formatRunDate(iso?: string | null): string | null {
 }
 
 export default function EvalPage() {
-  const { data, refetch, isFetching, error, isLoading } = useQuery({
+  const queryClient = useQueryClient();
+  const { data, refetch, error, isLoading } = useQuery({
     queryKey: ["runs"],
     queryFn: () => get<Run[]>("/eval/runs"),
   });
 
-  async function runNow() {
-    try {
-      await post("/eval/run", { dataset: "golden_v1" });
-      refetch();
-    } catch (e) {
-      // Error will be handled by ErrorAlert
-    }
-  }
+  // An eval answers and judges every golden question inside one request, so it
+  // gets the long timeout, and the buttons stay disabled until it returns.
+  const run = useMutation({
+    mutationFn: () => post("/eval/run", { dataset: "golden_v1" }, { timeoutMs: LONG_TIMEOUT_MS }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["runs"] });
+      queryClient.invalidateQueries({ queryKey: ["regressions"] });
+    },
+  });
+  const runNow = () => run.mutate();
 
   // A run whose judge never returned a score has nothing to show but four
   // dashes, so it is kept out of the list and reported as a count instead.
@@ -60,13 +63,27 @@ export default function EvalPage() {
         </p>
       </header>
 
+      {run.isPending && (
+        <div className="card p-4">
+          <LoadingSpinner message="Running evaluation. This answers and judges every golden question, so it can take several minutes..." />
+        </div>
+      )}
+
+      {run.error && (
+        <ErrorAlert
+          error={`Evaluation run failed: ${errorMessage(run.error)}`}
+          onRetry={runNow}
+          onDismiss={() => run.reset()}
+        />
+      )}
+
       {isLoading ? (
         <div className="card p-12">
           <LoadingSpinner message="Loading evaluation results..." />
         </div>
       ) : error ? (
         <ErrorAlert
-          error={`Failed to load evaluations: ${error instanceof Error ? error.message : "Unknown error"}`}
+          error={`Failed to load evaluations: ${errorMessage(error)}`}
           onRetry={() => refetch()}
         />
       ) : !scored.length ? (
@@ -77,8 +94,8 @@ export default function EvalPage() {
               ? `${unscoredCount} earlier ${unscoredCount === 1 ? "run" : "runs"} produced no scores. Run an evaluation to measure retrieval strategy performance.`
               : "Run an evaluation on the golden dataset to measure retrieval strategy performance."}
           </p>
-          <button onClick={runNow} disabled={isFetching} className="btn-primary min-h-[48px]">
-            {isFetching ? "Running…" : "Run Evaluation"}
+          <button onClick={runNow} disabled={run.isPending} className="btn-primary min-h-[48px]">
+            {run.isPending ? "Running…" : "Run Evaluation"}
           </button>
         </div>
       ) : (
@@ -94,8 +111,8 @@ export default function EvalPage() {
                     {formatRunDate(r.created_at) ? ` • ${formatRunDate(r.created_at)}` : ""}
                   </p>
                 </div>
-                <button onClick={runNow} disabled={isFetching} className="btn-primary text-sm px-4 py-2 min-h-[44px] sm:min-h-auto">
-                  {isFetching ? "Running…" : "Re-run"}
+                <button onClick={runNow} disabled={run.isPending} className="btn-primary text-sm px-4 py-2 min-h-[44px] sm:min-h-auto">
+                  {run.isPending ? "Running…" : "Re-run"}
                 </button>
               </div>
 

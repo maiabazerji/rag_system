@@ -36,3 +36,26 @@ export function formatDuration(ms: number): string {
   const secs = Math.round((ms % 60000) / 1000);
   return `${mins}m ${secs}s`;
 }
+
+/**
+ * Strip Markdown syntax but keep the structure: headings stay as their own
+ * lines, paragraphs keep their blank lines, and citations like [abc:4] stay so
+ * they can be matched against the sources list. Rendered with pre-wrap.
+ */
+export function cleanAnswer(text: string): string {
+  return text
+    .split("\n")
+    .filter((line) => line.trim() !== "---")
+    .map((line) =>
+      line
+        .replace(/^#+\s+/, "")
+        .replace(/^>\s?/, "")
+        .replace(/\*\*(.+?)\*\*/g, "$1")
+        .replace(/\*(.+?)\*/g, "$1")
+        .replace(/`(.+?)`/g, "$1")
+        .replace(/\[(.+?)\]\(.+?\)/g, "$1"),
+    )
+    .join("\n")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
+}

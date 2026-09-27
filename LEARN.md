@@ -316,9 +316,13 @@ require Anthropic** (they use Claude Haiku for cheap extraction + Claude's tool-
 ### 7.2 Start the stack
 
 ```bash
-cd infra
-docker compose up -d
+# from the project root; POSTGRES_PASSWORD must be set in .env
+docker compose --env-file .env -f infra/docker-compose.yml up -d
 ```
+
+Ports are published on 127.0.0.1 only. The embedding model and the cross-encoder
+download on first use into `.hf_cache/`; `python scripts/download_models.py
+--cache-dir .hf_cache` fetches them up front.
 
 Frontend: http://localhost:5173 · Backend: http://localhost:8011/health
 
@@ -365,7 +369,7 @@ If you want to *really* understand it, open these in this order, each builds on 
 This project demonstrates, on one codebase, three different production-grade approaches
 to RAG, all running against the same indexed corpus, all using the Anthropic API:
 
-- **Classic RAG** with hybrid retrieval + cross-encoder reranking
+- **Classic RAG** with dense retrieval + cross-encoder reranking
 - **Graph RAG** with LLM-driven triple extraction (Claude Haiku) and entity-walk retrieval
 - **Agentic RAG** built on Anthropic tool use (search / fetch / finish loop)
 - A **3-way compare UI** with latency, token cost, and reasoning traces side by side

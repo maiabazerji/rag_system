@@ -34,6 +34,8 @@
 
 **EvalRAG** is a full-stack AI platform demonstrating real-world LLM engineering: retrieval, evaluation, prompt regression testing, structured outputs, reranking, and observability. It simulates the systems production companies deploy when shipping LLM-based assistants.
 
+> **Blueprint, not a spec of what is built.** This document is the design this project grew from, and some of it is still aspirational. What actually ships: **dense retrieval then cross-encoder rerank** (BM25 appears only as the reranker's fallback; there is no hybrid dense + BM25 fusion), Qdrant and Postgres under **Docker Compose** (no Redis, no queue, no Kubernetes manifests), and **non-streaming** JSON responses from `/ask`. The [README](./README.md) and [LEARN.md](./LEARN.md) describe the running system.
+
 **Four layers:**
 
 1. **Frontend**: AI dashboard (ask questions, compare models A/B, view scores, track regressions).
@@ -47,7 +49,7 @@
 
 By completion, you will have hands-on experience with:
 
-- Building hybrid retrieval (dense + BM25) with cross-encoder reranking
+- Building dense retrieval with cross-encoder reranking (hybrid dense + BM25 fusion is a next step)
 - Query rewriting, multi-query expansion, and HyDE
 - Enforcing structured outputs via Pydantic + constrained decoding
 - Automated evaluation: faithfulness, answer relevance, context precision/recall
@@ -94,8 +96,8 @@ By completion, you will have hands-on experience with:
 | Language | Python 3.11 + TypeScript | Standard for ML + web |
 | Backend | FastAPI | Async, typed, OpenAPI |
 | Frontend | React + Vite + Tailwind | Fast iteration |
-| Vector DB | Qdrant (or pgvector) | Hybrid search, filters |
-| Sparse | BM25 via `rank_bm25` | Lexical baseline |
+| Vector DB | Qdrant | Dense search, payload filters |
+| Sparse | BM25 via `rank_bm25` | Reranker fallback when the cross-encoder is unavailable |
 | Embeddings | `text-embedding-3-large` or `bge-large-en` | SOTA quality |
 | Reranker | `bge-reranker-large` / Cohere Rerank | Cross-encoder accuracy |
 | LLM | Claude Opus/Sonnet 4.6, GPT-4o (comparison) | Multi-model A/B |
@@ -103,8 +105,7 @@ By completion, you will have hands-on experience with:
 | Eval | RAGAS + custom judges | Industry baseline |
 | Tracing | Langfuse or OpenTelemetry | Free, self-host |
 | Storage | Postgres + S3/MinIO | Durable |
-| Queue | Redis + RQ/Celery | Async ingestion |
-| Deploy | Docker Compose → k8s | Local-first, scalable |
+| Deploy | Docker Compose | Local-first |
 
 ---
 
@@ -118,7 +119,7 @@ evalrag/
 │   │   ├── rag/              # retrieval + generation
 │   │   │   ├── ingest.py
 │   │   │   ├── embed.py
-│   │   │   ├── retrieve.py   # hybrid
+│   │   │   ├── retrieve.py   # dense vector search
 │   │   │   ├── rerank.py
 │   │   │   └── generate.py
 │   │   ├── eval/             # evaluation engine
@@ -141,8 +142,7 @@ evalrag/
 │   ├── docs/                 # source documents
 │   └── golden/               # evaluation datasets
 ├── infra/
-│   ├── docker-compose.yml
-│   └── k8s/
+│   └── docker-compose.yml
 ├── scripts/
 │   ├── ingest.py
 │   └── run_eval.py
@@ -160,10 +160,12 @@ python -m venv .venv && source .venv/bin/activate   # (Windows: .venv\Scripts\ac
 pip install -e backend
 
 # Frontend
-cd frontend && npm install && cd ..
+cd frontend && npm ci && cd ..
 
-# Services
-docker compose -f infra/docker-compose.yml up -d   # qdrant, postgres, redis, langfuse
+# Services (see the README quickstart for the .env it needs)
+cp .env.example .env
+docker compose --env-file .env -f infra/docker-compose.yml up -d   # qdrant, postgres, backend, frontend
+# add --profile tracing for langfuse
 ```
 
 ---
@@ -173,7 +175,7 @@ docker compose -f infra/docker-compose.yml up -d   # qdrant, postgres, redis, la
 Three stores with clear roles:
 
 - **Document Store** (Postgres + object storage): raw docs, chunks, metadata, versions.
-- **Vector Store** (Qdrant): dense embeddings + payload for hybrid filtering.
+- **Vector Store** (Qdrant): dense embeddings + payload for filtering.
 - **Eval Store** (Postgres): golden datasets, run results, regression history.
 
 **Chunk schema**
@@ -194,14 +196,14 @@ class Chunk(BaseModel):
 ## H. Document Ingestion Pipeline
 
 ```
-PDF/HTML/MD/DOCX → Loader → Clean → Chunk → Embed → Index (dense+sparse)
+PDF/TXT/MD/RST/CSV/JSON → Loader → Clean → Chunk → Embed → Index (dense)
 ```
 
 - **Loaders**: `unstructured`, `pypdf`, `trafilatura`.
 - **Cleaning**: strip boilerplate, normalize whitespace, dedupe.
 - **Chunking**: semantic (sentence-aware) with overlap; target 400-800 tokens.
 - **Idempotency**: hash each chunk; skip if unchanged.
-- **Async**: enqueue via Redis; workers process in parallel.
+- **Sync**: each upload is chunked, embedded and indexed within its request; there is no job queue.
 
 ---
 
@@ -210,7 +212,7 @@ PDF/HTML/MD/DOCX → Loader → Clean → Chunk → Embed → Index (dense+spars
 - Batch embed (64-128) with retries + exponential backoff.
 - Store embedding model name + version with each vector (for reindexing).
 - Qdrant collection with HNSW + `payload` for filters (`doc_id`, `tags`, `date`).
-- Build parallel BM25 index keyed by `chunk_id` for sparse retrieval.
+- No separate sparse index: BM25 is computed over the retrieved candidates only, as the reranker fallback.
 
 ---
 
@@ -219,7 +221,7 @@ PDF/HTML/MD/DOCX → Loader → Clean → Chunk → Embed → Index (dense+spars
 **Stages:**
 
 1. Query processing (rewrite, expand, HyDE)
-2. Hybrid retrieval (dense + BM25, RRF fusion)
+2. Dense retrieval (top-50 from Qdrant; hybrid dense + BM25 with RRF fusion is not implemented)
 3. Reranking (cross-encoder)
 4. Context compression (extract relevant spans)
 5. Prompt assembly
@@ -252,7 +254,7 @@ Unified gateway with provider adapters (Claude, OpenAI, local).
 
 - Retries, timeouts, rate-limit handling.
 - Prompt caching (Anthropic prompt cache for system + retrieved context where stable).
-- Streaming via SSE to frontend.
+- Responses are returned whole as JSON; there is no SSE streaming.
 - Every call emits a trace: inputs, outputs, tokens, cost, latency, model, prompt version.
 
 ---
@@ -345,8 +347,8 @@ Core endpoints:
 | Method | Path | Purpose |
 |---|---|---|
 | POST | `/ingest` | Upload/queue documents |
-| POST | `/ask` | Run RAG query (streams) |
-| POST | `/compare` | A/B across models/prompts |
+| POST | `/ask` | Run RAG query (JSON, not streamed) |
+| POST | `/compare/strategies` | Same question through classic / graph / agentic |
 | GET  | `/traces/{id}` | Fetch trace |
 | POST | `/eval/run` | Run eval on dataset |
 | GET  | `/eval/runs` | List runs + scores |
@@ -360,7 +362,7 @@ All responses typed via Pydantic; OpenAPI auto-generated.
 
 Pages:
 
-- **Ask**: query box, streamed answer, retrieved chunks with highlights, citations.
+- **Ask**: query box, answer, retrieved sources, citations.
 - **Compare**: side-by-side A/B (two models or two prompt versions).
 - **Eval**: run overview, per-metric charts, failure drilldown.
 - **Regressions**: timeline of runs, diff viewer for changed examples.
@@ -401,8 +403,8 @@ Stack: React + Vite + Tailwind + TanStack Query + Recharts.
 
 ## X. Deployment
 
-- **Local**: `docker compose up` (API, frontend, qdrant, postgres, redis, langfuse).
-- **Staging/Prod**: container images → k8s (or Fly.io / Render for simplicity).
+- **Local**: `docker compose --env-file .env -f infra/docker-compose.yml up` (API, frontend, qdrant, postgres; langfuse with `--profile tracing`). Ports bind to 127.0.0.1.
+- **Staging/Prod**: build `backend/Dockerfile`'s default `runtime` target and run it on any container host; no Kubernetes manifests ship with the repo.
 - **Config**: 12-factor; env vars only.
 - **Migrations**: Alembic.
 - **Rollouts**: blue/green for API; prompt versions are data, not code, so they can roll forward/back without redeploy.
@@ -414,7 +416,7 @@ Stack: React + Vite + Tailwind + TanStack Query + Recharts.
 | Week | Milestone |
 |---|---|
 | 1 | Repo skeleton, ingestion, dense retrieval, `/ask` MVP |
-| 2 | Hybrid + reranker, structured outputs, tracing |
+| 2 | Cross-encoder reranker, structured outputs, tracing |
 | 3 | Eval engine (4 metrics) + golden set v1 |
 | 4 | LLM-as-judge + regression CI |
 | 5 | Frontend dashboard (Ask + Compare + Eval) |

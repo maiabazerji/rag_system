@@ -1,27 +1,37 @@
 import { useEffect, useState } from "react";
-import { fetchHealth, getApiKey, setApiKey } from "../api/client";
+import { useQueryClient } from "@tanstack/react-query";
+import { fetchHealth, getApiKey, onUnauthorized, setApiKey } from "../api/client";
 
 /**
- * Shows an API key field when, and only when, the backend requires one.
+ * Shows an API key field when the backend requires one.
  *
  * The backend reports `auth_required` from GET /health, so a local instance
- * with auth disabled never sees this. When auth is on and no key is stored,
- * the banner explains how to mint one.
+ * with auth disabled never sees this. The field also appears when /health
+ * cannot be reached (so there is no way to tell), and whenever a request comes
+ * back 401, e.g. because a saved key was revoked. When auth is on and no key
+ * is stored, the banner explains how to mint one.
  */
 export default function ApiKeyGate() {
+  const queryClient = useQueryClient();
   const [authRequired, setAuthRequired] = useState<boolean | null>(null);
+  const [healthFailed, setHealthFailed] = useState(false);
+  const [rejected, setRejected] = useState(false);
   const [key, setKeyState] = useState(getApiKey() ?? "");
   const [saved, setSaved] = useState(false);
 
   useEffect(() => {
     let cancelled = false;
     fetchHealth().then((h) => {
-      if (!cancelled && h) setAuthRequired(h.auth_required);
+      if (cancelled) return;
+      if (h) setAuthRequired(h.auth_required);
+      else setHealthFailed(true);
     });
     return () => {
       cancelled = true;
     };
   }, []);
+
+  useEffect(() => onUnauthorized(() => setRejected(true)), []);
 
   useEffect(() => {
     if (!saved) return;
@@ -29,7 +39,7 @@ export default function ApiKeyGate() {
     return () => clearTimeout(t);
   }, [saved]);
 
-  if (!authRequired) return null;
+  if (!authRequired && !healthFailed && !rejected) return null;
 
   const stored = getApiKey();
 
@@ -37,23 +47,43 @@ export default function ApiKeyGate() {
     e.preventDefault();
     setApiKey(key);
     setSaved(true);
+    setRejected(false);
+    // Everything cached so far was fetched with the old key (or none), so a
+    // 401, or another key's view of the data, would otherwise linger.
+    queryClient.invalidateQueries();
   }
 
   function clear() {
     setApiKey(null);
     setKeyState("");
     setSaved(false);
+    queryClient.invalidateQueries();
   }
+
+  const unreachable = healthFailed && !authRequired && !rejected;
+  const title = rejected
+    ? stored
+      ? "The backend rejected the saved API key"
+      : "This backend requires an API key"
+    : unreachable
+      ? "Could not reach the backend"
+      : stored
+        ? "API key saved"
+        : "This backend requires an API key";
 
   return (
     <div className="mb-6 rounded border border-bg-border bg-bg-surface px-4 py-3">
       <div className="flex items-start justify-between gap-4 flex-wrap">
         <div className="min-w-0">
-          <div className="text-sm font-medium text-zinc-200">
-            {stored ? "API key saved" : "This backend requires an API key"}
-          </div>
+          <div className="text-sm font-medium text-zinc-200">{title}</div>
           <p className="text-xs text-zinc-500 mt-1 leading-relaxed max-w-prose">
-            {stored ? (
+            {unreachable ? (
+              <>
+                <code className="font-mono">GET /health</code> failed, so it is unknown whether
+                an API key is needed. Check the backend is running; if it requires a key,
+                paste it below.
+              </>
+            ) : stored && !rejected ? (
               <>
                 Requests are sent with <code className="font-mono">Authorization: Bearer …</code>.
                 The key is kept in this browser only.

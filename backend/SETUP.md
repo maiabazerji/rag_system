@@ -6,7 +6,10 @@ Docker Compose is the fastest path, see the [README quickstart](../README.md#qui
 
 You need Python 3.11+ and a running Qdrant. Postgres is only needed if you enable API key auth.
 
+Create the config first: the Compose commands below read it too.
+
 ```bash
+cp .env.example .env            # from the project root; then set ANTHROPIC_API_KEY
 cd backend
 python -m venv .venv
 
@@ -21,24 +24,41 @@ pip install --index-url https://download.pytorch.org/whl/cpu torch
 pip install -e ".[dev]"
 ```
 
-Start the services the backend talks to:
+Start the services the backend talks to. `--env-file` is required: Compose only reads a `.env` next to the compose file on its own, and it refuses to start Postgres without `POSTGRES_PASSWORD`.
 
 ```bash
-docker compose -f ../infra/docker-compose.yml up -d qdrant
+docker compose --env-file ../.env -f ../infra/docker-compose.yml up -d qdrant
 # only if REQUIRE_API_KEY=true or ADMIN_KEY is set:
-docker compose -f ../infra/docker-compose.yml up -d postgres
+docker compose --env-file ../.env -f ../infra/docker-compose.yml up -d postgres
 ```
 
-Copy the config and run:
+Then run:
 
 ```bash
-cp ../.env.example ../.env      # then set ANTHROPIC_API_KEY
 uvicorn app.main:app --reload --port 8000
 ```
 
 `.env` is read relative to the working directory. Running uvicorn from `backend/`, either copy `.env` there or export the variables into your shell.
 
-The first request downloads the embedding model and, on first rerank, the cross-encoder. Both are cached under `~/.cache/huggingface`, which ends up around 470 MB: the cross-encoder is ~90 MB, and the embedding repo ships ONNX and OpenVINO builds alongside the PyTorch weights.
+The first request downloads the embedding model and, on first rerank, the cross-encoder. Both are cached under `~/.cache/huggingface`, which ends up around 470 MB: the cross-encoder is ~90 MB, and the embedding repo ships ONNX and OpenVINO builds alongside the PyTorch weights. To fetch them ahead of time, run `python scripts/download_models.py` from the project root (it reads `EMBEDDING_MODEL` and `RERANKER_MODEL`, falling back to the defaults in `app/config.py`).
+
+### Models under Docker, and offline mode
+
+Compose bind-mounts `.hf_cache/` at the project root as the container's Hugging Face cache, so models download once and survive rebuilds. By default (`HF_HUB_OFFLINE=0`) the backend downloads them on first use. To pre-fill the cache from the host and then run offline:
+
+```bash
+pip install huggingface_hub
+python scripts/download_models.py --cache-dir .hf_cache
+# then in .env:
+#   HF_HUB_OFFLINE=1
+#   TRANSFORMERS_OFFLINE=1
+```
+
+Offline mode skips Hugging Face's "check for updates" call on every load, which on some Docker Desktop setups intermittently fails. Do not turn it on before the cache is filled: the embedder then cannot load at all, and the reranker silently falls back to BM25.
+
+### Qdrant API key
+
+Compose passes `QDRANT_API_KEY` from `.env` to Qdrant as its service API key. Blank (the default) leaves Qdrant unauthenticated, which is acceptable only because its port is published on `127.0.0.1`. If you set it, the backend has to send the same key to Qdrant.
 
 If the cross-encoder cannot be downloaded, reranking silently falls back to BM25. That is by design, but it is worth knowing: `"reranker": "bm25"` in the logs means you are not measuring the cross-encoder.
 
@@ -98,8 +118,8 @@ backend/app/
 You changed `EMBEDDING_MODEL`. Vectors from different models are not comparable, so the collection has to be rebuilt:
 
 ```bash
-docker compose -f infra/docker-compose.yml down -v   # wipes Qdrant and Postgres
-docker compose -f infra/docker-compose.yml up -d
+docker compose --env-file .env -f infra/docker-compose.yml down -v   # wipes Qdrant and Postgres
+docker compose --env-file .env -f infra/docker-compose.yml up -d
 ```
 
 Then re-ingest.
@@ -110,10 +130,10 @@ Nothing is indexed. Check `GET /ingest/stats`. If it reports chunks but you stil
 
 ### Every answer is a refusal, and `/health` shows `"anthropic": false`
 
-`ANTHROPIC_API_KEY` is not reaching the process. Under Compose it comes from `../.env` via `env_file`. Confirm with:
+`ANTHROPIC_API_KEY` is not reaching the process. Under Compose it comes from `../.env` via `env_file` (optional, so a missing `.env` does not stop the stack; it just leaves every key empty). Confirm with:
 
 ```bash
-docker compose -f infra/docker-compose.yml exec backend printenv ANTHROPIC_API_KEY
+docker compose --env-file .env -f infra/docker-compose.yml exec backend printenv ANTHROPIC_API_KEY
 ```
 
 ### `503 Authentication service is unavailable`
@@ -153,7 +173,7 @@ Five consecutive provider failures opened the breaker; it retries after 30 secon
 Logs are JSON, one object per line, each carrying the `request_id` also returned in the `X-Request-ID` header. To follow one request end to end:
 
 ```bash
-docker compose -f infra/docker-compose.yml logs backend | grep "request-1234567890-abcd1234"
+docker compose --env-file .env -f infra/docker-compose.yml logs backend | grep "request-1234567890-abcd1234"
 ```
 
 Set `LOG_LEVEL=DEBUG` in `.env` for per-step retrieval and reranking detail. Files rotate under `LOG_DIR` (10 MB, 5 backups); if that directory is not writable the app logs to the console only and says so.
@@ -162,7 +182,7 @@ Set `LOG_LEVEL=DEBUG` in `.env` for per-step retrieval and reranking detail. Fil
 
 ```bash
 # Wipe indexed documents and API keys, keep the code
-docker compose -f infra/docker-compose.yml down -v
+docker compose --env-file .env -f infra/docker-compose.yml down -v
 
 # Wipe evaluation history and the knowledge graph
 rm -rf data/eval_runs data/graph data/human_ratings
