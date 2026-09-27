@@ -8,10 +8,9 @@ Quality signals, when an ``ideal_answer`` is supplied:
 
 - ``answer_f1``: token-overlap F1 between the answer and the ideal answer.
   Deterministic and free; a rough proxy for "said the same thing".
-- ``judge_score``: mean of faithfulness and answer relevance from
-  ``app.eval.judge.judge``. That judge is reference-free (it scores the answer
-  against the question and retrieved context, not against the ideal answer),
-  so it complements the F1 rather than replacing it. Judge tokens are not
+- ``judge_score``: ``answer_correctness`` from ``app.eval.judge.judge``,
+  which compares the answer with the ideal answer, averaged with faithfulness
+  to the full context the strategy generated from. Judge tokens are not
   returned by ``judge()`` and so are not counted in the scorecard.
 """
 from __future__ import annotations
@@ -164,13 +163,20 @@ async def run_validation(
             if q.ideal_answer:
                 f1 = 0.0 if result.refusal else token_f1(result.answer, q.ideal_answer)
                 if req.judge and not result.refusal:
+                    context_text = (result.extra or {}).get("context_text")
+                    context = (
+                        [context_text]
+                        if context_text
+                        else [s.quote for s in result.sources if s.quote]
+                    )
                     scores = await judge(
-                        q.question, result.answer, [s.quote for s in result.sources if s.quote]
+                        q.question, result.answer, context, ideal_answer=q.ideal_answer
                     )
                     if scores is not None:
-                        judge_score = round(
-                            (scores["faithfulness"] + scores["answer_relevance"]) / 2, 3
-                        )
+                        correctness = scores.get("answer_correctness")
+                        if correctness is None:
+                            correctness = scores["answer_relevance"]
+                        judge_score = round((correctness + scores["faithfulness"]) / 2, 3)
                 elif req.judge and result.refusal:
                     judge_score = 0.0
 

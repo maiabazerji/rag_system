@@ -280,7 +280,7 @@ Auth requires Postgres. It is the only thing that does, so with `REQUIRE_API_KEY
 | Setting | Default | Effect |
 |---|---|---|
 | `GENERATOR_MODEL` | `claude-sonnet-5` | Model that writes answers |
-| `JUDGE_MODEL` | `claude-opus-5` | Model that grades them |
+| `JUDGE_MODEL` | `claude-opus-5-5` | Model that grades them |
 | `RETRIEVAL_TOP_K` | `50` | Candidates fetched before reranking |
 | `RERANK_TOP_K` | `8` | Chunks sent to the model, the main cost lever |
 | `CHUNK_SIZE_TOKENS` | `600` | Words per chunk (applies to new ingests) |
@@ -335,7 +335,7 @@ More detail, including troubleshooting: [`backend/SETUP.md`](./backend/SETUP.md)
 
 **429 Rate limit exceeded** → your key's per-minute limit. Raise it with `--rpm` when creating the key.
 
-**Answers are slow** → lower `RETRIEVAL_TOP_K` and `RERANK_TOP_K`; try `claude-haiku-4-5` as `GENERATOR_MODEL`. The agentic strategy is inherently slower, it makes up to `AGENTIC_MAX_ITERS` model calls per question.
+**Answers are slow** → lower `RETRIEVAL_TOP_K` and `RERANK_TOP_K`; try `claude-haiku-4-5-20251001` as `GENERATOR_MODEL`. The agentic strategy is inherently slower, it makes up to `AGENTIC_MAX_ITERS` model calls per question.
 
 **Graph strategy returns nothing** → build the graph first: `POST /graph/build`, then poll `GET /graph/build/{job_id}`. It runs one model call per chunk, so it takes a while on a large corpus.
 

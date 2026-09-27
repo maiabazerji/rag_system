@@ -18,8 +18,7 @@ services:
     image: qdrant/qdrant:v1.19.1
     environment:
       # Optional. Qdrant treats an empty key as unset, so leaving QDRANT_API_KEY
-      # blank keeps auth off. When you set it, the backend must send the same
-      # key (it reads QDRANT_API_KEY from ../.env via env_file).
+      # blank keeps auth off. The backend service below is given the same value.
       QDRANT__SERVICE__API_KEY: ${QDRANT_API_KEY:-}
     ports: ["127.0.0.1:6333:6333"]
     volumes: [qdrant_data:/qdrant/storage]
@@ -81,6 +80,7 @@ services:
       # Container-internal URLs (override anything env_file might set):
       # services talk to each other via Compose DNS, not localhost.
       QDRANT_URL: http://qdrant:6333
+      QDRANT_API_KEY: ${QDRANT_API_KEY:-}
       POSTGRES_URL: postgresql+psycopg://evalrag:${POSTGRES_PASSWORD}@postgres:5432/evalrag
       LANGFUSE_HOST: http://langfuse:3000
       # Inside the container, "localhost" is the container; host-gateway reaches the laptop.
@@ -88,6 +88,7 @@ services:
       # Absolute paths: the graph used to be written to a container path that
       # was not the bind mount, so it vanished on every rebuild.
       GRAPH_DATA_DIR: /data/graph
+      DATA_DIR: /data
       LOG_DIR: /app/logs
       # Offline mode is opt-in. With the default (0) the embedding model and the
       # cross-encoder download into the bind-mounted cache below on first use.

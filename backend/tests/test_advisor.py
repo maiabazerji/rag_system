@@ -1,5 +1,4 @@
 """Tests for the strategy advisor: scoring, profile extraction, and the /advise routes."""
-import logging
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
@@ -30,17 +29,6 @@ from app.advisor.scoring import (
 from app.advisor.validate import default_strategies, pick_winner, token_f1
 from app.rag.strategies.base import StrategyResult
 from app.schemas import Source
-
-
-@pytest.fixture(autouse=True, scope="module")
-def _restore_app_logger_propagation():
-    """Importing app.main (via the client fixture) runs setup_logging(), which sets
-    the "app" logger to propagate=False. This module sorts first, so without the
-    restore it would hide records from caplog in test_logging.py."""
-    app_logger = logging.getLogger("app")
-    before = app_logger.propagate
-    yield
-    app_logger.propagate = before
 
 
 def _profile(**kw) -> ProjectProfile:
@@ -463,7 +451,9 @@ class TestEndpoints:
         )
         with patch("app.advisor.validate.run_strategy_raw", side_effect=fake_run), patch(
             "app.advisor.validate.judge", judge_mock
-        ), patch("app.api.advisor.record_tokens") as rec:
+        ), patch("app.api.advisor.record_tokens") as rec, patch(
+            "app.api.advisor.charge"
+        ) as charge:
             r = client.post(
                 "/advise/validate",
                 json={
@@ -484,7 +474,10 @@ class TestEndpoints:
         assert body["measured_winner"] == "classic"
         assert len(body["rows"]) == 4
         assert judge_mock.await_count == 1  # only the non-refused answer with an ideal answer
+        assert judge_mock.await_args.kwargs["ideal_answer"] == "Paris"
         assert rec.call_args.kwargs == {"tokens_input": 800, "tokens_output": 140}
+        # 2 questions x (classic 1 + agentic 3) rate-limit units, charged up front.
+        assert charge.call_args.args[1] == 8
 
     def test_validate_defaults_to_top_two_and_reports_errors(self, client):
         calls: list[str] = []

@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from fastapi import APIRouter, Depends
+from fastapi.concurrency import run_in_threadpool
 
 from app.advisor.profile import build_profile
 from app.advisor.schemas import (
@@ -12,8 +13,8 @@ from app.advisor.schemas import (
     ValidateResponse,
 )
 from app.advisor.scoring import compliance_notes, hybrid_routing, score_strategies
-from app.advisor.validate import run_validation
-from app.auth import record_tokens, require_api_key
+from app.advisor.validate import default_strategies, run_validation
+from app.auth import charge, record_tokens, require_api_key, strategy_units
 from app.config import settings
 
 router = APIRouter(dependencies=[Depends(require_api_key)])
@@ -36,7 +37,8 @@ async def advise(req: AdviseRequest, auth: dict = Depends(require_api_key)) -> A
     deterministic.
     """
     profile, tokens_in, tokens_out = await build_profile(req.description, req.overrides)
-    record_tokens(
+    await run_in_threadpool(
+        record_tokens,
         auth,
         tokens_input=tokens_in,
         tokens_output=tokens_out,
@@ -82,6 +84,12 @@ async def validate(
     req: ValidateRequest, auth: dict = Depends(require_api_key)
 ) -> ValidateResponse:
     """Run the questions and aggregate refusals, latency, tokens and quality."""
+    strategies = req.strategies or default_strategies(req.profile)
+    await run_in_threadpool(
+        charge, auth, len(req.questions) * sum(strategy_units(s) for s in strategies)
+    )
     response, tokens_in, tokens_out = await run_validation(req)
-    record_tokens(auth, tokens_input=tokens_in, tokens_output=tokens_out)
+    await run_in_threadpool(
+        record_tokens, auth, tokens_input=tokens_in, tokens_output=tokens_out
+    )
     return response

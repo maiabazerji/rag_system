@@ -5,6 +5,7 @@ by patching `app.config.settings`. Every module does `from app.config import
 settings` at import time and holds its own reference, so rebinding the module
 attribute would reach almost nothing.
 """
+import logging
 import os
 from unittest.mock import AsyncMock, MagicMock
 
@@ -41,6 +42,18 @@ def _no_telemetry_uploads():
     from ~20s to minutes and would sometimes hang outright.
     """
     os.environ["WANDB_MODE"] = "disabled"
+
+
+@pytest.fixture(autouse=True)
+def _app_logger_propagates():
+    """Importing app.main runs setup_logging(), which stops the "app" logger
+    propagating to the root logger and so hides its records from caplog. Keep
+    that from leaking between tests regardless of file order."""
+    app_logger = logging.getLogger("app")
+    before = app_logger.propagate
+    app_logger.propagate = True
+    yield
+    app_logger.propagate = before
 
 
 @pytest.fixture(autouse=True)

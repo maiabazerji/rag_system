@@ -109,6 +109,10 @@ class Settings(BaseSettings):
         default="http://localhost:6333",
         description="Qdrant vector database URL (http://host:port).",
     )
+    qdrant_api_key: str | None = Field(
+        default=None,
+        description="Qdrant API key. Must match QDRANT__SERVICE__API_KEY on the server.",
+    )
     qdrant_collection: str = Field(
         default="evalrag",
         min_length=1,

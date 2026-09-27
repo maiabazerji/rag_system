@@ -368,3 +368,34 @@ class TestGraphStoreConsistency:
         graph._INDEX = None  # and the file agrees
         assert {t.doc_id for t in graph.load().triples} == {"keep", "new"}
 
+
+
+class TestRetrievePropagatesOutage:
+    async def test_dense_search_raises_on_store_outage(self):
+        from app.rag import retrieve
+
+        with patch.object(retrieve, "embed_query_async", AsyncMock(return_value=[0.1])), patch.object(
+            retrieve, "search", AsyncMock(side_effect=StoreUnavailable("down"))
+        ), pytest.raises(StoreUnavailable):
+            await retrieve.dense_search("q", top_k=5)
+
+    async def test_dense_search_degrades_on_embedding_error(self):
+        from app.rag import retrieve
+
+        with patch.object(
+            retrieve, "embed_query_async", AsyncMock(side_effect=RuntimeError("model"))
+        ):
+            assert await retrieve.dense_search("q", top_k=5) == []
+
+
+class TestQdrantApiKey:
+    async def test_client_sends_configured_api_key(self, monkeypatch):
+        from app.config import settings
+
+        monkeypatch.setattr(settings, "qdrant_api_key", "secret")
+        monkeypatch.setattr(store, "_client", None)
+        with patch.object(store, "AsyncQdrantClient") as cls, patch.object(
+            store, "_ensure_collection", AsyncMock()
+        ):
+            await store.client()
+        assert cls.call_args.kwargs["api_key"] == "secret"
