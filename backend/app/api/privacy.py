@@ -20,6 +20,7 @@ from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Path, Query
 
+from app.audit import ADMIN_KEY_PRINCIPAL, AuditRecord, emit
 from app.auth import require_admin_key
 from app.logging_config import get_structured_logger
 from app.privacy import erasure
@@ -48,6 +49,18 @@ async def _run(resolving: Awaitable[erasure.ErasureRequest]) -> dict[str, Any]:
         ) from e
 
     report = await erasure.erase(request)
+    # Recorded after the erasure, so the record itself survives it: operators
+    # must be able to show that a request was honoured, and when.
+    emit(
+        AuditRecord(
+            principal_id=ADMIN_KEY_PRINCIPAL,
+            tenant=None,
+            action="delete",
+            doc_ids=sorted(request.doc_ids),
+            status="ok" if report.complete else "error",
+            detail=f"erase {request.subject}",
+        )
+    )
     if not report.complete:
         raise HTTPException(status_code=503, detail=report.as_dict())
     return report.as_dict()

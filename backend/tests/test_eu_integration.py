@@ -71,3 +71,25 @@ def test_usage_accepts_the_principal_id_spelling(auth_db):
     summary = usage_summary(f"key:{key_id}")
     assert [k["id"] for k in summary["api_keys"]] == [key_id]
     assert usage_summary("oidc:someone")["api_keys"] == []
+
+
+def test_erasure_requests_are_themselves_audited(auth_db, monkeypatch):
+    import asyncio
+
+    from app.api import privacy as privacy_api
+
+    async def resolved():
+        return erasure.ErasureRequest(
+            subject="document:docA", doc_ids=frozenset({"docA"}), principal_id=None
+        )
+
+    async def fake_erase(request):
+        return erasure.ErasureReport(subject=request.subject, doc_ids=["docA"])
+
+    monkeypatch.setattr(erasure, "erase", fake_erase)
+    asyncio.run(privacy_api._run(resolved()))
+
+    (event,) = audit.list_audit_events(action="delete")["events"]
+    assert event["principal_id"] == audit.ADMIN_KEY_PRINCIPAL
+    assert event["doc_ids"] == ["docA"]
+    assert event["detail"] == "erase document:docA"
