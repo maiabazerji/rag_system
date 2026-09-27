@@ -3,7 +3,8 @@ from fastapi import APIRouter, Depends, HTTPException, UploadFile
 from app.auth import require_api_key
 from app.config import settings
 from app.logging_config import get_structured_logger
-from app.rag.ingest import SUPPORTED_SUFFIXES, enqueue_document
+from app.rag import parsers
+from app.rag.ingest import enqueue_document
 from app.rag.store import count as store_count
 
 logger = get_structured_logger(__name__)
@@ -15,7 +16,7 @@ router = APIRouter(dependencies=[Depends(require_api_key)])
     summary="Ingest a document",
     description=(
         "Chunks, embeds and indexes an uploaded document. "
-        f"Accepts {', '.join(sorted(SUPPORTED_SUFFIXES))}."
+        f"Accepts {', '.join(sorted(parsers.SUPPORTED_EXTENSIONS))}."
     ),
 )
 async def ingest_document(file: UploadFile) -> dict:
@@ -31,19 +32,15 @@ async def ingest_document(file: UploadFile) -> dict:
 
     Raises:
         HTTPException: 400 for a missing name, empty file or unsupported type;
-            413 if the file exceeds MAX_UPLOAD_MB; 422 if it holds no text.
+            413 if the file exceeds MAX_UPLOAD_MB; 422 if it is encrypted,
+            unreadable, a likely zip bomb, or holds no text.
     """
     if not file.filename:
         raise HTTPException(status_code=400, detail="File must have a name.")
 
-    suffix = "." + file.filename.rsplit(".", 1)[-1].lower() if "." in file.filename else ""
-    if suffix not in SUPPORTED_SUFFIXES:
+    if not parsers.is_supported(file.filename, file.content_type):
         raise HTTPException(
-            status_code=400,
-            detail=(
-                f"Unsupported file type '{suffix or file.filename}'. "
-                f"Supported types: {', '.join(sorted(SUPPORTED_SUFFIXES))}."
-            ),
+            status_code=400, detail=parsers.unsupported_message(file.filename)
         )
 
     limit = settings.max_upload_bytes
@@ -83,3 +80,18 @@ async def ingest_document(file: UploadFile) -> dict:
 async def stats() -> dict:
     """Return the number of chunks currently indexed."""
     return {"indexed_chunks": await store_count()}
+
+
+@router.get("/formats", summary="Supported document formats")
+async def formats() -> dict:
+    """List the ingestible formats and whether scanned PDFs can be OCR'd.
+
+    The extensions and MIME types come from the parser registry, the same
+    list the upload route validates against.
+    """
+    return {
+        "extensions": sorted(parsers.SUPPORTED_EXTENSIONS),
+        "formats": parsers.supported_formats(),
+        "max_upload_mb": settings.max_upload_mb,
+        "ocr": parsers.ocr_status(),
+    }

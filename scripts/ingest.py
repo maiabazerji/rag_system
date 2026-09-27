@@ -17,7 +17,8 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "backend"))
 
-from app.rag.ingest import SUPPORTED_SUFFIXES, enqueue_document  # noqa: E402
+from app.rag.ingest import enqueue_document  # noqa: E402
+from app.rag.parsers import SUPPORTED_EXTENSIONS  # noqa: E402
 
 DEFAULT_DOCS = ROOT / "data" / "docs"
 META_FILES = [ROOT / "README.md", ROOT / "EvalRAG.md", ROOT / "LEARN.md"]
@@ -28,7 +29,7 @@ def _collect(root: Path, include_meta: bool) -> list[Path]:
     paths = [
         p
         for p in sorted(root.rglob("*"))
-        if p.is_file() and p.suffix.lower() in SUPPORTED_SUFFIXES
+        if p.is_file() and p.suffix.lower() in SUPPORTED_EXTENSIONS
     ]
     if include_meta:
         paths += [p for p in META_FILES if p.is_file()]
@@ -68,7 +69,7 @@ async def main() -> int:
     paths = _collect(args.path, include_meta=not args.no_meta)
     if not paths:
         print(f"Nothing to ingest under {args.path}")
-        print(f"Supported types: {', '.join(sorted(SUPPORTED_SUFFIXES))}")
+        print(f"Supported types: {', '.join(sorted(SUPPORTED_EXTENSIONS))}")
         return 1
 
     print(f"Ingesting {len(paths)} file(s) from {args.path} ...\n")

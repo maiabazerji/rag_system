@@ -219,6 +219,38 @@ class Settings(BaseSettings):
     max_upload_mb: int = Field(
         default=25, ge=1, le=500, description="Largest accepted upload, in megabytes."
     )
+    max_uncompressed_mb: int = Field(
+        default=200,
+        ge=1,
+        le=4096,
+        description=(
+            "Largest total uncompressed size of a zip-based document (docx, odt, "
+            "pptx, ...), in megabytes. Guards against zip bombs."
+        ),
+    )
+
+    # OCR for scanned PDFs
+    ocr_enabled: bool = Field(
+        default=True,
+        description=(
+            "OCR PDF pages that carry (almost) no text layer. Needs the tesseract "
+            "and poppler binaries; without them OCR is skipped with a warning."
+        ),
+    )
+    ocr_languages: str = Field(
+        default="fra+eng",
+        min_length=1,
+        description="Tesseract language packs to OCR with, joined by '+'.",
+    )
+    ocr_max_pages: int = Field(
+        default=50, ge=1, le=2000, description="Most pages OCR'd per document."
+    )
+    ocr_min_chars_per_page: int = Field(
+        default=50,
+        ge=0,
+        le=10000,
+        description="A PDF page with fewer extracted characters than this is OCR'd.",
+    )
 
     # Provider call behaviour
     provider_timeout_seconds: float = Field(
@@ -257,6 +289,11 @@ class Settings(BaseSettings):
     def max_upload_bytes(self) -> int:
         """Upload ceiling in bytes."""
         return self.max_upload_mb * 1024 * 1024
+
+    @property
+    def max_uncompressed_bytes(self) -> int:
+        """Uncompressed ceiling for zip-based documents, in bytes."""
+        return self.max_uncompressed_mb * 1024 * 1024
 
     @field_validator("qdrant_url")
     @classmethod

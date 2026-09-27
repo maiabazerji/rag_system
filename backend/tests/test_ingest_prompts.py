@@ -8,7 +8,9 @@ from unittest.mock import AsyncMock, patch
 import pytest
 
 from app.prompts.loader import PromptManager
-from app.rag.ingest import SUPPORTED_SUFFIXES, _doc_id, chunk_text, enqueue_document, load_document
+from app.rag.chunking import chunk_text
+from app.rag.ingest import _doc_id, enqueue_document
+from app.rag.parsers import SUPPORTED_EXTENSIONS, extract
 from app.rag.response_clean import clean_response, extract_citations
 from app.rag.store import StaleRevisions
 
@@ -70,6 +72,10 @@ class TestDocId:
         assert _doc_id("the reranker is fast") != _doc_id("the reranker is slow")
 
 
+def load_document(filename: str, content: bytes) -> str:
+    return extract(filename, content).text
+
+
 class TestLoadDocument:
     def test_reads_utf8_text(self):
         assert load_document("a.md", b"# Title\nBody") == "# Title\nBody"
@@ -92,7 +98,7 @@ class TestLoadDocument:
             load_document("a.pdf", b"not actually a pdf")
 
     def test_supported_suffixes_include_the_documented_types(self):
-        assert {".pdf", ".txt", ".md"} <= SUPPORTED_SUFFIXES
+        assert {".pdf", ".txt", ".md"} <= SUPPORTED_EXTENSIONS
 
 
 @pytest.mark.asyncio
