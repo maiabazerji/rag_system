@@ -7,6 +7,7 @@ place; the old chunks are deleted explicitly after the new ones land.
 """
 from __future__ import annotations
 
+import asyncio
 import hashlib
 from io import BytesIO
 from pathlib import Path
@@ -34,6 +35,21 @@ def _doc_id(text: str) -> str:
     really do produce byte-identical chunks.
     """
     return hashlib.sha256(" ".join(text.split()).encode("utf-8")).hexdigest()[:16]
+
+
+def source_key(owner: str, path: str) -> str:
+    """Identify a document by who indexed it and where it came from.
+
+    Revisions of one document share this key and nothing else does, so it is
+    what stale-revision cleanup matches on. A bare filename is not enough:
+    two users, or two folders, can each hold a ``notes.md``.
+
+    Args:
+        owner: Who is indexing, e.g. ``key:<api key id>``, or ``local``.
+        path: The document's path relative to its source root (for an upload,
+            the uploaded filename).
+    """
+    return f"{owner}:{Path(path).as_posix()}"
 
 
 def load_document(filename: str, content: bytes) -> str:
@@ -111,12 +127,15 @@ def chunk_text(
     return chunks
 
 
-async def enqueue_document(filename: str, content: bytes) -> dict:
+async def enqueue_document(filename: str, content: bytes, owner: str = "local") -> dict:
     """Chunk, embed and index a document.
 
     Args:
-        filename: Original filename, recorded as chunk metadata.
+        filename: Original filename, or the path relative to the ingest root,
+            recorded as chunk metadata.
         content: Raw file bytes.
+        owner: Who is indexing it. Together with ``filename`` it forms the
+            document's ``source_key``, which scopes stale-revision cleanup.
 
     Returns:
         The document id, filename, number of chunks indexed, and how much of a
@@ -125,8 +144,10 @@ async def enqueue_document(filename: str, content: bytes) -> dict:
     Raises:
         ValueError: If the file cannot be parsed or contains no extractable text.
     """
-    text = load_document(filename, content)
+    # PDF parsing is CPU-bound and can take seconds; keep it off the event loop.
+    text = await asyncio.to_thread(load_document, filename, content)
     doc_id = _doc_id(text)
+    key = source_key(owner, filename)
 
     chunks = [
         Chunk(
@@ -134,7 +155,7 @@ async def enqueue_document(filename: str, content: bytes) -> dict:
             doc_id=doc_id,
             text=c,
             tokens=len(c.split()),
-            metadata={"filename": filename},
+            metadata={"filename": filename, "source_key": key},
         )
         for i, c in enumerate(chunk_text(text))
     ]
@@ -149,9 +170,9 @@ async def enqueue_document(filename: str, content: bytes) -> dict:
     await upsert(chunks, vectors)
     # Index the new revision first, then drop the old one, so the document is
     # never briefly absent from search.
-    stale = await delete_stale_revisions(filename, doc_id)
+    stale = await delete_stale_revisions(key, doc_id)
     # The graph is keyed to the chunks that are going away, so it has to follow.
-    stale_triples = graph_store.remove_docs(stale.doc_ids)
+    stale_triples = await asyncio.to_thread(graph_store.remove_docs, stale.doc_ids)
 
     logger.info(
         "Document indexed",

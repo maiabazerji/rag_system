@@ -132,7 +132,7 @@ class TestEnqueueDocument:
         ):
             result = await enqueue_document("a.txt", b"hello world")
 
-        mock_delete.assert_awaited_once_with("a.txt", result["doc_id"])
+        mock_delete.assert_awaited_once_with("local:a.txt", result["doc_id"])
         assert result["stale_chunks_removed"] == 3
         # The replacement has to be indexed before the old copy is dropped, so the
         # document is never briefly missing from search.

@@ -12,6 +12,8 @@ from app.logging_config import get_structured_logger, setup_logging
 from app.middleware.request_id import RequestIDMiddleware, get_request_id
 from app.rag.providers import MissingKeyError, ProviderError
 from app.rag.providers.anthropic_provider import close_client as close_anthropic_client
+from app.rag.store import StoreUnavailable, store_unavailable_handler
+from app.rag.store import close as close_store
 
 setup_logging()
 logger = get_structured_logger(__name__)
@@ -46,9 +48,11 @@ async def lifespan(app: FastAPI):
         yield
     finally:
         await close_anthropic_client()
+        await close_store()
 
 
 app = FastAPI(title="EvalRAG", version="0.3.0", lifespan=lifespan)
+app.add_exception_handler(StoreUnavailable, store_unavailable_handler)
 
 app.add_middleware(RequestIDMiddleware)
 app.add_middleware(

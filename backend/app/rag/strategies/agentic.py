@@ -37,6 +37,7 @@ from app.config import settings
 from app.logging_config import get_structured_logger
 from app.rag.embed import embed_query_async
 from app.rag.providers.anthropic_provider import tool_use_loop
+from app.rag.store import fetch_chunks
 from app.rag.store import search as vector_search
 from app.rag.strategies.base import Strategy, StrategyResult
 from app.schemas import Source
@@ -262,8 +263,7 @@ class AgenticRAG(Strategy):
                     },
                 )
                 return cached["text"]
-            vec = await embed_query_async(" ")
-            hits = await vector_search(vec, top_k=512)
+            hits = await fetch_chunks([cid])
             for h in hits:
                 if h.payload.get("chunk_id") == cid:
                     text = h.payload.get("text")
