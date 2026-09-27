@@ -31,6 +31,7 @@ from __future__ import annotations
 
 from app.access import AccessScope
 from app.config import settings
+from app.i18n import localized
 from app.logging_config import get_structured_logger
 from app.prompts import render_prompt
 from app.rag.graph_extract import extract_question_entities
@@ -184,10 +185,7 @@ class GraphRAG(Strategy):
                 },
             )
             return StrategyResult(
-                answer=(
-                    "Graph RAG needs setup first. Go to Compare page and click 'Build graph' "
-                    "to extract connections between concepts in your documents."
-                ),
+                answer=localized("graph_not_built", question),
                 sources=[Source(chunk_id="none", quote="")],
                 refusal=True,
                 confidence=0.0,
@@ -302,7 +300,7 @@ class GraphRAG(Strategy):
                 },
             )
             return StrategyResult(
-                answer="Graph RAG found neither matching entities nor similar chunks.",
+                answer=localized("graph_no_match", question),
                 sources=[Source(chunk_id="none", quote="")],
                 refusal=True,
                 confidence=0.0,

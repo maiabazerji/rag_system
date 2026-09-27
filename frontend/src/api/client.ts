@@ -1,4 +1,11 @@
+import { acceptLanguage, getLanguage, translate, type MessageKey, type Vars } from "../i18n/core";
+
 const BASE = "/api";
+
+/** Translate into the active UI language (this module lives outside React). */
+function tr(key: MessageKey, vars?: Vars): string {
+  return translate(getLanguage(), key, vars);
+}
 const API_KEY_STORAGE = "evalrag.apiKey";
 const ADMIN_KEY_STORAGE = "evalrag.adminKey";
 
@@ -27,7 +34,7 @@ export class ApiError extends Error {
 
 /** Raised when the backend rejects a request for lack of a valid API key. */
 export class UnauthorizedError extends ApiError {
-  constructor(message = "This backend requires an API key.") {
+  constructor(message = tr("client.unauthorized")) {
     super(401, message, message);
     this.name = "UnauthorizedError";
   }
@@ -36,7 +43,7 @@ export class UnauthorizedError extends ApiError {
 /** Raised when a request is aborted because it took longer than its timeout. */
 export class RequestTimeoutError extends Error {
   constructor(timeoutMs: number) {
-    super(`The request timed out after ${Math.round(timeoutMs / 1000)}s.`);
+    super(tr("client.timeout", { seconds: Math.round(timeoutMs / 1000) }));
     this.name = "RequestTimeoutError";
   }
 }
@@ -101,8 +108,9 @@ export function setAdminKey(key: string | null): void {
   }
 }
 
-function authHeaders(admin = false): Record<string, string> {
-  const headers: Record<string, string> = {};
+function requestHeaders(admin = false): Record<string, string> {
+  // Lets the backend word its own messages (e.g. refusals) in the UI language.
+  const headers: Record<string, string> = { "Accept-Language": acceptLanguage(getLanguage()) };
   const key = getApiKey();
   if (key) headers.Authorization = `Bearer ${key}`;
   if (admin) {
@@ -152,15 +160,15 @@ async function toError(r: Response): Promise<Error> {
       // e.g. graph build/reset, which need the admin key as well as an API key.
       return new ApiError(
         403,
-        `Not allowed${detail ? `: ${detail}` : ""}. This action needs the backend's admin key (ADMIN_KEY).`,
+        tr("client.forbidden", { detail: detail ? `: ${detail}` : "" }),
         detail,
       );
     case 429:
-      return new ApiError(429, "Rate limit reached. Wait a moment and try again.", detail);
+      return new ApiError(429, tr("client.rateLimited"), detail);
     case 503:
       return new ApiError(
         503,
-        `Service unavailable: ${detail || `HTTP ${r.status}`}. A backing service (such as Qdrant) may be down; try again shortly.`,
+        tr("client.unavailable", { detail: detail || `HTTP ${r.status}` }),
         detail,
       );
     default:
@@ -195,7 +203,7 @@ async function request<T>(path: string, init: RequestInit, opts: RequestOptions 
   } catch (e) {
     if (controller.signal.aborted) throw new RequestTimeoutError(timeoutMs);
     throw new Error(
-      `Could not reach the backend (${e instanceof Error ? e.message : String(e)}).`,
+      tr("client.unreachable", { reason: e instanceof Error ? e.message : String(e) }),
       { cause: e },
     );
   } finally {
@@ -210,7 +218,7 @@ export async function post<T>(path: string, body: unknown, opts?: RequestOptions
     path,
     {
       method: "POST",
-      headers: { "Content-Type": "application/json", ...authHeaders(opts?.admin) },
+      headers: { "Content-Type": "application/json", ...requestHeaders(opts?.admin) },
       body: JSON.stringify(body),
     },
     opts,
@@ -218,16 +226,22 @@ export async function post<T>(path: string, body: unknown, opts?: RequestOptions
 }
 
 export async function get<T>(path: string, opts?: RequestOptions): Promise<T> {
-  return request<T>(path, { headers: authHeaders(opts?.admin) }, opts);
+  return request<T>(path, { headers: requestHeaders(opts?.admin) }, opts);
 }
 
-export async function upload<T>(path: string, file: File, opts?: RequestOptions): Promise<T> {
+export async function upload<T>(
+  path: string,
+  file: File,
+  opts?: RequestOptions,
+  fields?: Record<string, string>,
+): Promise<T> {
   const fd = new FormData();
   fd.append("file", file);
+  for (const [name, value] of Object.entries(fields ?? {})) fd.append(name, value);
   // Content-Type is intentionally unset: the browser adds the multipart boundary.
   return request<T>(
     path,
-    { method: "POST", headers: authHeaders(), body: fd },
+    { method: "POST", headers: requestHeaders(), body: fd },
     { timeoutMs: UPLOAD_TIMEOUT_MS, ...opts },
   );
 }

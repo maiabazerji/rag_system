@@ -4,26 +4,63 @@ import { errorMessage, get, upload } from "../api/client";
 import { UploadIcon } from "../components/Icons";
 import LoadingSpinner from "../components/LoadingSpinner";
 import ErrorAlert from "../components/ErrorAlert";
+import { useI18n } from "../i18n";
 
-type IngestResult = { doc_id: string; filename: string; chunks: number; indexed_total: number };
+type IngestResult = {
+  doc_id: string;
+  filename: string;
+  chunks: number;
+  indexed_total: number;
+  acl_groups?: string[];
+};
+type Formats = { extensions: string[] };
 type Item =
   | { key: number; ok: true; result: IngestResult }
   | { key: number; ok: false; filename: string; error: string };
 
-/** Must match SUPPORTED_SUFFIXES in backend/app/rag/ingest.py. */
-const ACCEPTED_SUFFIXES = [".pdf", ".txt", ".md", ".markdown", ".rst", ".csv", ".json"];
+/** Shown until GET /ingest/formats answers; that endpoint is the source of truth. */
+const FALLBACK_SUFFIXES = [
+  ".pdf", ".docx", ".pptx", ".odt", ".ods", ".eml", ".html", ".htm",
+  ".txt", ".md", ".markdown", ".rst", ".csv", ".json",
+];
+
+/** "a, b, or c" / "a, b ou c", with each extension styled as code. */
+function SuffixList({ locale, suffixes }: { locale: string; suffixes: string[] }) {
+  const parts = new Intl.ListFormat(locale, { type: "disjunction" }).formatToParts(suffixes);
+  return (
+    <>
+      {parts.map((p, i) =>
+        p.type === "element" ? (
+          <span key={i} className="font-mono text-zinc-300">
+            {p.value}
+          </span>
+        ) : (
+          <span key={i}>{p.value}</span>
+        ),
+      )}
+    </>
+  );
+}
 
 export default function Ingest() {
+  const { t, tp, rich, locale, formatNumber } = useI18n();
   const [items, setItems] = useState<Item[]>([]);
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
   const [drag, setDrag] = useState(false);
+  const [groups, setGroups] = useState("");
   const fileRef = useRef<HTMLInputElement>(null);
   const nextKey = useRef(0);
   const { data: stats, refetch: refetchStats } = useQuery({
     queryKey: ["ingest-stats"],
     queryFn: () => get<{ indexed_chunks: number }>("/ingest/stats"),
   });
+  const { data: formats } = useQuery({
+    queryKey: ["ingest-formats"],
+    queryFn: () => get<Formats>("/ingest/formats"),
+    staleTime: Infinity,
+  });
+  const suffixes = formats?.extensions ?? FALLBACK_SUFFIXES;
 
   /** Upload one at a time; a failed file is reported and the rest still go. */
   async function uploadFiles(files: FileList | File[]) {
@@ -36,7 +73,9 @@ export default function Ingest() {
       for (const f of list) {
         const key = nextKey.current++;
         try {
-          const result = await upload<IngestResult>("/ingest", f);
+          // Blank: the backend labels the document with the uploader's own groups.
+          const fields = groups.trim() ? { groups: groups.trim() } : undefined;
+          const result = await upload<IngestResult>("/ingest", f, undefined, fields);
           setItems((prev) => [{ key, ok: true, result }, ...prev]);
         } catch (e) {
           failed++;
@@ -44,9 +83,7 @@ export default function Ingest() {
         }
       }
       if (failed > 0) {
-        setErr(
-          `${failed} of ${list.length} ${list.length === 1 ? "file" : "files"} failed to ingest; see the list below.`,
-        );
+        setErr(tp("ingest.failedSome", list.length, { failed }));
       }
       await refetchStats();
     } finally {
@@ -60,30 +97,30 @@ export default function Ingest() {
     <div className="flex flex-col gap-6">
       <header className="flex items-end justify-between gap-4 flex-wrap">
         <div className="space-y-2">
-          <h1 className="display text-4xl font-semibold text-white">Ingest</h1>
+          <h1 className="display text-4xl font-semibold text-white">{t("ingest.title")}</h1>
           <p className="text-zinc-400 max-w-xl">
-            Drop in{" "}
-            {ACCEPTED_SUFFIXES.map((ext, i) => (
-              <span key={ext}>
-                <span className="font-mono text-zinc-300">{ext}</span>
-                {i < ACCEPTED_SUFFIXES.length - 2
-                  ? ", "
-                  : i === ACCEPTED_SUFFIXES.length - 2
-                    ? ", or "
-                    : ""}
-              </span>
-            ))}{" "}
-            files. They're chunked, embedded, and indexed into Qdrant, ready to ground answers
-            on the Ask page.
+            {rich("ingest.intro", { types: <SuffixList locale={locale} suffixes={suffixes} /> })}
           </p>
         </div>
         {stats && (
           <div className="chip">
             <span className="text-accent">●</span>
-            {stats.indexed_chunks.toLocaleString()} chunks indexed
+            {t("ingest.chunksIndexed", { count: formatNumber(stats.indexed_chunks) })}
           </div>
         )}
       </header>
+
+      <label className="flex flex-col gap-1 max-w-xl">
+        <span className="text-xs uppercase tracking-wider text-zinc-500">{t("ingest.groupsLabel")}</span>
+        <input
+          value={groups}
+          onChange={(e) => setGroups(e.target.value)}
+          placeholder={t("ingest.groupsPlaceholder")}
+          disabled={busy}
+          className="input"
+        />
+        <span className="text-xs text-zinc-500">{t("ingest.groupsHint")}</span>
+      </label>
 
       <div
         onDragOver={(e) => {
@@ -101,24 +138,24 @@ export default function Ingest() {
         }`}
       >
         {busy ? (
-          <LoadingSpinner message="Processing and indexing files..." />
+          <LoadingSpinner message={t("ingest.processing")} />
         ) : (
           <>
             <div className="inline-flex w-11 h-11 rounded-lg border border-bg-border text-zinc-400 items-center justify-center mb-4">
               <UploadIcon className="w-5 h-5" aria-hidden="true" />
             </div>
-            <h2 className="display text-xl font-semibold text-white">Drop files here</h2>
-            <p className="text-zinc-500 text-sm mt-1">or click below to browse</p>
+            <h2 className="display text-xl font-semibold text-white">{t("ingest.dropHere")}</h2>
+            <p className="text-zinc-500 text-sm mt-1">{t("ingest.orBrowse")}</p>
             <input
               ref={fileRef}
               type="file"
               multiple
-              accept={ACCEPTED_SUFFIXES.join(",")}
+              accept={suffixes.join(",")}
               className="hidden"
               onChange={(e) => e.target.files && uploadFiles(e.target.files)}
             />
             <button onClick={() => fileRef.current?.click()} disabled={busy} className="btn-primary mt-5 min-h-[48px]">
-              Choose files
+              {t("ingest.choose")}
             </button>
           </>
         )}
@@ -138,7 +175,7 @@ export default function Ingest() {
 
       {items.length > 0 && (
         <div>
-          <div className="text-xs uppercase tracking-wider text-zinc-500 mb-2">Recently uploaded</div>
+          <div className="text-xs uppercase tracking-wider text-zinc-500 mb-2">{t("ingest.recent")}</div>
           <div className="grid gap-2">
             {items.map((item) =>
               item.ok ? (
@@ -153,7 +190,7 @@ export default function Ingest() {
                     <div className="text-xs text-rose-300 mt-0.5">{item.error}</div>
                   </div>
                   <div className="chip !text-rose-300 !border-rose-500/40 !bg-rose-500/10 shrink-0">
-                    failed
+                    {t("ingest.failed")}
                   </div>
                 </div>
               ),
@@ -166,18 +203,24 @@ export default function Ingest() {
 }
 
 function UploadedRow({ it }: { it: IngestResult }) {
+  const { t, formatNumber } = useI18n();
   return (
     <div className="card !p-4 flex items-center justify-between gap-4 flex-wrap sm:flex-nowrap">
       <div className="min-w-0 flex-1">
         <div className="text-zinc-100 font-medium truncate">{it.filename}</div>
         <div className="text-xs text-zinc-500 font-mono mt-0.5 truncate">{it.doc_id}</div>
+        {it.acl_groups && it.acl_groups.length > 0 && (
+          <div className="text-xs text-zinc-400 mt-0.5 truncate">
+            {t("ingest.readableBy", { groups: it.acl_groups.join(", ") })}
+          </div>
+        )}
       </div>
       <div className="flex items-center gap-2 shrink-0 flex-wrap sm:flex-nowrap">
         <div className="chip !text-emerald-300 !border-emerald-500/40 !bg-emerald-500/10 min-h-[44px] sm:min-h-auto">
-          +{it.chunks} chunks
+          {t("ingest.addedChunks", { count: formatNumber(it.chunks) })}
         </div>
         <div className="chip text-xs min-h-[44px] sm:min-h-auto">
-          {it.indexed_total.toLocaleString()} total
+          {t("ingest.total", { count: formatNumber(it.indexed_total) })}
         </div>
       </div>
     </div>

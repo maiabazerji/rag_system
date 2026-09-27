@@ -97,6 +97,8 @@ async def extract_question_entities(question: str) -> QuestionEntities:
         model=settings.graph_extraction_model,
         prompt=(
             f'List the key noun-phrase entities in this question as a JSON array of strings. '
+            "If the question is not in English, also list each entity's English form, "
+            "since the documents may be in English. "
             f'No prose. Question: "{question}"'
         ),
         system="You return only valid JSON.",

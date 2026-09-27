@@ -56,6 +56,12 @@ JUDGE_SYSTEM = (
 
 JUDGE_PROMPT = """Score the answer below on {n_dimensions} dimensions.
 
+Languages: the question, the retrieved context, the reference answer and the generated
+answer may be in different languages (for example a French question over English
+documents). Judge meaning, not wording or language: a claim translated faithfully from
+the context is grounded, and a reference in another language still counts. The one place
+language matters is Answer Relevance.
+
 **Faithfulness (0-1):** What fraction of claims in the answer are grounded in the retrieved context?
 - 1.0 = all claims supported by context
 - 0.5 = some claims supported, some unsupported
@@ -65,6 +71,8 @@ JUDGE_PROMPT = """Score the answer below on {n_dimensions} dimensions.
 - 1.0 = directly and completely answers the question
 - 0.5 = partially addresses or tangential
 - 0.0 = off-topic or irrelevant
+- The answer is expected in the language of the question. An answer in another language
+  scores at most 0.5 here, however good its content.
 
 **Context Precision (0-1):** Are the retrieved chunks relevant and well-ranked?
 - 1.0 = all chunks are highly relevant

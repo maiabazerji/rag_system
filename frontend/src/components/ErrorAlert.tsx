@@ -1,3 +1,5 @@
+import { useT } from "../i18n";
+
 type Props = {
   error: string;
   onRetry?: () => void;
@@ -5,6 +7,7 @@ type Props = {
 };
 
 export default function ErrorAlert({ error, onRetry, onDismiss }: Props) {
+  const t = useT();
   return (
     <div className="card !border-rose-500/40 !bg-rose-500/10 flex items-start gap-3 p-3">
       <div className="flex-shrink-0 text-rose-400 text-lg leading-none mt-0.5">⚠</div>
@@ -16,16 +19,16 @@ export default function ErrorAlert({ error, onRetry, onDismiss }: Props) {
           <button
             onClick={onRetry}
             className="text-xs font-medium text-rose-300 hover:text-rose-200 px-2 py-1 rounded hover:bg-rose-500/20 transition-colors"
-            aria-label="Retry"
+            aria-label={t("common.retry")}
           >
-            Retry
+            {t("common.retry")}
           </button>
         )}
         {onDismiss && (
           <button
             onClick={onDismiss}
             className="text-xs text-rose-400/60 hover:text-rose-400 leading-none w-5 h-5 flex items-center justify-center"
-            aria-label="Dismiss error"
+            aria-label={t("common.dismissError")}
           >
             ×
           </button>

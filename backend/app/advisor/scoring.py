@@ -33,6 +33,7 @@ from app.advisor.schemas import (
     SuggestedConfig,
 )
 from app.config import settings
+from app.rag.embed import is_multilingual_model
 
 STRATEGIES: tuple[StrategyName, ...] = ("classic", "graph", "agentic")
 
@@ -466,12 +467,21 @@ def compliance_notes(profile: ProjectProfile) -> list[str]:
         )
     if is_non_english(profile):
         langs = ", ".join(profile.languages)
-        notes.append(
-            f"Languages ({langs}): the default {settings.embedding_model} embedding model and "
-            f"{settings.reranker_model} reranker are English-only. Switch EMBEDDING_MODEL to "
-            f"{MULTILINGUAL_EMBEDDING} or {MULTILINGUAL_EMBEDDING_ALT} and RERANKER_MODEL to a "
-            f"multilingual cross-encoder such as {MULTILINGUAL_RERANKER}, then re-ingest."
-        )
+        if is_multilingual_model(settings.embedding_model):
+            notes.append(
+                f"Languages ({langs}): the configured {settings.embedding_model} embedding "
+                "model is multilingual, so questions and documents can be in different "
+                f"languages. {MULTILINGUAL_EMBEDDING} ranks better at a higher CPU cost; "
+                "switching models requires a re-ingest."
+            )
+        else:
+            notes.append(
+                f"Languages ({langs}): the configured {settings.embedding_model} embedding "
+                f"model and {settings.reranker_model} reranker are English-only. Switch "
+                f"EMBEDDING_MODEL to {MULTILINGUAL_EMBEDDING} or {MULTILINGUAL_EMBEDDING_ALT} "
+                "and RERANKER_MODEL to a multilingual cross-encoder such as "
+                f"{MULTILINGUAL_RERANKER}, then re-ingest."
+            )
     if notes:
         notes.append(
             "These notes are general engineering guidance, not legal advice or a statement "

@@ -35,6 +35,7 @@ import json
 
 from app.access import AccessScope
 from app.config import settings
+from app.i18n import localized
 from app.logging_config import get_structured_logger
 from app.rag.embed import embed_query_async
 from app.rag.providers.anthropic_provider import tool_use_loop
@@ -57,6 +58,11 @@ _SYSTEM = (
     "  3. If your first search misses, try a different phrasing (synonyms, related concepts).\n"
     "  4. When you have found relevant chunks that answer the question, call `finish` with refusal=false, the answer, and chunk_ids.\n"
     "  5. ONLY call `finish` with refusal=true if you've tried multiple searches and the corpus genuinely has NO relevant information.\n\n"
+    "Language: the documents may be in a different language from the question. If a search "
+    "in the question's language misses, search again in the documents' language (English "
+    "is common). Always write the `finish` answer, including a refusal, in the language of "
+    "the user's question: a French question gets a French answer even when every source is "
+    "in English.\n\n"
     f"Hard limit: {settings.agentic_max_iters} tool calls total. Be efficient. Default to refusal=false when you have evidence."
 )
 
@@ -410,17 +416,17 @@ class AgenticRAG(Strategy):
         failed = bool(out.get("error")) or stop_reason in ("provider_error", "max_iters")
         text = (out.get("text") or "").strip()
         if failed:
-            answer = (
-                "The agent could not finish: the model provider failed mid-run. "
-                "Try again shortly."
+            answer = localized(
+                "agent_provider_failed"
                 if stop_reason == "provider_error"
-                else "The agent reached its step limit without finding a grounded answer."
+                else "agent_step_limit",
+                question,
             )
             has_answer = False
         else:
             # The model ended its turn with prose instead of calling `finish`.
             has_answer = len(text) > 50
-            answer = text or "(agent stopped without finishing)"
+            answer = text or localized("agent_no_answer", question)
         logger.info(
             "Agentic RAG strategy completed without finish",
             extra_fields={

@@ -6,6 +6,8 @@ import {
   Freshness,
   Level,
   MAX_VALIDATE_QUESTIONS,
+  ProjectProfile,
+  QuestionMix,
   StrategyName,
   StrategyRecommendation,
   ValidateResponse,
@@ -15,39 +17,57 @@ import {
 } from "../api/advisor";
 import ErrorAlert from "../components/ErrorAlert";
 import LoadingSpinner from "../components/LoadingSpinner";
-import { formatLatency, formatTokens } from "../utils/formatting";
+import { formatLatency, formatScore, formatTokens } from "../utils/formatting";
+import { useI18n, type MessageKey } from "../i18n";
 
-const META: Record<StrategyName, { title: string; text: string; bar: string; border: string }> = {
+const META: Record<StrategyName, { title: MessageKey; text: string; bar: string; border: string }> = {
   classic: {
-    title: "Classic RAG",
+    title: "strategy.classic",
     text: "text-sky-300",
     bar: "bg-sky-400",
     border: "border-sky-500/40",
   },
   graph: {
-    title: "Graph RAG",
+    title: "strategy.graph",
     text: "text-violet-300",
     bar: "bg-violet-400",
     border: "border-violet-500/40",
   },
   agentic: {
-    title: "Agentic RAG",
+    title: "strategy.agentic",
     text: "text-emerald-300",
     bar: "bg-emerald-400",
     border: "border-emerald-500/40",
   },
 };
 
-const QUESTION_TYPE_LABEL: Record<string, string> = {
-  single_fact: "Single-fact",
-  relational_multi_hop: "Relational / multi-hop",
-  exploratory_multi_step: "Exploratory / multi-step",
+const QUESTION_TYPE_LABEL: Record<keyof QuestionMix, MessageKey> = {
+  single_fact: "advisor.qtype.single_fact",
+  relational_multi_hop: "advisor.qtype.relational_multi_hop",
+  exploratory_multi_step: "advisor.qtype.exploratory_multi_step",
 };
 
-const EXAMPLE =
-  "We are an insurance company with about 20,000 PDF contracts and policy documents in French and English. " +
-  "Agents ask things like 'Which clauses cover water damage for policy X?' and 'Which partners are linked to claim Y?'. " +
-  "Answers should come back in under 5 seconds. Data must stay in the EU (GDPR).";
+const LEVEL_LABEL: Record<Level, MessageKey> = {
+  low: "advisor.level.low",
+  medium: "advisor.level.medium",
+  high: "advisor.level.high",
+};
+
+const FRESHNESS_LABEL: Record<Freshness, MessageKey> = {
+  static: "advisor.freshness.static",
+  monthly: "advisor.freshness.monthly",
+  weekly: "advisor.freshness.weekly",
+  daily: "advisor.freshness.daily",
+  realtime: "advisor.freshness.realtime",
+};
+
+const SIZE_LABEL: Record<ProjectProfile["corpus_size"], MessageKey> = {
+  tiny: "advisor.size.tiny",
+  small: "advisor.size.small",
+  medium: "advisor.size.medium",
+  large: "advisor.size.large",
+  xlarge: "advisor.size.xlarge",
+};
 
 type OverrideForm = {
   corpus_size_docs: string;
@@ -96,6 +116,7 @@ function errorText(e: unknown): string {
 }
 
 export default function Advisor() {
+  const { t, rich } = useI18n();
   const [description, setDescription] = useState("");
   const [showOverrides, setShowOverrides] = useState(false);
   const [form, setForm] = useState<OverrideForm>(EMPTY_OVERRIDES);
@@ -110,11 +131,13 @@ export default function Advisor() {
   return (
     <div className="flex flex-col gap-6">
       <header className="space-y-2">
-        <h1 className="display text-4xl font-semibold text-white">Advisor</h1>
+        <h1 className="display text-4xl font-semibold text-white">{t("advisor.title")}</h1>
         <p className="text-sm text-zinc-400">
-          Describe your project and get a ranked recommendation between{" "}
-          <span className="text-sky-300">Classic</span>, <span className="text-violet-300">Graph</span>{" "}
-          and <span className="text-emerald-300">Agentic</span> RAG, then validate it on your own questions.
+          {rich("advisor.intro", {
+            classic: <span className="text-sky-300">{t("strategy.classic.short")}</span>,
+            graph: <span className="text-violet-300">{t("strategy.graph.short")}</span>,
+            agentic: <span className="text-emerald-300">{t("strategy.agentic.short")}</span>,
+          })}
         </p>
       </header>
 
@@ -126,25 +149,25 @@ export default function Advisor() {
         }}
       >
         <label htmlFor="advisor-description" className="text-sm font-medium text-zinc-200">
-          Your project
+          {t("advisor.yourProject")}
         </label>
         <textarea
           id="advisor-description"
           value={description}
           onChange={(e) => setDescription(e.target.value)}
           rows={6}
-          placeholder="Describe your documents, who asks questions, what kinds of questions, how fast answers must be, budget, and any hosting or compliance constraints…"
+          placeholder={t("advisor.placeholder")}
           className="input resize-y text-sm"
         />
         <div className="flex flex-wrap items-center justify-between gap-2">
           <p className="text-xs text-zinc-500">
-            Any language works: vous pouvez décrire votre projet en français.{" "}
+            {t("advisor.anyLanguage")}{" "}
             <button
               type="button"
-              onClick={() => setDescription(EXAMPLE)}
+              onClick={() => setDescription(t("advisor.example"))}
               className="text-accent hover:text-accent-hover underline-offset-2 hover:underline"
             >
-              Use an example
+              {t("advisor.useExample")}
             </button>
           </p>
           <button
@@ -153,70 +176,70 @@ export default function Advisor() {
             className="text-xs text-zinc-400 hover:text-white"
             aria-expanded={showOverrides}
           >
-            {showOverrides ? "▾" : "▸"} Known facts (optional overrides)
+            {showOverrides ? "▾" : "▸"} {t("advisor.knownFacts")}
           </button>
         </div>
 
         {showOverrides && (
           <div className="grid gap-3 sm:grid-cols-2 border-t border-bg-border pt-3">
-            <Field label="Corpus size (documents)">
+            <Field label={t("advisor.field.corpusSize")}>
               <input
                 type="number"
                 min={0}
                 value={form.corpus_size_docs}
                 onChange={(e) => set("corpus_size_docs", e.target.value)}
                 className="input text-sm !py-2"
-                placeholder="e.g. 20000"
+                placeholder={t("advisor.eg", { value: "20000" })}
               />
             </Field>
-            <Field label="Languages (comma-separated ISO codes)">
+            <Field label={t("advisor.field.languages")}>
               <input
                 value={form.languages}
                 onChange={(e) => set("languages", e.target.value)}
                 className="input text-sm !py-2"
-                placeholder="e.g. fr, en"
+                placeholder={t("advisor.eg", { value: "fr, en" })}
               />
             </Field>
-            <Field label="Latency budget (ms)">
+            <Field label={t("advisor.field.latency")}>
               <input
                 type="number"
                 min={100}
                 value={form.latency_budget_ms}
                 onChange={(e) => set("latency_budget_ms", e.target.value)}
                 className="input text-sm !py-2"
-                placeholder="e.g. 5000"
+                placeholder={t("advisor.eg", { value: "5000" })}
               />
             </Field>
-            <Field label="Cost sensitivity">
+            <Field label={t("advisor.field.cost")}>
               <Select
                 value={form.cost_sensitivity}
                 onChange={(v) => set("cost_sensitivity", v as OverrideForm["cost_sensitivity"])}
-                options={["low", "medium", "high"]}
+                options={LEVEL_LABEL}
               />
             </Field>
-            <Field label="Data freshness">
+            <Field label={t("advisor.field.freshness")}>
               <Select
                 value={form.data_freshness}
                 onChange={(v) => set("data_freshness", v as OverrideForm["data_freshness"])}
-                options={["static", "monthly", "weekly", "daily", "realtime"]}
+                options={FRESHNESS_LABEL}
               />
             </Field>
-            <Field label="Entity richness">
+            <Field label={t("advisor.field.entities")}>
               <Select
                 value={form.entity_richness}
                 onChange={(v) => set("entity_richness", v as OverrideForm["entity_richness"])}
-                options={["low", "medium", "high"]}
+                options={LEVEL_LABEL}
               />
             </Field>
-            <Field label="Residency / compliance (comma-separated)">
+            <Field label={t("advisor.field.compliance")}>
               <input
                 value={form.compliance}
                 onChange={(e) => set("compliance", e.target.value)}
                 className="input text-sm !py-2"
-                placeholder="e.g. EU only, GDPR, on-prem"
+                placeholder={t("advisor.egCompliance")}
               />
             </Field>
-            <Field label="Example questions (one per line)">
+            <Field label={t("advisor.field.examples")}>
               <textarea
                 value={form.question_examples}
                 onChange={(e) => set("question_examples", e.target.value)}
@@ -233,7 +256,7 @@ export default function Advisor() {
             disabled={!description.trim() || adviseMut.isPending}
             className="btn-primary text-sm"
           >
-            {adviseMut.isPending ? "Analysing…" : "Recommend a strategy"}
+            {adviseMut.isPending ? t("advisor.analysing") : t("advisor.recommend")}
           </button>
         </div>
         {adviseMut.isError && (
@@ -245,7 +268,7 @@ export default function Advisor() {
         )}
       </form>
 
-      {adviseMut.isPending && <LoadingSpinner message="Reading your description and scoring strategies…" />}
+      {adviseMut.isPending && <LoadingSpinner message={t("advisor.loading")} />}
       {adviseMut.data && <AdviceResult result={adviseMut.data} />}
       {adviseMut.data && <ValidateSection advice={adviseMut.data} />}
     </div>
@@ -261,6 +284,7 @@ function Field({ label, children }: { label: string; children: ReactNode }) {
   );
 }
 
+/** A select whose option values stay the API's, labelled in the UI language. */
 function Select({
   value,
   onChange,
@@ -268,14 +292,15 @@ function Select({
 }: {
   value: string;
   onChange: (v: string) => void;
-  options: string[];
+  options: Record<string, MessageKey>;
 }) {
+  const { t } = useI18n();
   return (
     <select value={value} onChange={(e) => onChange(e.target.value)} className="input text-sm !py-2">
-      <option value="">From description</option>
-      {options.map((o) => (
+      <option value="">{t("advisor.fromDescription")}</option>
+      {Object.entries(options).map(([o, label]) => (
         <option key={o} value={o}>
-          {o}
+          {t(label)}
         </option>
       ))}
     </select>
@@ -283,29 +308,46 @@ function Select({
 }
 
 function AdviceResult({ result }: { result: AdviseResponse }) {
+  const { t, locale, formatNumber } = useI18n();
   const p = result.profile;
   const mix = p.question_mix;
+  const label = <T extends string>(map: Record<T, MessageKey>, v: T) => (map[v] ? t(map[v]) : v);
   return (
     <section className="flex flex-col gap-4">
       <div className="card p-4 flex flex-col gap-2">
         <div className="flex flex-wrap items-center justify-between gap-2">
-          <h2 className="text-lg font-semibold text-white">Project profile</h2>
-          <span className="chip" title="How the profile was extracted">
-            {p.source === "llm" ? "extracted by Claude" : "keyword heuristic (no model call)"}
+          <h2 className="text-lg font-semibold text-white">{t("advisor.profile")}</h2>
+          <span className="chip" title={t("advisor.profileSourceTitle")}>
+            {p.source === "llm" ? t("advisor.sourceLlm") : t("advisor.sourceHeuristic")}
           </span>
         </div>
         <div className="flex flex-wrap gap-1.5 text-xs">
           <span className="chip">
-            corpus: {p.corpus_size}
-            {p.corpus_size_docs != null ? ` (${p.corpus_size_docs.toLocaleString()} docs)` : ""}
+            {t("advisor.chip.corpus", { size: label(SIZE_LABEL, p.corpus_size) })}
+            {p.corpus_size_docs != null
+              ? t("advisor.chip.docs", { count: formatNumber(p.corpus_size_docs) })
+              : ""}
           </span>
-          <span className="chip">languages: {p.languages.join(", ") || "?"}</span>
           <span className="chip">
-            latency: {p.latency_budget_ms != null ? formatLatency(p.latency_budget_ms) : "not stated"}
+            {t("advisor.chip.languages", { list: p.languages.join(", ") || "?" })}
           </span>
-          <span className="chip">cost sensitivity: {p.cost_sensitivity}</span>
-          <span className="chip">freshness: {p.data_freshness}</span>
-          <span className="chip">entities: {p.entity_richness}</span>
+          <span className="chip">
+            {t("advisor.chip.latency", {
+              value:
+                p.latency_budget_ms != null
+                  ? formatLatency(p.latency_budget_ms, locale)
+                  : t("advisor.notStated"),
+            })}
+          </span>
+          <span className="chip">
+            {t("advisor.chip.cost", { value: label(LEVEL_LABEL, p.cost_sensitivity) })}
+          </span>
+          <span className="chip">
+            {t("advisor.chip.freshness", { value: label(FRESHNESS_LABEL, p.data_freshness) })}
+          </span>
+          <span className="chip">
+            {t("advisor.chip.entities", { value: label(LEVEL_LABEL, p.entity_richness) })}
+          </span>
           {p.document_types.map((d) => (
             <span key={d} className="chip">
               {d}
@@ -318,10 +360,15 @@ function AdviceResult({ result }: { result: AdviseResponse }) {
           ))}
         </div>
         <div className="text-xs text-zinc-400">
-          Question mix: {mix.single_fact}% single-fact · {mix.relational_multi_hop}% relational ·{" "}
-          {mix.exploratory_multi_step}% exploratory
+          {t("advisor.mix", {
+            single: formatNumber(mix.single_fact),
+            relational: formatNumber(mix.relational_multi_hop),
+            exploratory: formatNumber(mix.exploratory_multi_step),
+          })}
           {p.overridden_fields.length > 0 && (
-            <span className="text-zinc-500"> · overridden: {p.overridden_fields.join(", ")}</span>
+            <span className="text-zinc-500">
+              {t("advisor.overridden", { fields: p.overridden_fields.join(", ") })}
+            </span>
           )}
         </div>
       </div>
@@ -334,13 +381,14 @@ function AdviceResult({ result }: { result: AdviseResponse }) {
 
       {result.hybrid_routing.recommended && (
         <div className="card p-4 flex flex-col gap-2 !border-accent/40">
-          <h3 className="text-sm font-semibold text-white">Hybrid routing suggested</h3>
+          <h3 className="text-sm font-semibold text-white">{t("advisor.hybrid")}</h3>
           <p className="text-sm text-zinc-300">{result.hybrid_routing.rationale}</p>
           <ul className="text-sm text-zinc-300 space-y-0.5">
             {result.hybrid_routing.routes.map((route) => (
               <li key={route.question_type}>
-                {QUESTION_TYPE_LABEL[route.question_type]} ({route.share_pct}%) →{" "}
-                <span className={META[route.strategy].text}>{META[route.strategy].title}</span>
+                {label(QUESTION_TYPE_LABEL, route.question_type)} (
+                {formatNumber(route.share_pct / 100, { style: "percent" })}) →{" "}
+                <span className={META[route.strategy].text}>{t(META[route.strategy].title)}</span>
               </li>
             ))}
           </ul>
@@ -349,7 +397,7 @@ function AdviceResult({ result }: { result: AdviseResponse }) {
 
       {result.compliance_notes.length > 0 && (
         <div className="card p-4 flex flex-col gap-2 !border-amber-500/30">
-          <h3 className="text-sm font-semibold text-white">Hosting, compliance and language notes</h3>
+          <h3 className="text-sm font-semibold text-white">{t("advisor.notes")}</h3>
           <ul className="list-disc pl-5 text-sm text-zinc-300 space-y-1">
             {result.compliance_notes.map((n) => (
               <li key={n}>{n}</li>
@@ -359,7 +407,7 @@ function AdviceResult({ result }: { result: AdviseResponse }) {
       )}
 
       <div className="card p-4 text-sm text-zinc-300 !bg-accent-soft/40 !border-accent/30">
-        <span className="font-semibold text-accent">Next step: </span>
+        <span className="font-semibold text-accent">{t("advisor.nextStep")}</span>
         {result.next_step.summary}
       </div>
     </section>
@@ -367,15 +415,17 @@ function AdviceResult({ result }: { result: AdviseResponse }) {
 }
 
 function RecommendationCard({ rec, top }: { rec: StrategyRecommendation; top: boolean }) {
+  const { t, formatNumber } = useI18n();
   const m = META[rec.strategy];
   const c = rec.suggested_config;
+  const title = t(m.title);
   return (
     <article className={`card p-4 flex flex-col gap-3 ${top ? m.border : ""}`}>
       <div className="flex items-center gap-3">
         <span className="text-xs font-mono text-zinc-500">#{rec.rank}</span>
-        <h3 className={`font-semibold ${m.text}`}>{m.title}</h3>
-        {top && <span className="chip !text-accent !border-accent/40">recommended</span>}
-        <span className="ml-auto font-mono text-sm text-white">{rec.score}/100</span>
+        <h3 className={`font-semibold ${m.text}`}>{title}</h3>
+        {top && <span className="chip !text-accent !border-accent/40">{t("advisor.recommended")}</span>}
+        <span className="ml-auto font-mono text-sm text-white">{formatNumber(rec.score)}/100</span>
       </div>
       <div
         className="h-2 w-full rounded-full bg-bg-elevated overflow-hidden"
@@ -383,14 +433,14 @@ function RecommendationCard({ rec, top }: { rec: StrategyRecommendation; top: bo
         aria-valuemin={0}
         aria-valuemax={100}
         aria-valuenow={rec.score}
-        aria-label={`${m.title} score`}
+        aria-label={t("advisor.scoreAria", { title })}
       >
         <div className={`h-full ${m.bar} transition-all`} style={{ width: `${rec.score}%` }} />
       </div>
 
       <div className="grid gap-3 md:grid-cols-2">
         <div>
-          <h4 className="text-xs uppercase tracking-wider text-zinc-500 mb-1">Why</h4>
+          <h4 className="text-xs uppercase tracking-wider text-zinc-500 mb-1">{t("advisor.why")}</h4>
           <ul className="list-disc pl-5 text-sm text-zinc-300 space-y-1">
             {rec.reasons.map((r) => (
               <li key={r}>{r}</li>
@@ -398,21 +448,23 @@ function RecommendationCard({ rec, top }: { rec: StrategyRecommendation; top: bo
           </ul>
         </div>
         <div>
-          <h4 className="text-xs uppercase tracking-wider text-zinc-500 mb-1">Tradeoffs</h4>
+          <h4 className="text-xs uppercase tracking-wider text-zinc-500 mb-1">{t("advisor.tradeoffs")}</h4>
           <ul className="list-disc pl-5 text-sm text-zinc-400 space-y-1">
-            {rec.tradeoffs.map((t) => (
-              <li key={t}>{t}</li>
+            {rec.tradeoffs.map((tradeoff) => (
+              <li key={tradeoff}>{tradeoff}</li>
             ))}
           </ul>
         </div>
       </div>
 
       <details className="text-sm">
-        <summary className="cursor-pointer text-xs text-zinc-400 hover:text-white">Suggested config</summary>
+        <summary className="cursor-pointer text-xs text-zinc-400 hover:text-white">
+          {t("advisor.suggestedConfig")}
+        </summary>
         <div className="mt-2 grid gap-x-6 gap-y-1 sm:grid-cols-2 font-mono text-xs text-zinc-300">
           <div>RETRIEVAL_TOP_K = {c.retrieval_top_k}</div>
           <div>RERANK_TOP_K = {c.rerank_top_k}</div>
-          <div>rerank = {c.rerank ? "on" : "off"}</div>
+          <div>rerank = {c.rerank ? t("advisor.on") : t("advisor.off")}</div>
           <div>CHUNK_SIZE_TOKENS = {c.chunk_size_tokens}</div>
           <div>CHUNK_OVERLAP_TOKENS = {c.chunk_overlap_tokens}</div>
           <div className="break-all">EMBEDDING_MODEL = {c.embedding_model}</div>
@@ -422,7 +474,10 @@ function RecommendationCard({ rec, top }: { rec: StrategyRecommendation; top: bo
             </div>
           ))}
           <div>
-            relative cost ×{c.expected_relative_cost} · latency ×{c.expected_relative_latency}
+            {t("advisor.relative", {
+              cost: formatNumber(c.expected_relative_cost),
+              latency: formatNumber(c.expected_relative_latency),
+            })}
           </div>
         </div>
         {c.notes.length > 0 && (
@@ -438,6 +493,7 @@ function RecommendationCard({ rec, top }: { rec: StrategyRecommendation; top: bo
 }
 
 function ValidateSection({ advice }: { advice: AdviseResponse }) {
+  const { t, tp, rich } = useI18n();
   const [text, setText] = useState(() =>
     advice.profile.example_questions.slice(0, 5).join("\n"),
   );
@@ -455,11 +511,12 @@ function ValidateSection({ advice }: { advice: AdviseResponse }) {
   return (
     <section className="card p-4 flex flex-col gap-3">
       <div>
-        <h2 className="text-lg font-semibold text-white">Validate on my questions</h2>
+        <h2 className="text-lg font-semibold text-white">{t("advisor.validate")}</h2>
         <p className="text-xs text-zinc-500 mt-1">
-          Runs against the documents currently ingested. One question per line; add{" "}
-          <code className="font-mono text-zinc-300">question || ideal answer</code> to also score
-          answer quality. Up to {MAX_VALIDATE_QUESTIONS} questions.
+          {rich("advisor.validateHelp", {
+            syntax: <code className="font-mono text-zinc-300">{t("advisor.validateSyntax")}</code>,
+            max: MAX_VALIDATE_QUESTIONS,
+          })}
         </p>
       </div>
       <textarea
@@ -467,11 +524,11 @@ function ValidateSection({ advice }: { advice: AdviseResponse }) {
         onChange={(e) => setText(e.target.value)}
         rows={6}
         className="input resize-y text-sm font-mono"
-        placeholder={"Which clauses cover water damage? || Clause 4.2 and annex B\nWho is the broker for policy 123?"}
+        placeholder={t("advisor.validatePlaceholder")}
       />
       {lineCount > MAX_VALIDATE_QUESTIONS && (
         <p className="text-xs text-amber-300">
-          Only the first {MAX_VALIDATE_QUESTIONS} of {lineCount} questions will be sent.
+          {t("advisor.tooMany", { max: MAX_VALIDATE_QUESTIONS, count: lineCount })}
         </p>
       )}
       <div className="flex flex-wrap items-center gap-2">
@@ -483,7 +540,7 @@ function ValidateSection({ advice }: { advice: AdviseResponse }) {
               onChange={() => toggle(s)}
               className="accent-amber-400"
             />
-            <span className={META[s].text}>{META[s].title}</span>
+            <span className={META[s].text}>{t(META[s].title)}</span>
           </label>
         ))}
         <button
@@ -491,9 +548,7 @@ function ValidateSection({ advice }: { advice: AdviseResponse }) {
           disabled={questions.length === 0 || strategies.length === 0 || mut.isPending}
           className="btn-primary text-sm ml-auto"
         >
-          {mut.isPending
-            ? "Running…"
-            : `Run ${questions.length} question${questions.length === 1 ? "" : "s"}`}
+          {mut.isPending ? t("common.running") : tp("advisor.runQuestions", questions.length)}
         </button>
       </div>
       {mut.isError && (
@@ -505,7 +560,10 @@ function ValidateSection({ advice }: { advice: AdviseResponse }) {
       )}
       {mut.isPending && (
         <LoadingSpinner
-          message={`Running ${questions.length} × ${strategies.length} strategy runs sequentially; this can take a few minutes.`}
+          message={t("advisor.validating", {
+            questions: questions.length,
+            strategies: strategies.length,
+          })}
         />
       )}
       {mut.data && <Scorecard data={mut.data} />}
@@ -513,23 +571,21 @@ function ValidateSection({ advice }: { advice: AdviseResponse }) {
   );
 }
 
-function fmtScore(v: number | null): string {
-  return v == null ? "–" : v.toFixed(2);
-}
-
 function Scorecard({ data }: { data: ValidateResponse }) {
+  const { t, locale } = useI18n();
+  const fmtScore = (v: number | null) => (v == null ? "–" : formatScore(v, 2, locale));
   return (
     <div className="flex flex-col gap-3">
       <div className="text-sm">
         {data.measured_winner ? (
           <>
-            <span className="text-zinc-400">Measured winner: </span>
+            <span className="text-zinc-400">{t("advisor.measuredWinner")}</span>
             <span className={`font-semibold ${META[data.measured_winner].text}`}>
-              {META[data.measured_winner].title}
+              {t(META[data.measured_winner].title)}
             </span>
           </>
         ) : (
-          <span className="text-amber-300">No measured winner.</span>
+          <span className="text-amber-300">{t("advisor.noWinner")}</span>
         )}
         <p className="text-xs text-zinc-500 mt-1">{data.winner_reason}</p>
       </div>
@@ -537,13 +593,13 @@ function Scorecard({ data }: { data: ValidateResponse }) {
         <table className="w-full text-sm">
           <thead>
             <tr className="text-left text-xs uppercase tracking-wider text-zinc-500 border-b border-bg-border">
-              <th className="py-2 pr-3">Strategy</th>
-              <th className="py-2 pr-3">Refusals</th>
-              <th className="py-2 pr-3">Errors</th>
-              <th className="py-2 pr-3">Avg latency</th>
-              <th className="py-2 pr-3">Tokens / q</th>
-              <th className="py-2 pr-3">Judge</th>
-              <th className="py-2 pr-3">F1 vs ideal</th>
+              <th className="py-2 pr-3">{t("advisor.col.strategy")}</th>
+              <th className="py-2 pr-3">{t("advisor.col.refusals")}</th>
+              <th className="py-2 pr-3">{t("advisor.col.errors")}</th>
+              <th className="py-2 pr-3">{t("advisor.col.latency")}</th>
+              <th className="py-2 pr-3">{t("advisor.col.tokens")}</th>
+              <th className="py-2 pr-3">{t("advisor.col.judge")}</th>
+              <th className="py-2 pr-3">{t("advisor.col.f1")}</th>
             </tr>
           </thead>
           <tbody>
@@ -552,13 +608,15 @@ function Scorecard({ data }: { data: ValidateResponse }) {
                 key={c.strategy}
                 className={`border-b border-bg-border/60 ${c.strategy === data.measured_winner ? "bg-bg-elevated" : ""}`}
               >
-                <td className={`py-2 pr-3 font-medium ${META[c.strategy].text}`}>{META[c.strategy].title}</td>
+                <td className={`py-2 pr-3 font-medium ${META[c.strategy].text}`}>{t(META[c.strategy].title)}</td>
                 <td className="py-2 pr-3 font-mono">
                   {c.refusals}/{c.questions}
                 </td>
                 <td className="py-2 pr-3 font-mono">{c.errors}</td>
-                <td className="py-2 pr-3 font-mono">{formatLatency(c.avg_latency_ms)}</td>
-                <td className="py-2 pr-3 font-mono">{formatTokens(Math.round(c.avg_tokens_per_question))}</td>
+                <td className="py-2 pr-3 font-mono">{formatLatency(c.avg_latency_ms, locale)}</td>
+                <td className="py-2 pr-3 font-mono">
+                  {formatTokens(Math.round(c.avg_tokens_per_question), locale)}
+                </td>
                 <td className="py-2 pr-3 font-mono">
                   {fmtScore(c.avg_judge_score)}
                   {c.judged > 0 && <span className="text-zinc-500"> (n={c.judged})</span>}
@@ -571,17 +629,22 @@ function Scorecard({ data }: { data: ValidateResponse }) {
       </div>
       <details>
         <summary className="cursor-pointer text-xs text-zinc-400 hover:text-white">
-          Per-question answers ({data.rows.length})
+          {t("advisor.perQuestion", { count: data.rows.length })}
         </summary>
         <ul className="mt-2 flex flex-col gap-2">
           {data.rows.map((r, i) => (
             <li key={i} className="border border-bg-border rounded-lg p-2 text-xs">
               <div className="flex flex-wrap gap-2 items-center">
-                <span className={META[r.strategy].text}>{META[r.strategy].title}</span>
+                <span className={META[r.strategy].text}>{t(META[r.strategy].title)}</span>
                 <span className="text-zinc-300">{r.question}</span>
-                {r.refusal && <span className="chip !text-rose-300">{r.error ? "error" : "refused"}</span>}
+                {r.refusal && (
+                  <span className="chip !text-rose-300">
+                    {r.error ? t("common.error") : t("advisor.refused")}
+                  </span>
+                )}
                 <span className="ml-auto font-mono text-zinc-500">
-                  {formatLatency(r.latency_ms)} · {formatTokens(r.input_tokens + r.output_tokens)}
+                  {formatLatency(r.latency_ms, locale)} ·{" "}
+                  {formatTokens(r.input_tokens + r.output_tokens, locale)}
                 </span>
               </div>
               <p className="mt-1 text-zinc-400 whitespace-pre-wrap">{r.answer}</p>

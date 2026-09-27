@@ -189,16 +189,35 @@ class Settings(BaseSettings):
 
     # Embeddings
     embedding_model: str = Field(
-        default="BAAI/bge-small-en-v1.5",
+        # Multilingual (100+ languages, 384 dims) and small enough for CPU, so a
+        # French question can retrieve an English passage. BAAI/bge-m3 (1024
+        # dims) ranks better at several times the cost. The model is recorded
+        # on the Qdrant collection; switching it requires a re-ingest.
+        default="intfloat/multilingual-e5-small",
         min_length=1,
         description="HuggingFace embedding model ID.",
     )
+    embedding_query_prefix: str | None = Field(
+        default=None,
+        description=(
+            "Text prepended to queries before embedding. Unset: chosen from the "
+            "model family (E5 needs 'query: '). Set to '' to disable."
+        ),
+    )
+    embedding_passage_prefix: str | None = Field(
+        default=None,
+        description=(
+            "Text prepended to passages before embedding. Unset: chosen from the "
+            "model family (E5 needs 'passage: '). Set to '' to disable."
+        ),
+    )
     reranker_model: str = Field(
-        # An English 6-layer cross-encoder. The multilingual 12-layer mMARCO
-        # model this replaced took ~14.5s to rerank 50 candidates on CPU
-        # against ~7.1s here, with no measurable ranking benefit on an English
-        # corpus, and reranking is the single largest cost in a query.
-        default="cross-encoder/ms-marco-MiniLM-L-6-v2",
+        # A multilingual 12-layer mMARCO cross-encoder. It is roughly twice as
+        # slow on CPU as the English 6-layer ms-marco-MiniLM-L-6-v2 (~14.5s vs
+        # ~7.1s for 50 candidates), but the English model cannot score a French
+        # question against a passage. Set RERANKER_MODEL to the English model
+        # for an English-only deployment that needs the speed.
+        default="cross-encoder/mmarco-mMiniLMv2-L12-H384-v1",
         min_length=1,
         description="Cross-encoder model used to rerank retrieved chunks.",
     )

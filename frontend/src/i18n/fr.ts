@@ -1,0 +1,383 @@
+import type { Dictionary } from "./en";
+
+/** French UI strings. Typed `Dictionary`, so it must carry exactly the English keys. */
+export const fr: Dictionary = {
+  // Language switch
+  "lang.label": "Langue",
+  "lang.switchTo": "Passer en {language}",
+  "lang.en": "English",
+  "lang.fr": "Français",
+
+  // Shared
+  "common.clear": "Effacer",
+  "common.save": "Enregistrer",
+  "common.retry": "Réessayer",
+  "common.dismissError": "Fermer l'erreur",
+  "common.running": "En cours…",
+  "common.loading": "Chargement…",
+  "common.na": "n.d.",
+  "common.refused": "Refusé",
+  "common.answered": "Répondu",
+  "common.error": "erreur",
+  "common.sources": "Sources ({count})",
+  "common.step": "étape",
+
+  // Strategy names
+  "strategy.classic": "RAG classique",
+  "strategy.graph": "RAG par graphe",
+  "strategy.agentic": "RAG agentique",
+  "strategy.classic.short": "Classique",
+  "strategy.graph.short": "Graphe",
+  "strategy.agentic.short": "Agentique",
+
+  // Navigation
+  "nav.ask": "Demander",
+  "nav.ingest": "Ingestion",
+  "nav.compare": "Comparer",
+  "nav.data": "Données",
+  "nav.eval": "Évaluation",
+  "nav.regressions": "Régressions",
+  "nav.advisor": "Conseiller",
+  "nav.tagline": "une recherche qui s'auto-évalue",
+  "nav.workspace": "Espace de travail",
+  "nav.blurb":
+    "Un système RAG ne vaut que par l'évaluation qui détecte ses dérives. Ingérer, demander, noter, livrer.",
+
+  // API client errors
+  "client.unauthorized": "Ce backend exige une clé d'API.",
+  "client.forbidden":
+    "Action non autorisée{detail}. Elle nécessite la clé d'administration du backend (ADMIN_KEY).",
+  "client.rateLimited": "Limite de requêtes atteinte. Patientez un instant puis réessayez.",
+  "client.unavailable":
+    "Service indisponible : {detail}. Un service sous-jacent (comme Qdrant) est peut-être arrêté ; réessayez dans un instant.",
+  "client.timeout": "La requête a expiré après {seconds} s.",
+  "client.unreachable": "Impossible de joindre le backend ({reason}).",
+
+  // API key banner
+  "apikey.rejected": "Le backend a refusé la clé d'API enregistrée",
+  "apikey.required": "Ce backend exige une clé d'API",
+  "apikey.unreachable": "Impossible de joindre le backend",
+  "apikey.saved": "Clé d'API enregistrée",
+  "apikey.unreachableHelp":
+    "{endpoint} a échoué : impossible de savoir si une clé d'API est nécessaire. Vérifiez que le backend tourne ; s'il exige une clé, collez-la ci-dessous.",
+  "apikey.storedHelp":
+    "Les requêtes sont envoyées avec {header}. La clé reste uniquement dans ce navigateur.",
+  "apikey.createHelp": "Créez-en une avec {command}, puis collez-la ci-dessous.",
+  "apikey.savedBadge": "enregistrée",
+  "apikey.label": "Clé d'API",
+  "apikey.saveKey": "Enregistrer la clé",
+
+  // Answer metadata
+  "meta.latencyTip": "Temps entre la requête et la réponse",
+  "meta.costTip": "Coût estimé : {cost}",
+  "meta.tokensTip": "Tokens en entrée + en sortie",
+  "meta.tokensUsedTip": "Tokens utilisés en entrée + en sortie",
+  "meta.tokensCostTip": "Tokens utilisés en entrée + en sortie (indicateur de coût)",
+  "meta.iterationsTip": "Nombre d'itérations de raisonnement",
+  "meta.iterationsLoopsTip": "Nombre d'itérations de raisonnement (boucles)",
+  "meta.strategy": "Stratégie",
+  "meta.model": "Modèle",
+  "meta.latency": "Latence",
+  "meta.tokens": "Tokens",
+  "meta.iterations": "Itérations",
+
+  // Ask
+  "ask.title": "Demander",
+  "ask.subtitle":
+    "Interrogez les documents indexés, en français ou en anglais. Les sources permettent de vérifier l'exactitude.",
+  "ask.strategy": "Stratégie",
+  "ask.hint.classic": "recherche vectorielle → reclassement → réponse",
+  "ask.hint.graph": "parcours des entités du graphe de connaissances",
+  "ask.hint.agentic": "le modèle enchaîne les outils de recherche et de lecture",
+  "ask.strategyAria": "Stratégie {label} : {hint}",
+  "ask.placeholder": "Posez une question…  ⏎ pour envoyer  ·  maj+⏎ pour un saut de ligne",
+  "ask.asking": "Envoi…",
+  "ask.submit": "Demander",
+  "ask.tryQuestion": "Essayez une question",
+  "ask.samples.g1": "Stratégies de recherche et compromis",
+  "ask.samples.g1.q1":
+    "Comment l'extraction d'entités du Graph RAG réduit-elle les hallucinations par rapport au RAG classique ?",
+  "ask.samples.g1.q2":
+    "Quand faut-il préférer la recherche dense à la recherche hybride, et quels sont les compromis entre latence et qualité ?",
+  "ask.samples.g1.q3":
+    "Pourquoi le RAG agentique peut-il en faire trop sur des questions simples tout en excellant sur un raisonnement complexe ?",
+  "ask.samples.g1.q4":
+    "Comment le reclassement influe-t-il sur la précision et le rappel dans une recherche multi-sauts ?",
+  "ask.samples.g2": "Conception et architecture",
+  "ask.samples.g2.q1":
+    "Quel est le lien entre la taille des chunks, le modèle d'embeddings et la qualité de la recherche ?",
+  "ask.samples.g2.q2":
+    "Comment concevoir un pipeline RAG qui traite efficacement les questions factuelles et les questions de synthèse ?",
+  "ask.samples.g2.q3":
+    "Comment la construction d'un graphe de connaissances influe-t-elle sur la couverture de la recherche et les hallucinations ?",
+  "ask.samples.g2.q4":
+    "Quels sont les modes d'échec d'une recherche uniquement dense sur des documents à la structure ambiguë ?",
+  "ask.samples.g3": "Évaluation et production",
+  "ask.samples.g3.q1":
+    "Quelle est la différence entre la précision et le rappel du contexte, et comment interagissent-ils ?",
+  "ask.samples.g3.q2":
+    "Comment optimiser un pipeline RAG à la fois pour la vitesse et la précision avec des documents hétérogènes ?",
+  "ask.samples.g3.q3":
+    "Pourquoi le RAG agentique consomme-t-il plus de tokens que le RAG classique sur le même corpus, et quand est-ce justifié ?",
+  "ask.samples.g3.q4":
+    "Comment détecter et prévenir la dérive de la recherche à mesure que le corpus grandit ?",
+  "ask.loading": "Recherche des passages et génération de la réponse...",
+  "ask.confidenceTitle": "Confiance du modèle dans cette réponse",
+  "ask.confidenceTip":
+    "Degré de confiance du modèle dans sa réponse (échelle 0-1). Plus il est élevé, plus la réponse est ancrée dans les sources.",
+  "ask.confidenceAria": "Score de confiance",
+  "ask.confidencePercentAria": "{pct} pour cent de confiance",
+  "ask.trace": "trace",
+  "ask.traceTitle":
+    "GET /traces/{id} : les étapes de recherche, de reclassement et de génération de cette réponse",
+  "ask.rated": "Noté {rating}/5, merci. Votre note a été enregistrée.",
+  "ask.yourRating": "Votre note",
+  "ask.stars_one": "{count} étoile",
+  "ask.stars_other": "{count} étoiles",
+  "ask.ratingPlaceholder": "Facultatif : pourquoi cette note ?",
+  "ask.saving": "Enregistrement…",
+  "ask.submitRating": "Envoyer la note",
+
+  // Compare
+  "compare.title": "Comparer",
+  "compare.adminNeeded":
+    "La construction du graphe nécessite la clé d'administration du backend (ADMIN_KEY). Saisissez-la dans le champ « Clé d'administration » ci-dessous, puis réessayez.{detail}",
+  "compare.buildUnavailable":
+    "Construction du graphe indisponible : aucune ADMIN_KEY n'est configurée sur le backend, ou un service sous-jacent est arrêté. Définissez ADMIN_KEY dans .env et redémarrez le backend.{detail}",
+  "compare.tagline.classic": "embedding → recherche vectorielle → reclassement → réponse",
+  "compare.tagline.graph": "extraction d'entités → parcours du graphe → réponse",
+  "compare.tagline.agentic": "le modèle enchaîne les outils de recherche et de lecture",
+  "compare.sample1":
+    "Comment l'extraction d'entités du Graph RAG réduit-elle les hallucinations par rapport à une recherche uniquement dense ?",
+  "compare.sample2":
+    "Quand privilégier le raisonnement du RAG agentique plutôt que la vitesse du RAG classique ?",
+  "compare.sample3":
+    "Qu'arrive-t-il à la qualité de la recherche avec des chunks plus petits et des embeddings denses ?",
+  "compare.noJobId": "Le backend n'a pas renvoyé d'identifiant de tâche pour la construction du graphe.",
+  "compare.progressChunks": "{done}/{total} chunks",
+  "compare.status.queued": "en attente",
+  "compare.status.running": "en cours",
+  "compare.status.completed": "terminée",
+  "compare.status.failed": "échouée",
+  "compare.buildFailed": "La construction du graphe a échoué : {error}",
+  "compare.unknownError": "erreur inconnue",
+  "compare.partialFailures_one":
+    "Graphe construit, mais l'extraction a échoué pour {count} chunk. Reconstruisez pour le réessayer.",
+  "compare.partialFailures_other":
+    "Graphe construit, mais l'extraction a échoué pour {count} chunks. Reconstruisez pour les réessayer.",
+  "compare.placeholder": "Posez une question… ⏎ pour lancer",
+  "compare.run": "Comparer",
+  "compare.adminKey": "Clé d'administration",
+  "compare.adminSaved": "(enregistrée)",
+  "compare.adminNeededHint": "(nécessaire pour construire le graphe)",
+  "compare.adminPlaceholder": "ADMIN_KEY du fichier .env",
+  "compare.adminHelp":
+    "Envoyée comme {header} uniquement lors de la construction du graphe, et conservée dans ce navigateur.",
+  "compare.graphTip":
+    "Graphe de connaissances : entités et relations extraites des documents",
+  "compare.triples": "{count} triplets",
+  "compare.graphNotBuilt": "Graphe non construit",
+  "compare.buildAria": "Extraire les relations entre entités des documents indexés",
+  "compare.building": "Construction… {progress}",
+  "compare.rebuild": "Reconstruire",
+  "compare.buildGraph": "Construire le graphe",
+  "compare.showLess": "Réduire",
+  "compare.readMore": "Lire la suite →",
+  "compare.more": "+{count} de plus",
+  "compare.kgDetails": "Détails du graphe de connaissances",
+  "compare.extractedEntities": "Entités extraites",
+  "compare.relatedEntities": "Entités liées (1 saut)",
+  "compare.kgStructure": "Structure du graphe de connaissances",
+  "compare.strategyDetails": "Détails de la stratégie",
+  "compare.trace_one": "Trace ({count} étape)",
+  "compare.trace_other": "Trace ({count} étapes)",
+  "compare.winners": "Gagnants",
+  "compare.fastest": "Le plus rapide",
+  "compare.cheapest": "Le moins cher",
+  "compare.faster": "↓ {pct} plus rapide",
+  "compare.cheaper": "↓ {pct} moins cher",
+
+  // Evaluation
+  "eval.title": "Évaluation",
+  "eval.subtitle":
+    "Notez un jeu de référence sur la fidélité, la pertinence, et la précision et le rappel de la recherche.",
+  "eval.metric.faithfulness": "Fidélité",
+  "eval.metric.faithfulness.desc": "La réponse n'affirme que ce que contient le contexte récupéré",
+  "eval.metric.answer_relevance": "Pertinence",
+  "eval.metric.answer_relevance.desc": "La réponse traite la question, dans sa langue",
+  "eval.metric.context_precision": "Précision",
+  "eval.metric.context_precision.desc": "Les passages récupérés sont dans le sujet",
+  "eval.metric.context_recall": "Rappel",
+  "eval.metric.context_recall.desc": "Tous les passages pertinents ont été récupérés",
+  "eval.dataset": "Jeu de données",
+  "eval.dataset.golden_v1": "golden_v1 (anglais)",
+  "eval.dataset.golden_v2": "golden_v2 (anglais, réétiqueté)",
+  "eval.dataset.golden_fr_v1": "golden_fr_v1 (questions en français)",
+  "eval.running":
+    "Évaluation en cours. Chaque question de référence reçoit une réponse puis une note : cela peut prendre plusieurs minutes...",
+  "eval.runFailed": "L'évaluation a échoué : {error}",
+  "eval.loading": "Chargement des résultats d'évaluation...",
+  "eval.loadFailed": "Impossible de charger les évaluations : {error}",
+  "eval.empty": "Aucune évaluation notée pour l'instant",
+  "eval.emptyUnscored_one":
+    "{count} évaluation précédente n'a produit aucune note. Lancez une évaluation pour mesurer les performances des stratégies de recherche.",
+  "eval.emptyUnscored_other":
+    "{count} évaluations précédentes n'ont produit aucune note. Lancez une évaluation pour mesurer les performances des stratégies de recherche.",
+  "eval.emptyHelp":
+    "Lancez une évaluation sur le jeu de référence pour mesurer les performances des stratégies de recherche.",
+  "eval.run": "Lancer l'évaluation",
+  "eval.rerun": "Relancer",
+  "eval.scored_one": "{scored} question notée sur {count}",
+  "eval.scored_other": "{scored} questions notées sur {count}",
+  "eval.hidden_one":
+    "{count} évaluation précédente est masquée car le juge n'a renvoyé aucune note.",
+  "eval.hidden_other":
+    "{count} évaluations précédentes sont masquées car le juge n'a renvoyé aucune note.",
+  "eval.metricAria": "{label} : {value}",
+
+  // Regressions
+  "reg.title": "Régressions",
+  "reg.subtitle":
+    "Dérive des métriques entre deux évaluations successives. Le système d'alerte précoce contre le « prompt and pray ».",
+  "reg.loadFailed": "Impossible de charger les régressions : {error}",
+  "reg.none": "Aucune régression détectée",
+  "reg.stable": "Toutes les métriques sont stables d'une évaluation à l'autre.",
+
+  // Ingest
+  "ingest.title": "Ingestion",
+  "ingest.intro":
+    "Déposez des fichiers {types}. Ils sont découpés, vectorisés et indexés dans Qdrant, prêts à étayer les réponses de la page Demander.",
+  "ingest.chunksIndexed": "{count} chunks indexés",
+  "ingest.failedSome_one":
+    "{failed} fichier sur {count} n'a pas pu être ingéré ; voir la liste ci-dessous.",
+  "ingest.failedSome_other":
+    "{failed} fichiers sur {count} n'ont pas pu être ingérés ; voir la liste ci-dessous.",
+  "ingest.processing": "Traitement et indexation des fichiers...",
+  "ingest.dropHere": "Déposez vos fichiers ici",
+  "ingest.orBrowse": "ou cliquez ci-dessous pour parcourir",
+  "ingest.choose": "Choisir des fichiers",
+  "ingest.recent": "Importés récemment",
+  "ingest.failed": "échec",
+  "ingest.addedChunks": "+{count} chunks",
+  "ingest.total": "{count} au total",
+  "ingest.groupsLabel": "Lisible par (groupes)",
+  "ingest.groupsPlaceholder": "ex. juridique, finance",
+  "ingest.groupsHint":
+    "Séparés par des virgules. Laissez vide pour utiliser vos propres groupes. Seuls les groupes dont vous êtes membre sont acceptés.",
+  "ingest.readableBy": "Lisible par : {groups}",
+
+  // Data
+  "data.title": "Données",
+  "data.subtitle": "Ce qui est indexé, et comment les stratégies de recherche s'y comparent.",
+  "data.chunks": "Chunks",
+  "data.tokens": "Tokens",
+  "data.size": "Taille",
+  "data.status": "État",
+  "data.live": "En ligne",
+  "data.dataset": "Jeu de données",
+  "data.goldenPerf": "Performances sur le jeu de référence",
+  "data.level.medium": "Moyen",
+  "data.level.hard": "Difficile",
+  "data.q1": "Extraction d'entités du Graph RAG ou recherche uniquement dense ?",
+  "data.q2": "Sacrifier la latence pour la capacité de raisonnement ?",
+  "data.q3": "Interaction entre taille des chunks et modèle d'embeddings ?",
+  "data.patterns": "Tendances par stratégie",
+  "data.pattern.entity": "Riche en entités",
+  "data.pattern.entity.impact": "Graphe : +15 % d'avantage en latence",
+  "data.pattern.factual": "Factuel",
+  "data.pattern.factual.impact": "Classique : optimal en vitesse et en coût",
+  "data.pattern.synthesis": "Synthèse",
+  "data.pattern.synthesis.impact": "Agentique : trouve des preuves réparties entre documents",
+
+  // Advisor
+  "advisor.title": "Conseiller",
+  "advisor.intro":
+    "Décrivez votre projet et obtenez une recommandation classée entre les RAG {classic}, {graph} et {agentic}, puis validez-la sur vos propres questions.",
+  "advisor.yourProject": "Votre projet",
+  "advisor.placeholder":
+    "Décrivez vos documents, qui pose les questions, quels types de questions, le délai de réponse attendu, le budget et vos contraintes d'hébergement ou de conformité…",
+  "advisor.anyLanguage":
+    "Toutes les langues sont acceptées : you can also describe your project in English.",
+  "advisor.useExample": "Utiliser un exemple",
+  "advisor.example":
+    "Nous sommes une compagnie d'assurance avec environ 20 000 contrats et documents de police en PDF, en français et en anglais. Les agents posent des questions comme « Quelles clauses couvrent les dégâts des eaux pour la police X ? » et « Quels partenaires sont liés au sinistre Y ? ». Les réponses doivent arriver en moins de 5 secondes. Les données doivent rester dans l'UE (RGPD).",
+  "advisor.knownFacts": "Faits connus (ajustements facultatifs)",
+  "advisor.field.corpusSize": "Taille du corpus (documents)",
+  "advisor.field.languages": "Langues (codes ISO séparés par des virgules)",
+  "advisor.field.latency": "Budget de latence (ms)",
+  "advisor.field.cost": "Sensibilité au coût",
+  "advisor.field.freshness": "Fraîcheur des données",
+  "advisor.field.entities": "Richesse en entités",
+  "advisor.field.compliance": "Localisation / conformité (séparées par des virgules)",
+  "advisor.field.examples": "Exemples de questions (une par ligne)",
+  "advisor.eg": "ex. {value}",
+  "advisor.egCompliance": "ex. UE uniquement, RGPD, sur site",
+  "advisor.fromDescription": "D'après la description",
+  "advisor.level.low": "faible",
+  "advisor.level.medium": "moyenne",
+  "advisor.level.high": "élevée",
+  "advisor.freshness.static": "statique",
+  "advisor.freshness.monthly": "mensuelle",
+  "advisor.freshness.weekly": "hebdomadaire",
+  "advisor.freshness.daily": "quotidienne",
+  "advisor.freshness.realtime": "temps réel",
+  "advisor.size.tiny": "minuscule",
+  "advisor.size.small": "petit",
+  "advisor.size.medium": "moyen",
+  "advisor.size.large": "grand",
+  "advisor.size.xlarge": "très grand",
+  "advisor.analysing": "Analyse…",
+  "advisor.recommend": "Recommander une stratégie",
+  "advisor.loading": "Lecture de votre description et notation des stratégies…",
+  "advisor.profile": "Profil du projet",
+  "advisor.profileSourceTitle": "Comment le profil a été extrait",
+  "advisor.sourceLlm": "extrait par Claude",
+  "advisor.sourceHeuristic": "heuristique par mots-clés (sans appel au modèle)",
+  "advisor.chip.corpus": "corpus : {size}",
+  "advisor.chip.docs": " ({count} docs)",
+  "advisor.chip.languages": "langues : {list}",
+  "advisor.chip.latency": "latence : {value}",
+  "advisor.notStated": "non précisée",
+  "advisor.chip.cost": "sensibilité au coût : {value}",
+  "advisor.chip.freshness": "fraîcheur : {value}",
+  "advisor.chip.entities": "entités : {value}",
+  "advisor.mix":
+    "Types de questions : {single} % factuelles · {relational} % relationnelles · {exploratory} % exploratoires",
+  "advisor.overridden": " · ajusté : {fields}",
+  "advisor.qtype.single_fact": "Factuelles",
+  "advisor.qtype.relational_multi_hop": "Relationnelles / multi-sauts",
+  "advisor.qtype.exploratory_multi_step": "Exploratoires / multi-étapes",
+  "advisor.hybrid": "Routage hybride suggéré",
+  "advisor.notes": "Remarques sur l'hébergement, la conformité et les langues",
+  "advisor.nextStep": "Étape suivante : ",
+  "advisor.recommended": "recommandée",
+  "advisor.scoreAria": "Score de {title}",
+  "advisor.why": "Pourquoi",
+  "advisor.tradeoffs": "Compromis",
+  "advisor.suggestedConfig": "Configuration suggérée",
+  "advisor.on": "activé",
+  "advisor.off": "désactivé",
+  "advisor.relative": "coût relatif ×{cost} · latence ×{latency}",
+  "advisor.validate": "Valider sur mes questions",
+  "advisor.validateHelp":
+    "S'exécute sur les documents actuellement ingérés. Une question par ligne ; ajoutez {syntax} pour noter aussi la qualité de la réponse. Jusqu'à {max} questions.",
+  "advisor.validateSyntax": "question || réponse idéale",
+  "advisor.validatePlaceholder":
+    "Quelles clauses couvrent les dégâts des eaux ? || La clause 4.2 et l'annexe B\nQui est le courtier de la police 123 ?",
+  "advisor.tooMany": "Seules les {max} premières questions sur {count} seront envoyées.",
+  "advisor.runQuestions_one": "Lancer {count} question",
+  "advisor.runQuestions_other": "Lancer {count} questions",
+  "advisor.validating":
+    "Exécution séquentielle de {questions} × {strategies} stratégies ; cela peut prendre quelques minutes.",
+  "advisor.measuredWinner": "Gagnant mesuré : ",
+  "advisor.noWinner": "Aucun gagnant mesuré.",
+  "advisor.col.strategy": "Stratégie",
+  "advisor.col.refusals": "Refus",
+  "advisor.col.errors": "Erreurs",
+  "advisor.col.latency": "Latence moy.",
+  "advisor.col.tokens": "Tokens / q",
+  "advisor.col.judge": "Juge",
+  "advisor.col.f1": "F1 / réponse idéale",
+  "advisor.perQuestion": "Réponses par question ({count})",
+  "advisor.refused": "refusé",
+};

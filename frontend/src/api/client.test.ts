@@ -20,6 +20,7 @@ import {
   setApiKey,
   upload,
 } from "./client";
+import { setCurrentLanguage } from "../i18n/core";
 
 function jsonResponse(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), {
@@ -79,6 +80,28 @@ describe("api client", () => {
     });
   });
 
+  describe("language", () => {
+    afterEach(() => setCurrentLanguage("en"));
+
+    it("sends Accept-Language for the active UI language", async () => {
+      setCurrentLanguage("fr");
+      await post("/ask", { question: "Que mesure BM25 ?" });
+      expect(lastRequestHeaders()["Accept-Language"]).toBe("fr,en;q=0.5");
+      await get("/ingest/stats");
+      expect(lastRequestHeaders()["Accept-Language"]).toBe("fr,en;q=0.5");
+      await upload("/ingest", new File(["body"], "a.txt"));
+      expect(lastRequestHeaders()["Accept-Language"]).toBe("fr,en;q=0.5");
+    });
+
+    it("words its own errors in the active language", async () => {
+      setCurrentLanguage("fr");
+      globalThis.fetch = vi.fn(async () =>
+        jsonResponse({ detail: "slow down" }, 429),
+      ) as unknown as typeof fetch;
+      await expect(post("/ask", {})).rejects.toThrow(/Limite de requêtes atteinte/);
+    });
+  });
+
   describe("authorization header", () => {
     it("post sends the key when one is stored", async () => {
       setApiKey("sk_abc123");
@@ -107,6 +130,13 @@ describe("api client", () => {
       setApiKey("sk_abc123");
       await upload("/ingest", new File(["body"], "a.txt"));
       expect(lastRequestHeaders()["Content-Type"]).toBeUndefined();
+    });
+
+    it("sends extra form fields, such as the groups allowed to read a document", async () => {
+      await upload("/ingest", new File(["body"], "a.txt"), undefined, { groups: "legal,finance" });
+      const body = vi.mocked(globalThis.fetch).mock.calls.at(-1)?.[1]?.body as FormData;
+      expect(body.get("groups")).toBe("legal,finance");
+      expect((body.get("file") as File).name).toBe("a.txt");
     });
   });
 

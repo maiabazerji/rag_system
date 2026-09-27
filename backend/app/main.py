@@ -20,6 +20,7 @@ from app.api import (
 from app.api import advisor as advisor_api
 from app.auth import init_db as init_auth_db
 from app.config import settings
+from app.i18n import AcceptLanguageMiddleware
 from app.logging_config import get_structured_logger, setup_logging
 from app.middleware.request_id import RequestIDMiddleware, get_request_id
 from app.monitoring import MetricsMiddleware
@@ -85,6 +86,7 @@ app.add_exception_handler(StoreUnavailable, store_unavailable_handler)
 
 app.add_middleware(RequestIDMiddleware)
 app.add_middleware(MetricsMiddleware)
+app.add_middleware(AcceptLanguageMiddleware)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=settings.cors_origin_list,
