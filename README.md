@@ -43,7 +43,7 @@ Everything in this table is implemented. The embedding model is a real SentenceT
 2. `answer_question` → [`generate.py`](backend/app/rag/generate.py) picks defaults, opens a trace, and calls `get_strategy(strategy).run(...)`
 3. The strategy retrieves in its own way but returns the same `StrategyResult` (answer, sources, latency, tokens, trace)
 4. All three generate through `AsyncAnthropic` ([`anthropic_provider.py`](backend/app/rag/providers/anthropic_provider.py)); the agentic strategy uses `tool_use_loop`
-5. The trace is retrievable from `/traces/{id}` (in memory, so it does not survive a restart)
+5. The trace is retrievable from `/traces/{id}` (in memory, so it does not survive a restart), and is exported to Langfuse when `TELEMETRY_MODE` allows it ([docs/monitoring.md](docs/monitoring.md))
 
 Retrieval is **dense-only**: the query is embedded and matched against Qdrant. The lexical BM25 signal enters one step later, in [`rerank.py`](backend/app/rag/rerank.py), as the reranker's fallback when the cross-encoder is unavailable. This is a dense-retrieve-then-rerank pipeline, not hybrid retrieval in the fuse-two-retrievers sense.
 
@@ -186,6 +186,8 @@ pip install huggingface_hub
 python scripts/download_models.py --cache-dir .hf_cache
 ```
 
+Add `--profile tracing` for a self-hosted Langfuse, or `--profile monitoring` for Prometheus and Grafana (see [docs/monitoring.md](docs/monitoring.md)). The first build downloads a couple of GB; later starts take seconds.
+
 Then you may set `HF_HUB_OFFLINE=1` and `TRANSFORMERS_OFFLINE=1` in `.env`. Do not set them on an empty cache: the embedder cannot load, and the reranker silently degrades to BM25.
 
 ### 3. Start
@@ -206,6 +208,8 @@ Every port is published on **127.0.0.1 only**, so nothing is reachable from othe
 | Backend | <http://localhost:8011/docs> | OpenAPI / Swagger UI |
 | Health | <http://localhost:8011/health> | Which providers are configured |
 | Langfuse | <http://localhost:3100> | Only with `--profile tracing` |
+| Prometheus | <http://localhost:9090> | Only with `--profile monitoring` |
+| Grafana | <http://localhost:3300> | Only with `--profile monitoring` |
 
 ### 5. Ingest and evaluate
 
@@ -297,6 +301,8 @@ Auth requires Postgres. It is the only thing that does, so with `REQUIRE_API_KEY
 | `REQUIRE_API_KEY` | `false` | Enforce API keys |
 | `PII_MODE_INGEST` | `mask` | `off`, `mask` or `reject` personal data found in uploads |
 | `RETENTION_TRACES_DAYS` | `7` | Days before request traces are purged (`0` = never) |
+| `TELEMETRY_MODE` | `off` | Where traces may go: `off`, `self_hosted`, `cloud` ([details](docs/monitoring.md)) |
+| `METRICS_ENABLED` | `false` | Serve Prometheus metrics on `/metrics` |
 
 ### Privacy (GDPR)
 

@@ -138,21 +138,15 @@ async def compare_strategies(
     total_in = total_out = 0
 
     for name in req.strategies:
+        # run_strategy_raw opens (and finishes) the trace for this row.
         try:
-            result, err = await run_strategy_raw(
-                req.question, strategy=name, model=req.model
-            )
+            result, err = await run_strategy_raw(req.question, strategy=name, model=req.model)
         except Exception as e:
             logger.exception(
                 f"Strategy {name} raised: {type(e).__name__}: {e}",
                 extra_fields={"error_type": type(e).__name__, "strategy": name},
             )
-            results.append(
-                _failed_comparison(
-                    name, req.question, "This strategy failed. Check the backend logs."
-                )
-            )
-            continue
+            result, err = None, "This strategy failed. Check the backend logs."
 
         if err or result is None:
             results.append(

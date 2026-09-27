@@ -107,7 +107,7 @@ jobs:
         run: |
           cp .env.example .env
           docker compose --env-file .env -f infra/docker-compose.yml config > /dev/null
-          docker compose --env-file .env -f infra/docker-compose.yml --profile tracing config > /dev/null
+          docker compose --env-file .env -f infra/docker-compose.yml --profile tracing --profile monitoring config > /dev/null
 
   docker:
     name: Docker images (build only)

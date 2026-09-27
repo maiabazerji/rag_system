@@ -11,6 +11,38 @@ name: evalrag
 # with development credentials, and nothing here should be reachable from the
 # network. Put a reverse proxy in front if you need that.
 
+# Settings shared by Langfuse's web and worker containers (tracing profile).
+x-langfuse-env: &langfuse-env
+  DATABASE_URL: postgresql://evalrag:${POSTGRES_PASSWORD}@postgres:5432/langfuse
+  NEXTAUTH_URL: http://localhost:3100
+  SALT: ${LANGFUSE_SALT:-}
+  # 64 hex chars; generate with `openssl rand -hex 32`.
+  ENCRYPTION_KEY: ${LANGFUSE_ENCRYPTION_KEY:-}
+  # Langfuse's own product telemetry to langfuse.com: off, nothing leaves the stack.
+  TELEMETRY_ENABLED: "false"
+  CLICKHOUSE_MIGRATION_URL: clickhouse://clickhouse:9000
+  CLICKHOUSE_URL: http://clickhouse:8123
+  CLICKHOUSE_USER: clickhouse
+  CLICKHOUSE_PASSWORD: ${CLICKHOUSE_PASSWORD:-}
+  CLICKHOUSE_CLUSTER_ENABLED: "false"
+  REDIS_HOST: langfuse-redis
+  REDIS_PORT: "6379"
+  REDIS_AUTH: ${LANGFUSE_REDIS_PASSWORD:-}
+  LANGFUSE_S3_EVENT_UPLOAD_BUCKET: langfuse
+  LANGFUSE_S3_EVENT_UPLOAD_REGION: auto
+  LANGFUSE_S3_EVENT_UPLOAD_ACCESS_KEY_ID: ${MINIO_ROOT_USER:-minio}
+  LANGFUSE_S3_EVENT_UPLOAD_SECRET_ACCESS_KEY: ${MINIO_ROOT_PASSWORD:-}
+  LANGFUSE_S3_EVENT_UPLOAD_ENDPOINT: http://langfuse-minio:9000
+  LANGFUSE_S3_EVENT_UPLOAD_FORCE_PATH_STYLE: "true"
+  LANGFUSE_S3_EVENT_UPLOAD_PREFIX: events/
+  LANGFUSE_S3_MEDIA_UPLOAD_BUCKET: langfuse
+  LANGFUSE_S3_MEDIA_UPLOAD_REGION: auto
+  LANGFUSE_S3_MEDIA_UPLOAD_ACCESS_KEY_ID: ${MINIO_ROOT_USER:-minio}
+  LANGFUSE_S3_MEDIA_UPLOAD_SECRET_ACCESS_KEY: ${MINIO_ROOT_PASSWORD:-}
+  LANGFUSE_S3_MEDIA_UPLOAD_ENDPOINT: http://langfuse-minio:9000
+  LANGFUSE_S3_MEDIA_UPLOAD_FORCE_PATH_STYLE: "true"
+  LANGFUSE_S3_MEDIA_UPLOAD_PREFIX: media/
+
 services:
   qdrant:
     # Pinned deliberately: a Qdrant storage volume cannot be read by an older
@@ -46,24 +78,114 @@ services:
       timeout: 5s
       retries: 5
 
+  # --- Tracing profile: self-hosted Langfuse v4 ------------------------------
+  # `--profile tracing` runs Langfuse entirely inside this stack, so traces
+  # never leave the machine. Langfuse v3+ needs ClickHouse (observations),
+  # Redis/Valkey (queue), S3-compatible storage (raw events; MinIO here) and
+  # Postgres (reuses the service above, in its own `langfuse` database).
+  # Every port is bound to 127.0.0.1. Secrets come from ../.env; see
+  # docs/monitoring.md. The backend reaches it at http://langfuse:3000.
   langfuse:
-    image: langfuse/langfuse:2
+    image: langfuse/langfuse:4.46.0
     profiles: ["tracing"]
-    depends_on:
+    restart: unless-stopped
+    depends_on: &langfuse-depends-on
       postgres:
         condition: service_healthy
+      clickhouse:
+        condition: service_healthy
+      langfuse-redis:
+        condition: service_healthy
+      langfuse-minio:
+        condition: service_healthy
     environment:
-      # Its own database, so Langfuse migrations cannot collide with ours.
-      DATABASE_URL: postgresql://evalrag:${POSTGRES_PASSWORD}@postgres:5432/langfuse
+      <<: *langfuse-env
       # No guessable defaults. These cannot use ${VAR:?}: Compose interpolates
       # every service, including ones whose profile is inactive, so a required
       # variable here would break a plain `up` without tracing. Langfuse itself
-      # refuses to start when they are empty. Generate each with:
-      #   python -c "import secrets; print(secrets.token_urlsafe(32))"
+      # refuses to start when they are empty.
       NEXTAUTH_SECRET: ${LANGFUSE_NEXTAUTH_SECRET:-}
-      NEXTAUTH_URL: http://localhost:3100
-      SALT: ${LANGFUSE_SALT:-}
+      # Media uploads are fetched by the browser, so this is the host address.
+      LANGFUSE_S3_MEDIA_UPLOAD_ENDPOINT: http://localhost:9190
+      LANGFUSE_S3_MEDIA_UPLOAD_INTERNAL_ENDPOINT: http://langfuse-minio:9000
+      # Headless setup: creates the org, project and API keys on first start,
+      # so the backend's LANGFUSE_PUBLIC_KEY / LANGFUSE_SECRET_KEY just work.
+      LANGFUSE_INIT_ORG_ID: ${LANGFUSE_INIT_ORG_ID:-evalrag}
+      LANGFUSE_INIT_ORG_NAME: ${LANGFUSE_INIT_ORG_NAME:-EvalRAG}
+      LANGFUSE_INIT_PROJECT_ID: ${LANGFUSE_INIT_PROJECT_ID:-evalrag}
+      LANGFUSE_INIT_PROJECT_NAME: ${LANGFUSE_INIT_PROJECT_NAME:-EvalRAG}
+      LANGFUSE_INIT_PROJECT_PUBLIC_KEY: ${LANGFUSE_PUBLIC_KEY:-}
+      LANGFUSE_INIT_PROJECT_SECRET_KEY: ${LANGFUSE_SECRET_KEY:-}
+      LANGFUSE_INIT_USER_EMAIL: ${LANGFUSE_INIT_USER_EMAIL:-}
+      LANGFUSE_INIT_USER_NAME: ${LANGFUSE_INIT_USER_NAME:-}
+      LANGFUSE_INIT_USER_PASSWORD: ${LANGFUSE_INIT_USER_PASSWORD:-}
     ports: ["127.0.0.1:3100:3000"]
+
+  langfuse-worker:
+    image: langfuse/langfuse-worker:4.46.0
+    profiles: ["tracing"]
+    restart: unless-stopped
+    depends_on: *langfuse-depends-on
+    environment:
+      <<: *langfuse-env
+
+  clickhouse:
+    image: clickhouse/clickhouse-server:25.12.11.4
+    profiles: ["tracing"]
+    restart: unless-stopped
+    user: "101:101"
+    environment:
+      CLICKHOUSE_DB: default
+      CLICKHOUSE_USER: clickhouse
+      CLICKHOUSE_PASSWORD: ${CLICKHOUSE_PASSWORD:-}
+    volumes:
+      - langfuse_clickhouse_data:/var/lib/clickhouse
+      - langfuse_clickhouse_logs:/var/log/clickhouse-server
+    healthcheck:
+      test: wget --no-verbose --tries=1 --spider http://localhost:8123/ping || exit 1
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 5s
+
+  langfuse-redis:
+    # Valkey: the BSD-licensed Redis fork; Langfuse's queue runs on either.
+    image: valkey/valkey:8.1.10-alpine
+    profiles: ["tracing"]
+    restart: unless-stopped
+    command: >
+      --requirepass ${LANGFUSE_REDIS_PASSWORD:-}
+      --maxmemory-policy noeviction
+    volumes:
+      - langfuse_redis_data:/data
+    healthcheck:
+      test: ["CMD", "valkey-cli", "-a", "${LANGFUSE_REDIS_PASSWORD:-}", "--no-auth-warning", "ping"]
+      interval: 3s
+      timeout: 10s
+      retries: 10
+
+  langfuse-minio:
+    # MinIO no longer publishes images to Docker Hub; this is Chainguard's
+    # build (the one Langfuse's own compose file uses), pinned by digest.
+    image: chainguard/minio:latest@sha256:6a1d0b45c8669726bba580ced0bfa4cb9fdeed1ed636dfabd81d1577beb6937b
+    profiles: ["tracing"]
+    restart: unless-stopped
+    entrypoint: sh
+    # Create the bucket before the server starts.
+    command: -c 'mkdir -p /data/langfuse && minio server --address ":9000" --console-address ":9001" /data'
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:-minio}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-}
+    ports:
+      - "127.0.0.1:9190:9000"
+    volumes:
+      - langfuse_minio_data:/data
+    healthcheck:
+      test: ["CMD", "mc", "ready", "local"]
+      interval: 2s
+      timeout: 5s
+      retries: 10
+      start_period: 2s
 
   backend:
     build:
@@ -82,6 +204,8 @@ services:
       QDRANT_URL: http://qdrant:6333
       QDRANT_API_KEY: ${QDRANT_API_KEY:-}
       POSTGRES_URL: postgresql+psycopg://evalrag:${POSTGRES_PASSWORD}@postgres:5432/evalrag
+      # The in-stack Langfuse from the `tracing` profile. "langfuse" is in the
+      # default TELEMETRY_ALLOWED_HOSTS; export still needs TELEMETRY_MODE=self_hosted.
       LANGFUSE_HOST: http://langfuse:3000
       # Inside the container, "localhost" is the container; host-gateway reaches the laptop.
       OLLAMA_HOST: http://host.docker.internal:11434
@@ -143,6 +267,60 @@ services:
     depends_on:
       - backend
 
+  # --- Monitoring profile: Prometheus + Grafana -------------------------------
+  # `--profile monitoring` scrapes the backend's /metrics. Needs
+  # METRICS_ENABLED=true and ADMIN_KEY in ../.env: Prometheus is not on the
+  # backend's loopback, so it authenticates with the admin key (mounted as a
+  # file, never baked into the image or the config).
+  prometheus:
+    image: prom/prometheus:v3.15.0
+    profiles: ["monitoring"]
+    restart: unless-stopped
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --storage.tsdb.path=/prometheus
+      - --storage.tsdb.retention.time=15d
+    configs:
+      - source: prometheus_admin_key
+        target: /etc/prometheus/admin_key
+    volumes:
+      - ./monitoring/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus_data:/prometheus
+    ports: ["127.0.0.1:9090:9090"]
+
+  grafana:
+    image: grafana/grafana:13.2.2
+    profiles: ["monitoring"]
+    restart: unless-stopped
+    depends_on:
+      - prometheus
+    environment:
+      GF_SECURITY_ADMIN_USER: admin
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:-}
+      # No usage reporting, update checks or news feed: nothing phones home.
+      GF_ANALYTICS_REPORTING_ENABLED: "false"
+      GF_ANALYTICS_CHECK_FOR_UPDATES: "false"
+      GF_ANALYTICS_CHECK_FOR_PLUGIN_UPDATES: "false"
+      GF_ANALYTICS_FEEDBACK_LINKS_ENABLED: "false"
+      GF_NEWS_NEWS_FEED_ENABLED: "false"
+      GF_USERS_ALLOW_SIGN_UP: "false"
+    volumes:
+      - ./monitoring/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./monitoring/grafana/dashboards:/var/lib/grafana/dashboards:ro
+      - grafana_data:/var/lib/grafana
+    ports: ["127.0.0.1:3300:3000"]
+
+configs:
+  # The backend's admin key, for Prometheus to send as X-Admin-Key.
+  prometheus_admin_key:
+    content: ${ADMIN_KEY:-}
+
 volumes:
   qdrant_data:
   pg_data:
+  langfuse_clickhouse_data:
+  langfuse_clickhouse_logs:
+  langfuse_redis_data:
+  langfuse_minio_data:
+  prometheus_data:
+  grafana_data:

@@ -46,6 +46,9 @@ _REPO_ROOT = Path(__file__).resolve().parents[2]
 # What ingestion does with personal data it detects (see app.privacy.pii)
 VALID_PII_MODES = {"off", "mask", "reject"}
 
+# Telemetry modes: where traces may be sent. See docs/monitoring.md.
+VALID_TELEMETRY_MODES = {"off", "self_hosted", "cloud"}
+
 
 def _validate_url(value: str, name: str, *, schemes: tuple[str, ...] | None = None) -> str:
     """Validate that a string is a usable URL.
@@ -141,6 +144,47 @@ class Settings(BaseSettings):
     wandb_project: str = Field(default="evalrag", description="W&B project name.")
     wandb_mode: str = Field(
         default="online", description="W&B mode: online, offline, or disabled."
+    )
+    wandb_enabled: bool = Field(
+        default=False,
+        description="Opt in to W&B eval dashboards. Also gated by TELEMETRY_MODE.",
+    )
+    wandb_base_url: str = Field(
+        default="",
+        description="Self-hosted W&B server URL. Empty means the W&B cloud.",
+    )
+
+    # Telemetry policy (see app/tracing/policy.py and docs/monitoring.md)
+    telemetry_mode: str = Field(
+        default="off",
+        description="Where traces may go: off, self_hosted, or cloud.",
+    )
+    telemetry_allowed_hosts: str = Field(
+        default="localhost,langfuse,127.0.0.1",
+        description="Comma-separated exporter hosts permitted in self_hosted mode.",
+    )
+    telemetry_cloud_opt_in: bool = Field(
+        default=False,
+        description="Explicit acknowledgement required before cloud mode exports anything.",
+    )
+    telemetry_include_content: bool = Field(
+        default=True,
+        description=(
+            "Export question, answer and context text (after redaction). When false, "
+            "only timings, token counts and model names leave the process."
+        ),
+    )
+    telemetry_queue_size: int = Field(
+        default=1000,
+        ge=10,
+        le=100_000,
+        description="Traces buffered for export before new ones are dropped.",
+    )
+
+    # Prometheus metrics
+    metrics_enabled: bool = Field(
+        default=False,
+        description="Serve GET /metrics (to localhost, or with the admin key).",
     )
 
     # Embeddings
@@ -378,6 +422,13 @@ class Settings(BaseSettings):
         )
 
     @property
+    def telemetry_allowed_host_list(self) -> list[str]:
+        """Allowed exporter hosts, lower-cased, ignoring blanks."""
+        return [
+            h.strip().lower() for h in self.telemetry_allowed_hosts.split(",") if h.strip()
+        ]
+
+    @property
     def max_upload_bytes(self) -> int:
         """Upload ceiling in bytes."""
         return self.max_upload_mb * 1024 * 1024
@@ -451,6 +502,21 @@ class Settings(BaseSettings):
                 f"PII_MODE_INGEST must be one of {sorted(VALID_PII_MODES)}, got '{v}'"
             )
         return v.lower()
+
+    @field_validator("telemetry_mode")
+    @classmethod
+    def _v_telemetry_mode(cls, v: str) -> str:
+        mode = v.strip().lower().replace("-", "_")
+        if mode not in VALID_TELEMETRY_MODES:
+            raise ValueError(
+                f"TELEMETRY_MODE must be one of {sorted(VALID_TELEMETRY_MODES)}, got '{v}'"
+            )
+        return mode
+
+    @field_validator("wandb_base_url")
+    @classmethod
+    def _v_wandb_base_url(cls, v: str) -> str:
+        return _validate_url(v, "WANDB_BASE_URL", schemes=("http", "https")) if v else v
 
     @field_validator("chunk_overlap_tokens")
     @classmethod

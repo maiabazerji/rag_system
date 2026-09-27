@@ -15,12 +15,14 @@ from app.logging_config import get_structured_logger
 from app.rag.embed import embed_query_async
 from app.rag.store import StoreUnavailable, search
 from app.schemas import Chunk
+from app.tracing import instrument
 
 logger = get_structured_logger(__name__)
 
 _RESERVED = {"chunk_id", "doc_id", "text"}
 
 
+@instrument.retrieval
 async def dense_search(query: str, top_k: int = 50) -> list[Chunk]:
     """Retrieve relevant chunks from the vector store using dense vector search.
 

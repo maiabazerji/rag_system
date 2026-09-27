@@ -8,6 +8,7 @@ from __future__ import annotations
 import asyncio
 import random
 import time
+import weakref
 from collections.abc import Awaitable, Callable
 from functools import wraps
 from typing import Any, TypeVar
@@ -17,6 +18,17 @@ from app.logging_config import get_structured_logger
 logger = get_structured_logger(__name__)
 
 T = TypeVar("T")
+
+# The live breaker per service, so /metrics can report their state without
+# each owner having to export it. Weak references, and the newest breaker for
+# a service replaces the previous one (tests rebuild them).
+_BREAKERS: dict[str, weakref.ReferenceType[CircuitBreaker]] = {}
+
+
+def registered_breakers() -> list[CircuitBreaker]:
+    """All live circuit breakers, sorted by service name."""
+    live = (ref() for _, ref in sorted(_BREAKERS.items()))
+    return [b for b in live if b is not None]
 
 
 async def async_timeout_wrapper(
@@ -81,6 +93,7 @@ class CircuitBreaker:
         # while half-open; a probe that never reports back (e.g. a cancelled
         # task) is presumed lost after `recovery_timeout`.
         self._probe_started: float | None = None
+        _BREAKERS[service_name] = weakref.ref(self)
 
     def record_success(self) -> None:
         """Record a successful call; reset failure count."""

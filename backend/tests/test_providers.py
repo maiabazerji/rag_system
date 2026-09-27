@@ -5,6 +5,7 @@ Two regressions are pinned here: retries used to match only `httpx` exceptions
 for every call.
 """
 import asyncio
+import inspect
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import anthropic
@@ -166,7 +167,7 @@ class TestCircuitBreaker:
         mock_client.messages.create = AsyncMock(side_effect=ConnectionError("down"))
 
         with pytest.raises(ConnectionError):
-            await ap._create_message.__wrapped__(model="claude-sonnet-5", max_tokens=10, messages=[])
+            await inspect.unwrap(ap._create_message)(model="claude-sonnet-5", max_tokens=10, messages=[])
         assert ap._anthropic_breaker.failure_count == 1
 
     @pytest.mark.parametrize("status", [400, 404, 429])
@@ -180,7 +181,7 @@ class TestCircuitBreaker:
         ap._anthropic_breaker.failure_count = 2
 
         with pytest.raises(type(err)):
-            await ap._create_message.__wrapped__(model="claude-sonnet-5", max_tokens=10, messages=[])
+            await inspect.unwrap(ap._create_message)(model="claude-sonnet-5", max_tokens=10, messages=[])
         # 4xx proves the service answered (reset); 429 proves nothing (unchanged).
         assert ap._anthropic_breaker.failure_count == (2 if status == 429 else 0)
         assert ap._anthropic_breaker.state == "closed"
@@ -190,7 +191,7 @@ class TestCircuitBreaker:
         mock_client.messages.create = AsyncMock(side_effect=_status_error(503))
 
         with pytest.raises(anthropic.InternalServerError):
-            await ap._create_message.__wrapped__(model="claude-sonnet-5", max_tokens=10, messages=[])
+            await inspect.unwrap(ap._create_message)(model="claude-sonnet-5", max_tokens=10, messages=[])
         assert ap._anthropic_breaker.failure_count == 1
 
     async def test_half_open_admits_a_single_probe(self):

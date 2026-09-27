@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import time
 
+from app import monitoring
 from app.config import settings
 from app.logging_config import get_structured_logger
 from app.prompts.loader import UnknownPromptVersionError
@@ -227,6 +228,7 @@ async def answer_question_detailed(
                     "model": model,
                 },
             )
+            monitoring.observe_refusal(strategy, "no_documents")
             return _refusal(
                 question,
                 "No documents uploaded yet. Go to Ingest to upload files, then I can answer your questions.",
@@ -257,8 +259,11 @@ async def answer_question_detailed(
                 f"Unknown strategy: {strategy}",
                 extra_fields={"error_type": "invalid_strategy"},
             )
-            return _refusal(
-                question, str(e), provider=effective_provider, model=model, trace_id=trace.id
+            return trace.finish(
+                _refusal(
+                    question, str(e), provider=effective_provider, model=model, trace_id=trace.id
+                ),
+                reason="invalid_strategy",
             ), None
         # Only classic honours a non-Anthropic provider; see Strategy.provider.
         strat.provider = effective_provider
@@ -291,16 +296,22 @@ async def answer_question_detailed(
                     "provider": effective_provider,
                 },
             )
-            return _refusal(
-                question,
-                public_provider_error(e),
-                provider=effective_provider,
-                model=model,
-                trace_id=trace.id,
+            return trace.finish(
+                _refusal(
+                    question,
+                    public_provider_error(e),
+                    provider=effective_provider,
+                    model=model,
+                    trace_id=trace.id,
+                ),
+                reason="provider_error",
             ), None
         except UnknownPromptVersionError as e:
-            return _refusal(
-                question, str(e), provider=effective_provider, model=model, trace_id=trace.id
+            return trace.finish(
+                _refusal(
+                    question, str(e), provider=effective_provider, model=model, trace_id=trace.id
+                ),
+                reason="invalid_prompt_version",
             ), None
         except Exception as e:
             logger.exception(
@@ -312,13 +323,16 @@ async def answer_question_detailed(
                     "model": model,
                 },
             )
-            return _refusal(
-                question,
-                "Something went wrong answering this question. "
-                "The details are in the backend logs.",
-                provider=effective_provider,
-                model=model,
-                trace_id=trace.id,
+            return trace.finish(
+                _refusal(
+                    question,
+                    "Something went wrong answering this question. "
+                    "The details are in the backend logs.",
+                    provider=effective_provider,
+                    model=model,
+                    trace_id=trace.id,
+                ),
+                reason="error",
             ), None
         latency_ms = int((time.perf_counter() - t0) * 1000)
         result.latency_ms = latency_ms
@@ -353,7 +367,7 @@ async def answer_question_detailed(
             },
         )
 
-        return Answer(
+        answer = Answer(
             question=question,
             answer=clean_response(result.answer),
             sources=result.sources,
@@ -365,7 +379,8 @@ async def answer_question_detailed(
             input_tokens=result.input_tokens,
             output_tokens=result.output_tokens,
             trace_id=trace.id,
-        ), result
+        )
+        return trace.finish(answer), result
 
 
 async def run_strategy_raw(
@@ -471,8 +486,10 @@ async def run_strategy_raw(
                 },
             )
             trace.log("error", {"error_type": type(e).__name__})
+            trace.fail(public_provider_error(e), reason="provider_error")
             return None, public_provider_error(e)
         except UnknownPromptVersionError as e:
+            trace.fail(str(e), reason="invalid_prompt_version")
             return None, str(e)
         except Exception as e:
             logger.exception(
@@ -484,6 +501,7 @@ async def run_strategy_raw(
                 },
             )
             trace.log("error", {"error_type": type(e).__name__})
+            trace.fail(type(e).__name__)
             return None, f"This strategy failed ({type(e).__name__}). See the backend logs."
 
         result.latency_ms = int((time.perf_counter() - t0) * 1000)
@@ -499,6 +517,7 @@ async def run_strategy_raw(
                 "iterations": result.iterations,
             },
         )
+        trace.finish(result)
 
     logger.info(
         "Strategy comparison completed",
