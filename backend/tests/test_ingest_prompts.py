@@ -8,7 +8,9 @@ from unittest.mock import AsyncMock, patch
 import pytest
 
 from app.prompts.loader import PromptManager
-from app.rag.ingest import SUPPORTED_SUFFIXES, _doc_id, chunk_text, enqueue_document, load_document
+from app.rag.chunking import chunk_text
+from app.rag.ingest import _doc_id, enqueue_document
+from app.rag.parsers import SUPPORTED_EXTENSIONS, extract
 from app.rag.response_clean import clean_response, extract_citations
 from app.rag.store import StaleRevisions
 
@@ -70,6 +72,10 @@ class TestDocId:
         assert _doc_id("the reranker is fast") != _doc_id("the reranker is slow")
 
 
+def load_document(filename: str, content: bytes) -> str:
+    return extract(filename, content).text
+
+
 class TestLoadDocument:
     def test_reads_utf8_text(self):
         assert load_document("a.md", b"# Title\nBody") == "# Title\nBody"
@@ -92,7 +98,7 @@ class TestLoadDocument:
             load_document("a.pdf", b"not actually a pdf")
 
     def test_supported_suffixes_include_the_documented_types(self):
-        assert {".pdf", ".txt", ".md"} <= SUPPORTED_SUFFIXES
+        assert {".pdf", ".txt", ".md"} <= SUPPORTED_EXTENSIONS
 
 
 @pytest.mark.asyncio
@@ -132,7 +138,7 @@ class TestEnqueueDocument:
         ):
             result = await enqueue_document("a.txt", b"hello world")
 
-        mock_delete.assert_awaited_once_with("a.txt", result["doc_id"])
+        mock_delete.assert_awaited_once_with("local:a.txt", result["doc_id"])
         assert result["stale_chunks_removed"] == 3
         # The replacement has to be indexed before the old copy is dropped, so the
         # document is never briefly missing from search.
@@ -199,11 +205,11 @@ class TestPromptRendering:
         assert "a < b" in out
         assert "&" in out and "&amp;" not in out
 
-    def test_unknown_version_falls_back_to_default(self):
-        from app.prompts.loader import render_prompt
+    def test_unknown_version_is_an_error_not_a_silent_fallback(self):
+        from app.prompts.loader import UnknownPromptVersionError, render_prompt
 
-        out = render_prompt("no-such-version", question="q", context="c")
-        assert "q" in out and "c" in out
+        with pytest.raises(UnknownPromptVersionError):
+            render_prompt("no-such-version", question="q", context="c")
 
     def test_missing_variable_is_an_error_not_a_blank(self, tmp_path):
         from jinja2 import UndefinedError

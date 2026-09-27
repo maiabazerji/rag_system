@@ -24,10 +24,12 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "backend"))
 
 from app.config import settings  # noqa: E402
 from app.eval.metrics import load_dataset  # noqa: E402
-from app.eval.retrieval import aggregate_retrieval, score_retrieval  # noqa: E402
+from app.eval.retrieval import (  # noqa: E402
+    aggregate_retrieval,
+    score_retrieval_documents,
+)
 from app.rag.rerank import rerank_async  # noqa: E402
 from app.rag.retrieve import dense_search  # noqa: E402
-from app.schemas import Source  # noqa: E402
 
 
 async def _measure(example: dict, top_k: int, semaphore: asyncio.Semaphore):
@@ -38,15 +40,13 @@ async def _measure(example: dict, top_k: int, semaphore: asyncio.Semaphore):
         )
         ranked = await rerank_async(example["question"], candidates, top_k=top_k)
 
-    sources = [
-        Source(
-            chunk_id=c.id,
-            quote=c.text[:280],
-            document=c.metadata.get("filename"),
-        )
-        for c in ranked
-    ]
-    return example, score_retrieval(example.get("expected_sources"), sources)
+    # Same basis as the eval harness: every document behind the reranked
+    # context, best-ranked first (see StrategyResult.extra["retrieved_docs"]).
+    docs: dict[str, None] = {}
+    for c in ranked:
+        if c.metadata.get("filename"):
+            docs.setdefault(c.metadata["filename"], None)
+    return example, score_retrieval_documents(example.get("expected_sources"), list(docs))
 
 
 async def main() -> int:

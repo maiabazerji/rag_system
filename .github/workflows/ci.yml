@@ -5,6 +5,10 @@ on:
     branches: [main]
   pull_request:
 
+# Least privilege: no job here writes to the repository or the registry.
+permissions:
+  contents: read
+
 # A newer push to the same branch cancels the older run.
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -40,6 +44,10 @@ jobs:
       - name: Type check
         run: mypy app
 
+      - name: Type check scripts
+        # The scripts import `app`, so run from backend/ with it on the path.
+        run: MYPYPATH=. mypy ../scripts
+
       - name: Import the app without any configuration
         # Configuration is validated in the lifespan, not at import. If that
         # regresses, every one of these tools breaks at once.
@@ -48,8 +56,16 @@ jobs:
       - name: Tests
         run: pytest -q --cov=app --cov-report=term-missing
 
+      - name: Dependency audit
+        # Reports known vulnerabilities in the installed environment. Not a gate
+        # yet: torch and friends ship advisories faster than they can be bumped.
+        continue-on-error: true
+        run: |
+          pip install pip-audit
+          pip-audit --skip-editable
+
   frontend:
-    name: Frontend (types, build)
+    name: Frontend (lint, types, tests, build)
     runs-on: ubuntu-latest
     defaults:
       run:
@@ -67,6 +83,9 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
+      - name: Lint
+        run: npm run lint
+
       - name: Type check (including tests)
         run: npm run typecheck
 
@@ -76,6 +95,9 @@ jobs:
       - name: Build
         run: npm run build
 
+      - name: Dependency audit
+        run: npm audit --audit-level=high
+
   compose:
     name: Compose config
     runs-on: ubuntu-latest
@@ -84,4 +106,20 @@ jobs:
       - name: Validate docker-compose.yml
         run: |
           cp .env.example .env
-          docker compose -f infra/docker-compose.yml config > /dev/null
+          docker compose --env-file .env -f infra/docker-compose.yml config > /dev/null
+          docker compose --env-file .env -f infra/docker-compose.yml --profile tracing --profile monitoring config > /dev/null
+
+  docker:
+    name: Docker images (build only)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build backend (runtime target)
+        run: docker build --target runtime -t evalrag-backend:ci backend
+
+      - name: Build backend (dev target)
+        run: docker build --target dev -t evalrag-backend-dev:ci backend
+
+      - name: Build frontend
+        run: docker build -t evalrag-frontend:ci frontend

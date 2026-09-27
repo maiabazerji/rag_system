@@ -1,13 +1,16 @@
 from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi.concurrency import run_in_threadpool
 
-from app.auth import require_api_key
+from app.access import Principal
+from app.audit import audited, doc_id_of
+from app.auth import charge, record_tokens, require_principal, strategy_units
 from app.eval.human_ratings import load_all as load_ratings
 from app.eval.human_ratings import save as save_rating
-from app.eval.metrics import run_evaluation
+from app.eval.metrics import load_dataset, run_evaluation
 from app.eval.regression import get_run, list_run_summaries, load_regressions
 from app.schemas import EvalRunRequest, HumanRating, HumanRatingRequest
 
-router = APIRouter(dependencies=[Depends(require_api_key)])
+router = APIRouter(dependencies=[Depends(require_principal)])
 
 
 @router.post(
@@ -19,33 +22,58 @@ router = APIRouter(dependencies=[Depends(require_api_key)])
         "separately and excluded from the aggregate."
     ),
 )
-async def run(req: EvalRunRequest) -> dict:
+async def run(req: EvalRunRequest, principal: Principal = Depends(require_principal)) -> dict:
     """Evaluate a golden dataset.
+
+    Charged one rate-limit unit per example (three for agentic), since every
+    example is a full RAG run plus a judge call.
 
     Args:
         req: Dataset name and optional provider/model/prompt overrides.
+        principal: Authenticated caller. Retrieval sees only the documents it
+            may read, so scores reflect what this caller would get.
 
     Returns:
         Run summary with judge scores, deterministic retrieval scores, cost,
         per-example detail, and the count of examples that could not be scored.
+
+    Raises:
+        HTTPException: 429 if the run would exceed the key's rate limit.
     """
-    return await run_evaluation(
-        dataset=req.dataset,
-        strategy=req.strategy,
-        provider=req.provider,
-        model=req.model,
-        prompt_version=req.prompt_version,
+    with audited(principal, "eval", strategy=req.strategy) as event:
+        n_examples = len(await run_in_threadpool(load_dataset, req.dataset))
+        await run_in_threadpool(charge, principal, n_examples * strategy_units(req.strategy))
+
+        result = await run_evaluation(
+            dataset=req.dataset,
+            strategy=req.strategy,
+            provider=req.provider,
+            model=req.model,
+            prompt_version=req.prompt_version,
+            access=principal.scope(),
+        )
+        event.detail = f"dataset={req.dataset} n={n_examples}"
+        for example in result.get("per_example") or []:
+            event.add_doc_ids(doc_id_of(cid) for cid in example.get("retrieved_ids") or [])
+    cost = result.get("cost") or {}
+    await run_in_threadpool(
+        record_tokens,
+        principal,
+        tokens_input=cost.get("total_input_tokens", 0),
+        tokens_output=cost.get("total_output_tokens", 0),
+        model=result.get("model"),
     )
+    return result
 
 
 @router.get("/runs", summary="List evaluation runs")
-async def runs() -> list[dict]:
+def runs() -> list[dict]:
     """List past runs as summaries, newest first, without per-example detail."""
     return list_run_summaries()
 
 
 @router.get("/runs/{run_id}", summary="Get one evaluation run")
-async def run_detail(run_id: str) -> dict:
+def run_detail(run_id: str) -> dict:
     """Return a single run including its per-example scores.
 
     Args:
@@ -61,7 +89,7 @@ async def run_detail(run_id: str) -> dict:
 
 
 @router.get("/regressions", summary="List detected regressions")
-async def regressions(
+def regressions(
     threshold: float = Query(
         default=0.05, ge=0, le=1, description="Minimum drop counted as a regression"
     ),
@@ -75,7 +103,7 @@ async def regressions(
 
 
 @router.post("/human-rate", response_model=HumanRating, summary="Record a human rating")
-async def human_rate(req: HumanRatingRequest) -> HumanRating:
+def human_rate(req: HumanRatingRequest) -> HumanRating:
     """Persist a 1-5 human rating for an answer."""
     return save_rating(req)
 
@@ -83,6 +111,6 @@ async def human_rate(req: HumanRatingRequest) -> HumanRating:
 @router.get(
     "/human-ratings", response_model=list[HumanRating], summary="List human ratings"
 )
-async def human_ratings(provider: str | None = None) -> list[HumanRating]:
+def human_ratings(provider: str | None = None) -> list[HumanRating]:
     """List stored human ratings, optionally filtered by provider."""
     return load_ratings(provider=provider)

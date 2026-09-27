@@ -5,6 +5,7 @@ by patching `app.config.settings`. Every module does `from app.config import
 settings` at import time and holds its own reference, so rebinding the module
 attribute would reach almost nothing.
 """
+import logging
 import os
 from unittest.mock import AsyncMock, MagicMock
 
@@ -29,6 +30,12 @@ TEST_SETTINGS = {
     "chunk_overlap_tokens": 20,
     "rerank_top_k": 8,
     "eval_concurrency": 2,
+    # Telemetry off unless a test turns it on, whatever the developer's .env says.
+    "telemetry_mode": "off",
+    "langfuse_public_key": "",
+    "langfuse_secret_key": "",
+    "wandb_enabled": False,
+    "metrics_enabled": False,
 }
 
 
@@ -44,6 +51,18 @@ def _no_telemetry_uploads():
 
 
 @pytest.fixture(autouse=True)
+def _app_logger_propagates():
+    """Importing app.main runs setup_logging(), which stops the "app" logger
+    propagating to the root logger and so hides its records from caplog. Keep
+    that from leaking between tests regardless of file order."""
+    app_logger = logging.getLogger("app")
+    before = app_logger.propagate
+    app_logger.propagate = True
+    yield
+    app_logger.propagate = before
+
+
+@pytest.fixture(autouse=True)
 def settings(monkeypatch):
     """Point the shared settings object at test values for the duration of a test.
 
@@ -53,6 +72,16 @@ def settings(monkeypatch):
     for key, value in TEST_SETTINGS.items():
         monkeypatch.setattr(app_settings, key, value, raising=True)
     return app_settings
+
+
+@pytest.fixture(autouse=True)
+def _reset_trace_exporter():
+    """Drop any Langfuse exporter a test configured, so none outlives it."""
+    from app.tracing import langfuse_exporter
+
+    langfuse_exporter.shutdown()
+    yield
+    langfuse_exporter.shutdown()
 
 
 @pytest.fixture(autouse=True)
@@ -229,3 +258,34 @@ def mock_cross_encoder():
 
     mock.predict = predict_side_effect
     return mock
+
+
+class _InlineExecutor:
+    """Runs submitted work immediately, so background writes are visible at once."""
+
+    def submit(self, fn, *args, **kwargs):
+        from concurrent.futures import Future
+
+        future: Future = Future()
+        future.set_result(fn(*args, **kwargs))
+        return future
+
+
+@pytest.fixture
+def auth_db(tmp_path, monkeypatch):
+    """A throwaway SQLite auth database, with audit events written inline."""
+    from sqlalchemy import create_engine
+    from sqlalchemy.orm import sessionmaker
+
+    import app.audit as audit
+    from app import auth
+
+    engine = create_engine(f"sqlite:///{tmp_path / 'auth.db'}")
+    auth.Base.metadata.create_all(bind=engine)
+    monkeypatch.setattr(auth, "_engine", engine)
+    monkeypatch.setattr(
+        auth, "_SessionLocal", sessionmaker(autocommit=False, autoflush=False, bind=engine)
+    )
+    monkeypatch.setattr(audit, "_executor", _InlineExecutor())
+    yield engine
+    auth.Base.metadata.drop_all(bind=engine)

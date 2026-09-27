@@ -30,7 +30,7 @@ class TestClassicRAG:
                         "What is the test topic?",
                         top_k=8,
                         model="claude-sonnet-5",
-                        prompt_version="v1",
+                        prompt_version="default",
                     )
 
                     assert result.answer == "Test answer based on the context."
@@ -56,7 +56,7 @@ class TestClassicRAG:
                     "What is the test topic?",
                     top_k=8,
                     model="claude-sonnet-5",
-                    prompt_version="v1",
+                    prompt_version="default",
                 )
 
                 assert result.refusal is True
@@ -81,7 +81,7 @@ class TestClassicRAG:
                             "What is the test topic?",
                             top_k=8,
                             model="claude-sonnet-5",
-                            prompt_version="v1",
+                            prompt_version="default",
                         )
 
     async def test_classic_rag_empty_generation_response(self, fake_chunks):
@@ -104,7 +104,7 @@ class TestClassicRAG:
                         "What is the test topic?",
                         top_k=8,
                         model="claude-sonnet-5",
-                        prompt_version="v1",
+                        prompt_version="default",
                     )
 
                     assert result.answer == "(empty response)"
@@ -125,7 +125,7 @@ class TestGraphRAG:
                 "What is connected to X?",
                 top_k=8,
                 model="claude-sonnet-5",
-                prompt_version="v1",
+                prompt_version="default",
             )
 
             assert result.refusal is True
@@ -165,7 +165,7 @@ class TestGraphRAG:
                                             "How is entity1 connected to entity2?",
                                             top_k=8,
                                             model="claude-sonnet-5",
-                                            prompt_version="v1",
+                                            prompt_version="default",
                                         )
 
                                         assert result.answer == "Graph-based answer."
@@ -198,7 +198,7 @@ class TestGraphRAG:
                                     "How is entity1 connected?",
                                     top_k=8,
                                     model="claude-sonnet-5",
-                                    prompt_version="v1",
+                                    prompt_version="default",
                                 )
 
                                 assert result.refusal is True
@@ -227,7 +227,7 @@ class TestAgenticRAG:
                 "Search for information?",
                 top_k=8,
                 model="claude-sonnet-5",
-                prompt_version="v1",
+                prompt_version="default",
             )
 
             assert result.answer == "Final answer."
@@ -252,7 +252,7 @@ class TestAgenticRAG:
                 "Search for information?",
                 top_k=8,
                 model="claude-sonnet-5",
-                prompt_version="v1",
+                prompt_version="default",
             )
 
             assert "Long response without finishing" in result.answer
@@ -277,7 +277,7 @@ class TestAgenticRAG:
                         "What?",
                         top_k=8,
                         model="claude-sonnet-5",
-                        prompt_version="v1",
+                        prompt_version="default",
                     )
 
                     # Verify tool_use_loop was called with tool handlers
@@ -305,7 +305,7 @@ class TestAgenticRAG:
                 "What?",
                 top_k=8,
                 model="claude-sonnet-5",
-                prompt_version="v1",
+                prompt_version="default",
             )
 
             assert result.refusal is True

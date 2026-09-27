@@ -8,26 +8,44 @@ import EvalPage from "./pages/Eval";
 import Regressions from "./pages/Regressions";
 import Ingest from "./pages/Ingest";
 import Data from "./pages/Data";
+import Advisor from "./pages/Advisor";
 import ApiKeyGate from "./components/ApiKeyGate";
+import LanguageSwitch from "./components/LanguageSwitch";
+import { I18nProvider, useT, type MessageKey } from "./i18n";
+import { ApiError, RequestTimeoutError } from "./api/client";
 import {
   BeakerIcon,
   ChatIcon,
   CompareIcon,
   DatabaseIcon,
+  SparkleIcon,
   TrendIcon,
   UploadIcon,
 } from "./components/Icons";
 import "./index.css";
 
-const qc = new QueryClient();
+const qc = new QueryClient({
+  defaultOptions: {
+    queries: {
+      // A 4xx (bad key, forbidden, not found) or a timeout will not fix itself
+      // on retry; a 5xx or a network blip might.
+      retry: (failureCount, error) => {
+        if (error instanceof RequestTimeoutError) return false;
+        if (error instanceof ApiError && error.status >= 400 && error.status < 500) return false;
+        return failureCount < 2;
+      },
+    },
+  },
+});
 
-const NAV = [
-  { to: "/", label: "Ask", Icon: ChatIcon, end: true },
-  { to: "/ingest", label: "Ingest", Icon: UploadIcon },
-  { to: "/compare", label: "Compare", Icon: CompareIcon },
-  { to: "/data", label: "Data", Icon: DatabaseIcon },
-  { to: "/eval", label: "Evaluation", Icon: BeakerIcon },
-  { to: "/regressions", label: "Regressions", Icon: TrendIcon },
+const NAV: { to: string; label: MessageKey; Icon: typeof ChatIcon; end?: boolean }[] = [
+  { to: "/", label: "nav.ask", Icon: ChatIcon, end: true },
+  { to: "/ingest", label: "nav.ingest", Icon: UploadIcon },
+  { to: "/compare", label: "nav.compare", Icon: CompareIcon },
+  { to: "/data", label: "nav.data", Icon: DatabaseIcon },
+  { to: "/eval", label: "nav.eval", Icon: BeakerIcon },
+  { to: "/regressions", label: "nav.regressions", Icon: TrendIcon },
+  { to: "/advisor", label: "nav.advisor", Icon: SparkleIcon },
 ];
 
 function Wordmark() {
@@ -41,18 +59,19 @@ function Wordmark() {
 }
 
 function Sidebar() {
+  const t = useT();
   return (
     <aside className="hidden md:flex w-64 shrink-0 flex-col gap-8 border-r border-bg-border bg-bg-surface px-5 py-6">
       <div className="space-y-1.5">
         <Wordmark />
         <div className="text-[11px] text-zinc-500 font-mono">
-          retrieval that grades itself
+          {t("nav.tagline")}
         </div>
       </div>
 
       <nav className="flex flex-col gap-0.5">
         <div className="text-[10px] uppercase tracking-[0.18em] text-zinc-600 px-3 mb-2">
-          Workspace
+          {t("nav.workspace")}
         </div>
         {NAV.map(({ to, label, Icon, end }) => (
           <NavLink
@@ -62,18 +81,18 @@ function Sidebar() {
             className={({ isActive }) => `nav-link ${isActive ? "active" : ""}`}
           >
             <Icon className="w-4 h-4" />
-            {label}
+            {t(label)}
           </NavLink>
         ))}
       </nav>
 
       <div className="mt-auto space-y-3">
         <div className="text-xs text-zinc-500 leading-relaxed border-l-2 border-bg-border pl-3">
-          A RAG system is only as good as the eval that catches it drifting.
-          Ingest, ask, score, ship.
+          {t("nav.blurb")}
         </div>
         <div className="flex items-center justify-between pt-3 border-t border-bg-border text-[11px] text-zinc-500">
           <span className="font-mono">v0.3</span>
+          <LanguageSwitch />
           <a
             href="https://github.com/maiabazerji"
             target="_blank"
@@ -89,6 +108,7 @@ function Sidebar() {
 }
 
 function MobileNav() {
+  const t = useT();
   return (
     <header className="md:hidden flex items-center justify-between px-4 py-3 border-b border-bg-border bg-bg-surface sticky top-0 z-10">
       <Wordmark />
@@ -101,10 +121,11 @@ function MobileNav() {
             className={({ isActive }) => `nav-link whitespace-nowrap !py-1.5 ${isActive ? "active" : ""}`}
           >
             <Icon className="w-4 h-4" />
-            {label}
+            {t(label)}
           </NavLink>
         ))}
       </nav>
+      <LanguageSwitch className="ml-2 shrink-0" />
     </header>
   );
 }
@@ -126,19 +147,22 @@ function Layout({ children }: { children: React.ReactNode }) {
 
 ReactDOM.createRoot(document.getElementById("root")!).render(
   <React.StrictMode>
-    <QueryClientProvider client={qc}>
-      <BrowserRouter>
-        <Layout>
-          <Routes>
-            <Route path="/" element={<Ask />} />
-            <Route path="/ingest" element={<Ingest />} />
-            <Route path="/compare" element={<Compare />} />
-            <Route path="/data" element={<Data />} />
-            <Route path="/eval" element={<EvalPage />} />
-            <Route path="/regressions" element={<Regressions />} />
-          </Routes>
-        </Layout>
-      </BrowserRouter>
-    </QueryClientProvider>
+    <I18nProvider>
+      <QueryClientProvider client={qc}>
+        <BrowserRouter>
+          <Layout>
+            <Routes>
+              <Route path="/" element={<Ask />} />
+              <Route path="/ingest" element={<Ingest />} />
+              <Route path="/compare" element={<Compare />} />
+              <Route path="/data" element={<Data />} />
+              <Route path="/eval" element={<EvalPage />} />
+              <Route path="/regressions" element={<Regressions />} />
+              <Route path="/advisor" element={<Advisor />} />
+            </Routes>
+          </Layout>
+        </BrowserRouter>
+      </QueryClientProvider>
+    </I18nProvider>
   </React.StrictMode>
 );

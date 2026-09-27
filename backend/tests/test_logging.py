@@ -14,7 +14,11 @@ from app.logging_config import StructuredJSONFormatter, get_structured_logger
 
 
 @pytest.fixture
-def capture(caplog):
+def capture(caplog, monkeypatch):
+    # Importing app.main runs setup_logging(), which stops the "app" logger
+    # propagating to the root handler caplog listens on. Any test that built
+    # the app earlier in the session would otherwise leave this one blind.
+    monkeypatch.setattr(logging.getLogger("app"), "propagate", True)
     caplog.set_level(logging.DEBUG, logger="app.test")
     return caplog
 

@@ -1,10 +1,13 @@
 """HTTP routes for the Graph RAG knowledge graph.
 
-POST /graph/build       - start extracting triples from indexed chunks (async job).
+POST /graph/build       - start extracting triples from indexed chunks (async job, admin).
 GET  /graph/build/{id}  - poll the status of a build job.
 GET  /graph/stats       - counts of triples, entities, indexed chunks.
 GET  /graph/entities    - search entities by substring.
-POST /graph/reset       - wipe the graph (does not touch Qdrant).
+
+Stats and entities only count triples from documents the caller may read. The
+build is corpus-wide: it reads every chunk but returns only counts.
+POST /graph/reset       - wipe the graph (does not touch Qdrant; admin).
 """
 from __future__ import annotations
 
@@ -16,15 +19,16 @@ from typing import Any
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query
 
-from app.auth import require_api_key
+from app.access import Principal
+from app.audit import ADMIN_KEY_PRINCIPAL, AuditRecord, emit
+from app.auth import require_admin_key, require_principal
 from app.logging_config import get_structured_logger
 from app.rag import graph_store
-from app.rag.embed import embed_query_async
 from app.rag.graph_extract import extract_triples
-from app.rag.store import search as vector_search
+from app.rag.store import StoreUnavailable, readable_doc_ids, scroll_chunks
 
 logger = get_structured_logger(__name__)
-router = APIRouter(dependencies=[Depends(require_api_key)])
+router = APIRouter(dependencies=[Depends(require_principal)])
 
 # Build jobs are in-process and bounded; the graph itself is the durable artifact.
 _JOBS: OrderedDict[str, dict[str, Any]] = OrderedDict()
@@ -42,38 +46,51 @@ def _record_job(job_id: str, **fields: Any) -> None:
 
 
 @router.get("/stats", summary="Knowledge graph statistics")
-async def stats() -> dict:
-    """Return triple, entity and chunk counts for the current graph."""
-    return graph_store.stats()
+async def stats(principal: Principal = Depends(require_principal)) -> dict:
+    """Return triple, entity and chunk counts for the part of the graph the caller may read."""
+    visible = await readable_doc_ids(principal.scope())
+    return await asyncio.to_thread(graph_store.stats, visible)
 
 
 @router.get("/entities", summary="Search graph entities")
 async def entities(
     q: str | None = Query(default=None, max_length=200, description="Substring filter"),
     limit: int = Query(default=50, ge=1, le=500, description="Max entities to return"),
+    principal: Principal = Depends(require_principal),
 ) -> dict:
     """List graph entities, optionally filtered by substring.
 
     Args:
         q: Case-insensitive substring to match.
         limit: Maximum number of entities to return.
+        principal: The caller; only entities from documents it may read are listed.
 
     Returns:
         The matching entities (truncated to `limit`) and the total match count.
     """
-    ents = graph_store.load().entities
+    visible = await readable_doc_ids(principal.scope())
+    ents = (await asyncio.to_thread(graph_store.load)).entities_in(visible)
     if q:
         needle = q.lower().strip()
         ents = [e for e in ents if needle in e.lower()]
     return {"entities": ents[:limit], "total": len(ents)}
 
 
-@router.post("/reset", summary="Wipe the knowledge graph")
+@router.post(
+    "/reset",
+    summary="Wipe the knowledge graph",
+    dependencies=[Depends(require_admin_key)],
+)
 async def reset() -> dict:
     """Delete every extracted triple. Does not touch the vector store."""
-    graph_store.reset()
+    await asyncio.to_thread(graph_store.reset)
+    emit(
+        AuditRecord(
+            principal_id=ADMIN_KEY_PRINCIPAL, tenant=None, action="admin", detail="graph_reset"
+        )
+    )
     logger.info("Knowledge graph reset")
-    return graph_store.stats()
+    return await asyncio.to_thread(graph_store.stats)
 
 
 async def _run_build(job_id: str, limit: int | None, concurrency: int) -> None:
@@ -93,18 +110,31 @@ async def _run_build(job_id: str, limit: int | None, concurrency: int) -> None:
 
     async with _build_lock:
         try:
-            probe = await embed_query_async(" ")
-            hits = await vector_search(probe, top_k=limit or 2048)
+            # Enumerate by paging through the collection, not by a similarity
+            # search: that capped at top_k and came back empty on an outage,
+            # and either one made pruning below delete real documents' triples.
+            try:
+                records = await scroll_chunks(limit=limit)
+            except StoreUnavailable as e:
+                _record_job(
+                    job_id,
+                    status="failed",
+                    error=f"Could not enumerate the vector store; nothing was pruned. {e}",
+                    finished_at=datetime.now(UTC).isoformat(timespec="seconds"),
+                )
+                return
 
+            payloads = [r.payload or {} for r in records]
             chunks = [
                 {
-                    "chunk_id": h.payload.get("chunk_id"),
-                    "doc_id": h.payload.get("doc_id"),
-                    "text": h.payload.get("text"),
+                    "chunk_id": p.get("chunk_id"),
+                    "doc_id": p.get("doc_id"),
+                    "text": p.get("text"),
                 }
-                for h in hits
+                for p in payloads
             ]
             chunks = [c for c in chunks if c["chunk_id"] and c["doc_id"] and c["text"]]
+            graph = await asyncio.to_thread(graph_store.load)
 
             # A full pass sees every live chunk, so anything the graph still
             # holds for a document the vector store no longer has is a stranded
@@ -112,13 +142,27 @@ async def _run_build(job_id: str, limit: int | None, concurrency: int) -> None:
             # mistake the rest for orphans, so it prunes nothing.
             pruned_triples = 0
             if limit is None:
-                live_docs = {c["doc_id"] for c in chunks}
-                orphaned = {
-                    t.doc_id for t in graph_store.load().triples
-                } - live_docs
-                pruned_triples = graph_store.remove_docs(orphaned)
+                live_docs = {p["doc_id"] for p in payloads if p.get("doc_id")}
+                if not live_docs and graph.triples:
+                    # An empty store beside a populated graph is far likelier a
+                    # misconfigured or wiped collection than a deliberate
+                    # deletion of everything; /graph/reset is the way to do that.
+                    _record_job(
+                        job_id,
+                        status="failed",
+                        error=(
+                            "The vector store returned no chunks but the graph has "
+                            f"{len(graph.triples)} triples; refusing to prune them. "
+                            "Use POST /graph/reset to clear the graph deliberately."
+                        ),
+                        finished_at=datetime.now(UTC).isoformat(timespec="seconds"),
+                    )
+                    return
+                orphaned = {t.doc_id for t in graph.triples} - live_docs
+                pruned_triples = await asyncio.to_thread(graph_store.remove_docs, orphaned)
+                graph = await asyncio.to_thread(graph_store.load)
 
-            already_done = {t.chunk_id for t in graph_store.load().triples}
+            already_done = {t.chunk_id for t in graph.triples}
             pending = [c for c in chunks if c["chunk_id"] not in already_done]
 
             _record_job(
@@ -141,7 +185,7 @@ async def _run_build(job_id: str, limit: int | None, concurrency: int) -> None:
                         triples = await extract_triples(
                             chunk_id=c["chunk_id"], doc_id=c["doc_id"], text=c["text"]
                         )
-                        result = graph_store.append(triples)
+                        result = await asyncio.to_thread(graph_store.append, triples)
                         added += result["added"]
                         skipped += result["skipped"]
                     except Exception as e:
@@ -169,7 +213,7 @@ async def _run_build(job_id: str, limit: int | None, concurrency: int) -> None:
                 pruned_triples=pruned_triples,
                 failures=failures,
                 finished_at=datetime.now(UTC).isoformat(timespec="seconds"),
-                **graph_store.stats(),
+                **(await asyncio.to_thread(graph_store.stats)),
             )
             logger.info(
                 "Graph build finished",
@@ -196,6 +240,7 @@ async def _run_build(job_id: str, limit: int | None, concurrency: int) -> None:
 @router.post(
     "/build",
     status_code=202,
+    dependencies=[Depends(require_admin_key)],
     summary="Start a knowledge graph build",
     description=(
         "Starts triple extraction over indexed chunks and returns immediately. "
@@ -219,7 +264,8 @@ async def build(
         The job id and a URL to poll for status.
 
     Raises:
-        HTTPException: 409 if a build is already running.
+        HTTPException: 409 if a build is already running; 403/503 from the
+            admin-key check.
     """
     if _build_lock.locked():
         raise HTTPException(

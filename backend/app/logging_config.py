@@ -6,7 +6,9 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
+from app.config import settings
 from app.middleware.request_id import get_request_id
+from app.privacy.pii import mask, mask_value
 
 
 class StructuredJSONFormatter(logging.Formatter):
@@ -39,6 +41,31 @@ class StructuredJSONFormatter(logging.Formatter):
             log_data["location"] = f"{record.filename}:{record.lineno} in {record.funcName}"
 
         return json.dumps(log_data)
+
+
+class PIIRedactingFilter(logging.Filter):
+    """Mask personal data in log messages and ``extra_fields`` (``PII_REDACT_LOGS``).
+
+    Installed on every handler, so it covers records from any logger that
+    reaches them. The setting is read per record, which keeps it switchable at
+    runtime and in tests. A failure to redact never drops the log line.
+    """
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        if not settings.pii_redact_logs:
+            return True
+        try:
+            message = record.getMessage()
+            masked = mask(message)
+            if masked != message:
+                record.msg = masked
+                record.args = None
+            extra_fields = getattr(record, "extra_fields", None)
+            if isinstance(extra_fields, dict):
+                record.extra_fields = mask_value(extra_fields)
+        except Exception:  # pragma: no cover - defensive: logging must not break
+            pass
+        return True
 
 
 class StructuredLogger(logging.LoggerAdapter):
@@ -76,6 +103,7 @@ def _build_config(file_logging: bool) -> dict:
             "class": "logging.StreamHandler",
             "level": LOG_LEVEL,
             "formatter": "structured",
+            "filters": ["pii"],
             "stream": "ext://sys.stdout",
         },
     }
@@ -86,6 +114,7 @@ def _build_config(file_logging: bool) -> dict:
             "class": "logging.handlers.RotatingFileHandler",
             "level": "DEBUG",
             "formatter": "structured",
+            "filters": ["pii"],
             "filename": str(LOG_DIR / "evalrag.log"),
             "maxBytes": 10485760,  # 10MB
             "backupCount": 5,
@@ -96,6 +125,9 @@ def _build_config(file_logging: bool) -> dict:
     return {
         "version": 1,
         "disable_existing_loggers": False,
+        "filters": {
+            "pii": {"()": "app.logging_config.PIIRedactingFilter"},
+        },
         "formatters": {
             "structured": {"()": "app.logging_config.StructuredJSONFormatter"},
         },

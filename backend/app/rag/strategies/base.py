@@ -13,6 +13,7 @@ from __future__ import annotations
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 
+from app.access import AccessScope
 from app.schemas import Source
 
 
@@ -38,7 +39,11 @@ class StrategyResult:
         trace: List of dicts containing strategy-specific reasoning trace (tool calls,
             graph walks, retrieval steps) for UI inspection. Defaults to empty list.
         extra: Dict for strategy-specific metadata and extra information. Defaults to
-            empty dict.
+            empty dict. Every strategy that retrieves sets the same evaluation keys:
+            ``retrieved_ids`` (ranked chunk ids of the context it used),
+            ``retrieved_docs`` (the filename behind each of those ids) and
+            ``context_text`` (the context exactly as the generator saw it).
+        trace_id: Id of the request trace, retrievable from ``/traces/{id}``.
 
     Example:
         >>> result = StrategyResult(
@@ -60,6 +65,7 @@ class StrategyResult:
     iterations: int = 1
     trace: list[dict] = field(default_factory=list)
     extra: dict = field(default_factory=dict)
+    trace_id: str | None = None
 
 
 class Strategy(ABC):
@@ -88,6 +94,9 @@ class Strategy(ABC):
     """
 
     name: str = "base"
+    # Generation provider. Only the classic strategy honours it; graph and
+    # agentic need Anthropic features and always run there.
+    provider: str = "anthropic"
 
     @abstractmethod
     async def run(
@@ -97,6 +106,7 @@ class Strategy(ABC):
         top_k: int,
         model: str,
         prompt_version: str,
+        access: AccessScope | None = None,
     ) -> StrategyResult:
         """Execute the RAG strategy to answer a question.
 
@@ -108,6 +118,9 @@ class Strategy(ABC):
                 (e.g., "claude-sonnet-5", "gpt-4").
             prompt_version: Version/name of the prompt template to use for system/user
                 messages (e.g., "default", "v2"). Versioning allows A/B testing.
+            access: The caller's read scope. Every retrieval the strategy makes
+                must be restricted to it. ``None`` is unrestricted and is for
+                internal scripts only; API routes always pass a scope.
 
         Returns:
             StrategyResult containing the answer, sources, confidence, and telemetry.

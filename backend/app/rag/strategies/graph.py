@@ -29,17 +29,18 @@ Use cases:
 """
 from __future__ import annotations
 
+from app.access import AccessScope
 from app.config import settings
+from app.i18n import localized
 from app.logging_config import get_structured_logger
 from app.prompts import render_prompt
-from app.rag.embed import embed_query_async
 from app.rag.graph_extract import extract_question_entities
 from app.rag.graph_store import describe_subgraph, neighbors
 from app.rag.graph_store import load as load_graph
 from app.rag.providers.anthropic_provider import generate_with_usage
 from app.rag.rerank import rerank_async
 from app.rag.retrieve import dense_search
-from app.rag.store import search as vector_search
+from app.rag.store import fetch_chunks, readable_doc_ids
 from app.rag.strategies.base import Strategy, StrategyResult
 from app.schemas import Chunk, Source
 
@@ -48,15 +49,17 @@ logger = get_structured_logger(__name__)
 _RESERVED = {"chunk_id", "doc_id", "text"}
 
 
-async def _fetch_chunks_by_id(chunk_ids: set[str]) -> list[Chunk]:
+async def _fetch_chunks_by_id(
+    chunk_ids: set[str], access: AccessScope | None = None
+) -> list[Chunk]:
     """Fetch full Chunk objects from the vector store by their IDs.
 
-    Performs a broad vector search (top-512 results) to retrieve all indexed chunks,
-    then filters to only the requested IDs. This works around the fact that the
-    vector store is searched by vector similarity, not ID lookup.
+    Looks the points up directly by id, so every requested chunk that exists is
+    found, however large the corpus.
 
     Args:
         chunk_ids: Set of chunk IDs to fetch.
+        access: Fetch only chunks this scope may read.
 
     Returns:
         List of Chunk objects found in the store. IDs not found are silently skipped.
@@ -64,13 +67,12 @@ async def _fetch_chunks_by_id(chunk_ids: set[str]) -> list[Chunk]:
             metadata).
 
     Raises:
-        No explicit exceptions; failures in vector_search propagate as RuntimeError.
+        StoreUnavailable: If the vector store cannot be reached.
     """
     if not chunk_ids:
         return []
     fetched: list[Chunk] = []
-    probe = await embed_query_async(" ")
-    hits = await vector_search(probe, top_k=512)
+    hits = await fetch_chunks(chunk_ids, access=access)
     by_id = {h.payload["chunk_id"]: h for h in hits if h.payload.get("chunk_id") in chunk_ids}
     for cid, h in by_id.items():
         doc_id = h.payload.get("doc_id")
@@ -132,6 +134,7 @@ class GraphRAG(Strategy):
         top_k: int,
         model: str,
         prompt_version: str,
+        access: AccessScope | None = None,
     ) -> StrategyResult:
         """Execute graph RAG: extract entities, walk graph, combine with vector search.
 
@@ -140,6 +143,9 @@ class GraphRAG(Strategy):
             top_k: Number of chunks to include in context for generation.
             model: Language model ID for generation.
             prompt_version: Prompt template version.
+            access: The caller's read scope. Vector search, chunk fetches and
+                the graph walk (edges, entities, subgraph text) are all
+                restricted to documents it may read.
 
         Returns:
             StrategyResult with answer, sources, and rich trace including:
@@ -179,10 +185,7 @@ class GraphRAG(Strategy):
                 },
             )
             return StrategyResult(
-                answer=(
-                    "Graph RAG needs setup first. Go to Compare page and click 'Build graph' "
-                    "to extract connections between concepts in your documents."
-                ),
+                answer=localized("graph_not_built", question),
                 sources=[Source(chunk_id="none", quote="")],
                 refusal=True,
                 confidence=0.0,
@@ -197,7 +200,11 @@ class GraphRAG(Strategy):
             },
         )
 
-        entities = await extract_question_entities(question)
+        extracted = await extract_question_entities(question)
+        # Entity extraction is a model call too; its tokens belong in the totals.
+        extract_in = int(getattr(extracted, "input_tokens", 0) or 0)
+        extract_out = int(getattr(extracted, "output_tokens", 0) or 0)
+        entities = list(extracted)
         logger.debug(
             "Question entities extracted",
             extra_fields={
@@ -208,10 +215,14 @@ class GraphRAG(Strategy):
         )
         trace.append({"step": "extract_entities", "entities": entities})
 
+        # The graph is built from the whole corpus; walk only the part the
+        # caller may read, or its triples would leak other documents' facts.
+        visible_docs = await readable_doc_ids(access) if access is not None else None
+
         graph_chunks: set[str] = set()
         related_entities: set[str] = set()
         for e in entities:
-            chunks, neigh = neighbors(e, hops=1)
+            chunks, neigh = neighbors(e, hops=1, doc_ids=visible_docs)
             graph_chunks |= chunks
             related_entities |= neigh
 
@@ -231,7 +242,9 @@ class GraphRAG(Strategy):
             }
         )
 
-        vector_chunks = await dense_search(question, top_k=settings.retrieval_top_k)
+        vector_chunks = await dense_search(
+            question, top_k=settings.retrieval_top_k, access=access
+        )
         vector_ids = {c.id for c in vector_chunks}
         logger.debug(
             "Vector search completed",
@@ -254,7 +267,7 @@ class GraphRAG(Strategy):
             },
         )
 
-        extra = await _fetch_chunks_by_id(graph_only)
+        extra = await _fetch_chunks_by_id(graph_only, access=access)
         all_chunks = vector_chunks + extra
         logger.debug(
             "Combined chunks from graph and vector search",
@@ -287,14 +300,18 @@ class GraphRAG(Strategy):
                 },
             )
             return StrategyResult(
-                answer="Graph RAG found neither matching entities nor similar chunks.",
+                answer=localized("graph_no_match", question),
                 sources=[Source(chunk_id="none", quote="")],
                 refusal=True,
                 confidence=0.0,
+                input_tokens=extract_in,
+                output_tokens=extract_out,
                 trace=trace,
             )
 
-        subgraph_text = describe_subgraph(entities + sorted(related_entities)[:5])
+        subgraph_text = describe_subgraph(
+            entities + sorted(related_entities)[:5], doc_ids=visible_docs
+        )
         ctx_block = "\n\n".join(f"[{c.id}]\n{c.text}" for c in ranked)
         augmented_ctx = (
             f"# Knowledge graph (extracted from your documents)\n{subgraph_text}\n\n"
@@ -346,12 +363,15 @@ class GraphRAG(Strategy):
                 )
                 for c in ranked[:5]
             ],
-            input_tokens=out["input_tokens"],
-            output_tokens=out["output_tokens"],
+            input_tokens=out["input_tokens"] + extract_in,
+            output_tokens=out["output_tokens"] + extract_out,
             trace=trace,
             extra={
                 "entities": entities,
                 "related_entities": sorted(related_entities)[:10],
                 "subgraph": subgraph_text,
+                "retrieved_ids": [c.id for c in ranked],
+                "retrieved_docs": [c.metadata.get("filename") for c in ranked],
+                "context_text": augmented_ctx,
             },
         )

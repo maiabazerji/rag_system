@@ -7,14 +7,20 @@
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
+  ApiError,
+  RequestTimeoutError,
   UnauthorizedError,
   fetchHealth,
   get,
+  getAdminKey,
   getApiKey,
+  onUnauthorized,
   post,
+  setAdminKey,
   setApiKey,
   upload,
 } from "./client";
+import { setCurrentLanguage } from "../i18n/core";
 
 function jsonResponse(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), {
@@ -74,6 +80,28 @@ describe("api client", () => {
     });
   });
 
+  describe("language", () => {
+    afterEach(() => setCurrentLanguage("en"));
+
+    it("sends Accept-Language for the active UI language", async () => {
+      setCurrentLanguage("fr");
+      await post("/ask", { question: "Que mesure BM25 ?" });
+      expect(lastRequestHeaders()["Accept-Language"]).toBe("fr,en;q=0.5");
+      await get("/ingest/stats");
+      expect(lastRequestHeaders()["Accept-Language"]).toBe("fr,en;q=0.5");
+      await upload("/ingest", new File(["body"], "a.txt"));
+      expect(lastRequestHeaders()["Accept-Language"]).toBe("fr,en;q=0.5");
+    });
+
+    it("words its own errors in the active language", async () => {
+      setCurrentLanguage("fr");
+      globalThis.fetch = vi.fn(async () =>
+        jsonResponse({ detail: "slow down" }, 429),
+      ) as unknown as typeof fetch;
+      await expect(post("/ask", {})).rejects.toThrow(/Limite de requêtes atteinte/);
+    });
+  });
+
   describe("authorization header", () => {
     it("post sends the key when one is stored", async () => {
       setApiKey("sk_abc123");
@@ -103,6 +131,108 @@ describe("api client", () => {
       await upload("/ingest", new File(["body"], "a.txt"));
       expect(lastRequestHeaders()["Content-Type"]).toBeUndefined();
     });
+
+    it("sends extra form fields, such as the groups allowed to read a document", async () => {
+      await upload("/ingest", new File(["body"], "a.txt"), undefined, { groups: "legal,finance" });
+      const body = vi.mocked(globalThis.fetch).mock.calls.at(-1)?.[1]?.body as FormData;
+      expect(body.get("groups")).toBe("legal,finance");
+      expect((body.get("file") as File).name).toBe("a.txt");
+    });
+  });
+
+  describe("admin key", () => {
+    it("round-trips and clears", () => {
+      setAdminKey("  admin-secret ");
+      expect(getAdminKey()).toBe("admin-secret");
+      setAdminKey(null);
+      expect(getAdminKey()).toBeNull();
+    });
+
+    it("is sent as X-Admin-Key only when a request asks for it", async () => {
+      setApiKey("sk_abc123");
+      setAdminKey("admin-secret");
+
+      await post("/graph/build", {}, { admin: true });
+      expect(lastRequestHeaders()["X-Admin-Key"]).toBe("admin-secret");
+      expect(lastRequestHeaders().Authorization).toBe("Bearer sk_abc123");
+
+      await post("/ask", { question: "hi" });
+      expect(lastRequestHeaders()["X-Admin-Key"]).toBeUndefined();
+    });
+
+    it("sends no X-Admin-Key when none is stored", async () => {
+      await get("/graph/build/abc", { admin: true });
+      expect(lastRequestHeaders()["X-Admin-Key"]).toBeUndefined();
+    });
+  });
+
+  describe("response bodies", () => {
+    it("resolves a 204 to undefined instead of failing to parse", async () => {
+      globalThis.fetch = vi.fn(
+        async () => new Response(null, { status: 204 }),
+      ) as unknown as typeof fetch;
+
+      await expect(post("/graph/reset", {})).resolves.toBeUndefined();
+    });
+
+    it("resolves an empty 200 body to undefined", async () => {
+      globalThis.fetch = vi.fn(
+        async () => new Response("", { status: 200 }),
+      ) as unknown as typeof fetch;
+
+      await expect(get("/x")).resolves.toBeUndefined();
+    });
+
+    it("returns a non-JSON body as text", async () => {
+      globalThis.fetch = vi.fn(
+        async () =>
+          new Response("plain ok", { status: 200, headers: { "Content-Type": "text/plain" } }),
+      ) as unknown as typeof fetch;
+
+      await expect(get("/x")).resolves.toBe("plain ok");
+    });
+
+    it("still parses JSON sent without a JSON content type", async () => {
+      globalThis.fetch = vi.fn(
+        async () =>
+          new Response('{"a":1}', { status: 200, headers: { "Content-Type": "text/plain" } }),
+      ) as unknown as typeof fetch;
+
+      await expect(get<{ a: number }>("/x")).resolves.toEqual({ a: 1 });
+    });
+  });
+
+  describe("timeouts", () => {
+    /** A fetch that never answers on its own but rejects when aborted, like the real one. */
+    function hangingFetch() {
+      return vi.fn(
+        (_url: string, init?: RequestInit) =>
+          new Promise<Response>((_resolve, reject) => {
+            init?.signal?.addEventListener("abort", () =>
+              reject(new DOMException("The operation was aborted.", "AbortError")),
+            );
+          }),
+      ) as unknown as typeof fetch;
+    }
+
+    it("aborts and raises RequestTimeoutError after timeoutMs", async () => {
+      globalThis.fetch = hangingFetch();
+      await expect(get("/slow", { timeoutMs: 20 })).rejects.toBeInstanceOf(RequestTimeoutError);
+    });
+
+    it("passes an abort signal to fetch", async () => {
+      await get("/x");
+      const init = vi.mocked(globalThis.fetch).mock.calls.at(-1)?.[1];
+      expect(init?.signal).toBeInstanceOf(AbortSignal);
+    });
+
+    it("reports an unreachable backend in plain language", async () => {
+      globalThis.fetch = vi.fn(async () => {
+        throw new TypeError("Failed to fetch");
+      }) as unknown as typeof fetch;
+
+      await expect(get("/x")).rejects.toThrow(/Could not reach the backend/);
+    });
   });
 
   describe("error handling", () => {
@@ -112,6 +242,59 @@ describe("api client", () => {
       ) as unknown as typeof fetch;
 
       await expect(post("/ask", {})).rejects.toBeInstanceOf(UnauthorizedError);
+    });
+
+    it("tells onUnauthorized listeners about a 401, until they unsubscribe", async () => {
+      globalThis.fetch = vi.fn(async () =>
+        jsonResponse({ detail: "Invalid API key." }, 401),
+      ) as unknown as typeof fetch;
+      const listener = vi.fn();
+      const unsubscribe = onUnauthorized(listener);
+
+      await expect(get("/x")).rejects.toBeInstanceOf(UnauthorizedError);
+      expect(listener).toHaveBeenCalledTimes(1);
+      expect(listener.mock.calls[0][0].message).toBe("Invalid API key.");
+
+      unsubscribe();
+      await expect(get("/x")).rejects.toBeInstanceOf(UnauthorizedError);
+      expect(listener).toHaveBeenCalledTimes(1);
+    });
+
+    it("does not notify listeners for other errors", async () => {
+      globalThis.fetch = vi.fn(async () =>
+        jsonResponse({ detail: "nope" }, 500),
+      ) as unknown as typeof fetch;
+      const listener = vi.fn();
+      const unsubscribe = onUnauthorized(listener);
+
+      await expect(get("/x")).rejects.toThrow(/nope/);
+      expect(listener).not.toHaveBeenCalled();
+      unsubscribe();
+    });
+
+    it("explains a 403 as needing the admin key, keeping the detail", async () => {
+      globalThis.fetch = vi.fn(async () =>
+        jsonResponse({ detail: "Invalid admin key" }, 403),
+      ) as unknown as typeof fetch;
+
+      const err = await post("/graph/build", {}).catch((e: unknown) => e);
+      expect(err).toBeInstanceOf(ApiError);
+      const apiErr = err as ApiError;
+      expect(apiErr.status).toBe(403);
+      expect(apiErr.detail).toBe("Invalid admin key");
+      expect(apiErr.message).toMatch(/Invalid admin key/);
+      expect(apiErr.message).toMatch(/ADMIN_KEY/);
+    });
+
+    it("explains a 503 as a service outage", async () => {
+      globalThis.fetch = vi.fn(async () =>
+        jsonResponse({ detail: "Vector store is unavailable." }, 503),
+      ) as unknown as typeof fetch;
+
+      const err = await get("/ingest/stats").catch((e: unknown) => e);
+      expect(err).toBeInstanceOf(ApiError);
+      expect((err as ApiError).status).toBe(503);
+      expect((err as ApiError).message).toMatch(/Service unavailable: Vector store is unavailable/);
     });
 
     it("explains a 429 in plain language", async () => {
