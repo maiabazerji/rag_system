@@ -3,6 +3,7 @@ from fastapi import APIRouter, Depends, HTTPException, UploadFile
 from app.auth import require_api_key
 from app.config import settings
 from app.logging_config import get_structured_logger
+from app.privacy.pii import PIIRejected
 from app.rag.ingest import SUPPORTED_SUFFIXES, enqueue_document
 from app.rag.store import count as store_count
 
@@ -31,7 +32,8 @@ async def ingest_document(file: UploadFile) -> dict:
 
     Raises:
         HTTPException: 400 for a missing name, empty file or unsupported type;
-            413 if the file exceeds MAX_UPLOAD_MB; 422 if it holds no text.
+            413 if the file exceeds MAX_UPLOAD_MB; 422 if it holds no text, or
+            holds personal data while PII_MODE_INGEST is 'reject'.
     """
     if not file.filename:
         raise HTTPException(status_code=400, detail="File must have a name.")
@@ -64,6 +66,11 @@ async def ingest_document(file: UploadFile) -> dict:
 
     try:
         result = await enqueue_document(filename=file.filename, content=content)
+    except PIIRejected as e:
+        raise HTTPException(
+            status_code=422,
+            detail={"code": "pii_rejected", "message": str(e), "types": e.types},
+        ) from e
     except ValueError as e:
         raise HTTPException(status_code=422, detail=str(e)) from e
 

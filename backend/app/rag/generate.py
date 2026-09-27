@@ -261,6 +261,8 @@ async def answer_question(
 
         for event in result.trace:
             trace.log(event.get("step", "step"), event)
+        # Which chunks grounded the answer, so an erasure can find this trace.
+        trace.log("sources", {"chunk_ids": [src.chunk_id for src in result.sources]})
         trace.log(
             "result",
             {

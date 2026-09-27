@@ -37,6 +37,9 @@ VALID_STRATEGIES = {"classic", "graph", "agentic"}
 # Wandb modes
 VALID_WANDB_MODES = {"online", "offline", "disabled"}
 
+# What ingestion does with personal data it detects (see app.privacy.pii)
+VALID_PII_MODES = {"off", "mask", "reject"}
+
 
 def _validate_url(value: str, name: str, *, schemes: tuple[str, ...] | None = None) -> str:
     """Validate that a string is a usable URL.
@@ -242,6 +245,32 @@ class Settings(BaseSettings):
         description="Secret for /admin endpoints. They return 503 while unset.",
     )
 
+    # Privacy (GDPR). See docs/gdpr/README.md.
+    pii_mode_ingest: str = Field(
+        default="mask",
+        description=(
+            "What ingestion does with detected personal data: 'off' (index as "
+            "is), 'mask' (replace with [EMAIL], [NIR], ... placeholders) or "
+            "'reject' (refuse the document with a 422)."
+        ),
+    )
+    pii_redact_logs: bool = Field(
+        default=True, description="Mask detected personal data in log lines."
+    )
+    pii_redact_traces: bool = Field(
+        default=True,
+        description="Mask detected personal data in stored and exported traces.",
+    )
+    retention_traces_days: int = Field(
+        default=7, ge=0, description="Days to keep request traces. 0 keeps them forever."
+    )
+    retention_eval_runs_days: int = Field(
+        default=365, ge=0, description="Days to keep eval run files. 0 keeps them forever."
+    )
+    retention_audit_days: int = Field(
+        default=365, ge=0, description="Days to keep audit events. 0 keeps them forever."
+    )
+
     # CORS
     cors_origins: str = Field(
         default="http://localhost:5173",
@@ -311,6 +340,15 @@ class Settings(BaseSettings):
         if v.lower() not in VALID_WANDB_MODES:
             raise ValueError(
                 f"WANDB_MODE must be one of {sorted(VALID_WANDB_MODES)}, got '{v}'"
+            )
+        return v.lower()
+
+    @field_validator("pii_mode_ingest")
+    @classmethod
+    def _v_pii_mode(cls, v: str) -> str:
+        if v.lower() not in VALID_PII_MODES:
+            raise ValueError(
+                f"PII_MODE_INGEST must be one of {sorted(VALID_PII_MODES)}, got '{v}'"
             )
         return v.lower()
 
