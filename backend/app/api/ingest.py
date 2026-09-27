@@ -1,3 +1,5 @@
+from typing import Any
+
 from fastapi import APIRouter, Depends, HTTPException, UploadFile
 
 from app.auth import require_api_key
@@ -18,12 +20,16 @@ router = APIRouter(dependencies=[Depends(require_api_key)])
         f"Accepts {', '.join(sorted(SUPPORTED_SUFFIXES))}."
     ),
 )
-async def ingest_document(file: UploadFile) -> dict:
+async def ingest_document(
+    file: UploadFile, auth: dict[str, Any] = Depends(require_api_key)
+) -> dict:
     """Index an uploaded document.
 
     Args:
         file: The uploaded file. Must have a supported extension and be within
             the MAX_UPLOAD_MB limit.
+        auth: The caller (resolved once per request with the router's own
+            dependency). Scopes which earlier revisions a re-upload replaces.
 
     Returns:
         The document id, filename, number of chunks written, and the new total
@@ -32,6 +38,7 @@ async def ingest_document(file: UploadFile) -> dict:
     Raises:
         HTTPException: 400 for a missing name, empty file or unsupported type;
             413 if the file exceeds MAX_UPLOAD_MB; 422 if it holds no text.
+            503 (via the StoreUnavailable handler) if Qdrant is unreachable.
     """
     if not file.filename:
         raise HTTPException(status_code=400, detail="File must have a name.")
@@ -63,7 +70,8 @@ async def ingest_document(file: UploadFile) -> dict:
         raise HTTPException(status_code=400, detail="File is empty.")
 
     try:
-        result = await enqueue_document(filename=file.filename, content=content)
+        owner = f"key:{auth['id']}" if auth.get("id") is not None else "local"
+        result = await enqueue_document(filename=file.filename, content=content, owner=owner)
     except ValueError as e:
         raise HTTPException(status_code=422, detail=str(e)) from e
 

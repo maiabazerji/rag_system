@@ -32,14 +32,13 @@ from __future__ import annotations
 from app.config import settings
 from app.logging_config import get_structured_logger
 from app.prompts import render_prompt
-from app.rag.embed import embed_query_async
 from app.rag.graph_extract import extract_question_entities
 from app.rag.graph_store import describe_subgraph, neighbors
 from app.rag.graph_store import load as load_graph
 from app.rag.providers.anthropic_provider import generate_with_usage
 from app.rag.rerank import rerank_async
 from app.rag.retrieve import dense_search
-from app.rag.store import search as vector_search
+from app.rag.store import fetch_chunks
 from app.rag.strategies.base import Strategy, StrategyResult
 from app.schemas import Chunk, Source
 
@@ -51,9 +50,8 @@ _RESERVED = {"chunk_id", "doc_id", "text"}
 async def _fetch_chunks_by_id(chunk_ids: set[str]) -> list[Chunk]:
     """Fetch full Chunk objects from the vector store by their IDs.
 
-    Performs a broad vector search (top-512 results) to retrieve all indexed chunks,
-    then filters to only the requested IDs. This works around the fact that the
-    vector store is searched by vector similarity, not ID lookup.
+    Looks the points up directly by id, so every requested chunk that exists is
+    found, however large the corpus.
 
     Args:
         chunk_ids: Set of chunk IDs to fetch.
@@ -64,13 +62,12 @@ async def _fetch_chunks_by_id(chunk_ids: set[str]) -> list[Chunk]:
             metadata).
 
     Raises:
-        No explicit exceptions; failures in vector_search propagate as RuntimeError.
+        StoreUnavailable: If the vector store cannot be reached.
     """
     if not chunk_ids:
         return []
     fetched: list[Chunk] = []
-    probe = await embed_query_async(" ")
-    hits = await vector_search(probe, top_k=512)
+    hits = await fetch_chunks(chunk_ids)
     by_id = {h.payload["chunk_id"]: h for h in hits if h.payload.get("chunk_id") in chunk_ids}
     for cid, h in by_id.items():
         doc_id = h.payload.get("doc_id")

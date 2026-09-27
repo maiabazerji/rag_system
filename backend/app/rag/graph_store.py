@@ -21,7 +21,7 @@ from collections import defaultdict
 from collections.abc import Collection
 from dataclasses import dataclass, field
 from pathlib import Path
-from threading import Lock
+from threading import RLock
 
 from app.config import settings
 
@@ -81,7 +81,9 @@ class GraphIndex:
 
 
 _INDEX: GraphIndex | None = None
-_LOCK = Lock()
+# Reentrant: writers call load() while holding it, so the index they update is
+# the one currently installed, never one a concurrent remove_docs has replaced.
+_LOCK = RLock()
 
 
 def _triples_path() -> Path:
@@ -114,15 +116,18 @@ def append(triples: list[Triple]) -> dict:
     if not triples:
         return {"added": 0, "skipped": 0}
     path = _triples_path()
-    idx = load()
     added, skipped = 0, 0
-    with _LOCK, path.open("a", encoding="utf-8") as f:
-        for t in triples:
-            if idx.add(t):
-                f.write(t.to_json() + "\n")
-                added += 1
-            else:
-                skipped += 1
+    # load() inside the lock: a remove_docs() between fetching the index and
+    # writing would otherwise leave these triples in an index it has replaced.
+    with _LOCK:
+        idx = load()
+        with path.open("a", encoding="utf-8") as f:
+            for t in triples:
+                if idx.add(t):
+                    f.write(t.to_json() + "\n")
+                    added += 1
+                else:
+                    skipped += 1
     return {"added": added, "skipped": skipped}
 
 
@@ -149,8 +154,8 @@ def remove_docs(doc_ids: Collection[str]) -> int:
     if not doc_ids:
         return 0
 
-    idx = load()  # outside the lock: load() takes it, and it is not reentrant
     with _LOCK:
+        idx = load()
         survivors = [t for t in idx.triples if t.doc_id not in doc_ids]
         removed = len(idx.triples) - len(survivors)
         if not removed:

@@ -35,16 +35,33 @@ def _collect(root: Path, include_meta: bool) -> list[Path]:
     return paths
 
 
-async def _ingest_one(path: Path, semaphore: asyncio.Semaphore) -> tuple[Path, str | None]:
+def _relative_name(path: Path, root: Path) -> str:
+    """Name a file by its path under the ingest root (or the repo, for META_FILES).
+
+    The name keys stale-revision cleanup, so two files that share a basename in
+    different folders must not collide, as they would with ``path.name``.
+    """
+    path = path.resolve()
+    for base in (root.resolve(), ROOT):
+        if path.is_relative_to(base):
+            return path.relative_to(base).as_posix()
+    return path.name
+
+
+async def _ingest_one(
+    path: Path, root: Path, semaphore: asyncio.Semaphore
+) -> tuple[Path, str | None]:
     """Ingest one file. Returns (path, error) so one failure cannot stop the run."""
+    name = _relative_name(path, root)
     async with semaphore:
         try:
-            result = await enqueue_document(path.name, path.read_bytes())
-            print(f"  ok    {path.name}  ({result['chunks']} chunks)")
+            content = await asyncio.to_thread(path.read_bytes)
+            result = await enqueue_document(name, content)
+            print(f"  ok    {name}  ({result['chunks']} chunks)")
             return path, None
         except Exception as e:
             message = f"{type(e).__name__}: {e}"
-            print(f"  FAIL  {path.name}  {message}")
+            print(f"  FAIL  {name}  {message}")
             return path, message
 
 
@@ -73,7 +90,7 @@ async def main() -> int:
 
     print(f"Ingesting {len(paths)} file(s) from {args.path} ...\n")
     semaphore = asyncio.Semaphore(args.concurrency)
-    outcomes = await asyncio.gather(*(_ingest_one(p, semaphore) for p in paths))
+    outcomes = await asyncio.gather(*(_ingest_one(p, args.path, semaphore) for p in paths))
 
     failures = [(p, err) for p, err in outcomes if err]
     print(f"\n{len(outcomes) - len(failures)}/{len(outcomes)} files ingested.")

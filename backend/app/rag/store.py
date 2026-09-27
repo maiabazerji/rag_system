@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import logging
+from collections.abc import Iterable
 from dataclasses import dataclass
 
 try:
@@ -9,9 +11,12 @@ try:
 except ImportError:
     from qdrant_client import AsyncQdrantClient
 
+from fastapi import Request
+from fastapi.responses import JSONResponse
 from qdrant_client.http import models as qm
 
 from app.config import settings
+from app.middleware.request_id import get_request_id
 from app.rag.embed import embedding_dim
 from app.resilience import CircuitBreaker, async_timeout_wrapper
 
@@ -25,6 +30,28 @@ _qdrant_breaker = CircuitBreaker(
 )
 
 
+class StoreUnavailable(RuntimeError):
+    """The vector store could not be reached, or its circuit breaker is open.
+
+    Raised instead of returning an empty result, so callers cannot mistake an
+    outage for an empty index (and, say, prune everything they think is gone).
+    """
+
+
+async def store_unavailable_handler(request: Request, exc: Exception) -> JSONResponse:
+    """FastAPI exception handler turning `StoreUnavailable` into a 503."""
+    logger.warning(f"Vector store unavailable on {request.url.path}: {exc}")
+    return JSONResponse(
+        status_code=503,
+        content={
+            "code": "store_unavailable",
+            "message": "Vector store unavailable.",
+            "detail": str(exc),
+            "request_id": get_request_id(),
+        },
+    )
+
+
 async def client() -> AsyncQdrantClient:
     global _client
     if _client is None:
@@ -33,9 +60,18 @@ async def client() -> AsyncQdrantClient:
     return _client
 
 
+async def close() -> None:
+    """Close the shared Qdrant client, if one was opened."""
+    global _client
+    c, _client = _client, None
+    if c is not None:
+        await c.close()
+
+
 async def _ensure_collection(c: AsyncQdrantClient) -> None:
     try:
-        dim = embedding_dim()
+        # Loading the embedding model is slow, blocking work.
+        dim = await asyncio.to_thread(embedding_dim)
         collections = await async_timeout_wrapper(
             c.get_collections(), timeout=5.0, service_name="Qdrant"
         )
@@ -70,6 +106,11 @@ async def _ensure_collection(c: AsyncQdrantClient) -> None:
 
 # A single document's superseded revisions, so one page always covers them.
 _STALE_SCROLL_LIMIT = 1000
+# Points per upsert request, and the timeout each request gets.
+_UPSERT_BATCH = 128
+_UPSERT_TIMEOUT = 10.0
+# Points per page when enumerating the whole collection.
+_SCROLL_PAGE = 256
 
 
 @dataclass(frozen=True)
@@ -89,7 +130,7 @@ async def upsert(chunks, vectors) -> None:
         return
     if not _qdrant_breaker.can_execute():
         logger.error("Qdrant circuit breaker is open; skipping upsert")
-        raise RuntimeError("Qdrant service is unavailable (circuit breaker open)")
+        raise StoreUnavailable("Qdrant service is unavailable (circuit breaker open)")
     try:
         points = [
             qm.PointStruct(
@@ -105,22 +146,26 @@ async def upsert(chunks, vectors) -> None:
             for chunk, vec in zip(chunks, vectors, strict=True)
         ]
         c = await client()
-        await async_timeout_wrapper(
-            c.upsert(collection_name=settings.qdrant_collection, points=points),
-            timeout=5.0,
-            service_name="Qdrant",
-        )
+        # Batched so a large document is not one request racing one timeout.
+        for start in range(0, len(points), _UPSERT_BATCH):
+            await async_timeout_wrapper(
+                c.upsert(
+                    collection_name=settings.qdrant_collection,
+                    points=points[start : start + _UPSERT_BATCH],
+                ),
+                timeout=_UPSERT_TIMEOUT,
+                service_name="Qdrant",
+            )
         _qdrant_breaker.record_success()
     except Exception as e:
         logger.error(f"Qdrant upsert failed: {type(e).__name__}: {e}")
         _qdrant_breaker.record_failure()
-        raise
+        raise StoreUnavailable(f"Qdrant upsert failed: {type(e).__name__}: {e}") from e
 
 
 async def search(vector, top_k: int = 8):
     if not _qdrant_breaker.can_execute():
-        logger.warning("Qdrant circuit breaker is open; returning empty context")
-        return []  # Graceful degradation: empty results instead of crashing
+        raise StoreUnavailable("Qdrant service is unavailable (circuit breaker open)")
     try:
         c = await client()
         result = await async_timeout_wrapper(
@@ -137,14 +182,12 @@ async def search(vector, top_k: int = 8):
     except Exception as e:
         logger.error(f"Qdrant search failed: {type(e).__name__}: {e}")
         _qdrant_breaker.record_failure()
-        logger.warning("Returning empty context due to Qdrant failure")
-        return []  # Graceful degradation
+        raise StoreUnavailable(f"Qdrant search failed: {type(e).__name__}: {e}") from e
 
 
 async def count() -> int:
     if not _qdrant_breaker.can_execute():
-        logger.warning("Qdrant circuit breaker is open; returning 0 documents")
-        return 0  # Graceful degradation
+        raise StoreUnavailable("Qdrant service is unavailable (circuit breaker open)")
     try:
         c = await client()
         result = await async_timeout_wrapper(
@@ -157,11 +200,94 @@ async def count() -> int:
     except Exception as e:
         logger.error(f"Qdrant count failed: {type(e).__name__}: {e}")
         _qdrant_breaker.record_failure()
-        logger.warning("Returning 0 documents due to Qdrant failure")
-        return 0  # Graceful degradation
+        raise StoreUnavailable(f"Qdrant count failed: {type(e).__name__}: {e}") from e
 
 
-async def delete_stale_revisions(filename: str, keep_doc_id: str) -> StaleRevisions:
+async def fetch_chunks(chunk_ids: Iterable[str]) -> list:
+    """Look chunks up by id.
+
+    Args:
+        chunk_ids: Chunk ids, as recorded in the ``chunk_id`` payload field.
+
+    Returns:
+        The stored points (with payload) for the ids that exist; unknown ids
+        are skipped.
+
+    Raises:
+        StoreUnavailable: If Qdrant is unreachable or its breaker is open.
+    """
+    ids = list(dict.fromkeys(chunk_ids))
+    if not ids:
+        return []
+    if not _qdrant_breaker.can_execute():
+        raise StoreUnavailable("Qdrant service is unavailable (circuit breaker open)")
+    try:
+        c = await client()
+        points = await async_timeout_wrapper(
+            c.retrieve(
+                collection_name=settings.qdrant_collection,
+                ids=[_point_id(cid) for cid in ids],
+                with_payload=True,
+                with_vectors=False,
+            ),
+            timeout=5.0,
+            service_name="Qdrant",
+        )
+        _qdrant_breaker.record_success()
+        return list(points)
+    except Exception as e:
+        logger.error(f"Qdrant retrieve failed: {type(e).__name__}: {e}")
+        _qdrant_breaker.record_failure()
+        raise StoreUnavailable(f"Qdrant retrieve failed: {type(e).__name__}: {e}") from e
+
+
+async def scroll_chunks(limit: int | None = None) -> list:
+    """Enumerate stored chunks, paging through the whole collection.
+
+    Unlike a similarity search this sees every point, however many there are,
+    so its result can be trusted as the complete set of live chunks.
+
+    Args:
+        limit: Stop after this many points. ``None`` reads the whole collection.
+
+    Returns:
+        The stored points, with payload.
+
+    Raises:
+        StoreUnavailable: If any page cannot be read. A partial enumeration is
+            never returned, since callers use it to decide what to delete.
+    """
+    if not _qdrant_breaker.can_execute():
+        raise StoreUnavailable("Qdrant service is unavailable (circuit breaker open)")
+    records: list = []
+    offset = None
+    try:
+        c = await client()
+        while limit is None or len(records) < limit:
+            page = _SCROLL_PAGE if limit is None else min(_SCROLL_PAGE, limit - len(records))
+            points, offset = await async_timeout_wrapper(
+                c.scroll(
+                    collection_name=settings.qdrant_collection,
+                    limit=page,
+                    offset=offset,
+                    with_payload=True,
+                    with_vectors=False,
+                ),
+                timeout=10.0,
+                service_name="Qdrant",
+            )
+            records.extend(points)
+            if offset is None:
+                break
+        _qdrant_breaker.record_success()
+        return records
+    except Exception as e:
+        logger.error(f"Qdrant scroll failed: {type(e).__name__}: {e}")
+        _qdrant_breaker.record_failure()
+        raise StoreUnavailable(f"Qdrant scroll failed: {type(e).__name__}: {e}") from e
+
+
+async def delete_stale_revisions(source_key: str, keep_doc_id: str) -> StaleRevisions:
     """Remove chunks left behind by earlier revisions of a document.
 
     Chunk point ids are derived from ``doc_id``, which is content-derived, so
@@ -172,7 +298,11 @@ async def delete_stale_revisions(filename: str, keep_doc_id: str) -> StaleRevisi
     relevant documents of a slot.
 
     Args:
-        filename: The document's filename, as recorded in chunk metadata.
+        source_key: The document's owner-scoped source key, as recorded in
+            chunk metadata. Matching on it rather than the bare filename keeps
+            one user's upload from deleting another user's (or another
+            folder's) document of the same name. Chunks indexed before the
+            key existed carry none, so they are never matched.
         keep_doc_id: The revision being indexed now; its points are preserved.
 
     Returns:
@@ -185,7 +315,7 @@ async def delete_stale_revisions(filename: str, keep_doc_id: str) -> StaleRevisi
         return StaleRevisions()
 
     selector = qm.Filter(
-        must=[qm.FieldCondition(key="filename", match=qm.MatchValue(value=filename))],
+        must=[qm.FieldCondition(key="source_key", match=qm.MatchValue(value=source_key))],
         must_not=[qm.FieldCondition(key="doc_id", match=qm.MatchValue(value=keep_doc_id))],
     )
     try:
