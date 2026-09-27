@@ -6,6 +6,7 @@ from fastapi.responses import JSONResponse
 from pydantic import ValidationError
 
 from app.api import admin, ask, compare, eval_routes, graph, ingest, traces
+from app.api import advisor as advisor_api
 from app.auth import init_db as init_auth_db
 from app.config import settings
 from app.logging_config import get_structured_logger, setup_logging
@@ -69,6 +70,7 @@ app.include_router(compare.router, prefix="/compare", tags=["compare"])
 app.include_router(graph.router, prefix="/graph", tags=["graph"])
 app.include_router(eval_routes.router, prefix="/eval", tags=["eval"])
 app.include_router(traces.router, prefix="/traces", tags=["traces"])
+app.include_router(advisor_api.router, prefix="/advise", tags=["advisor"])
 
 
 @app.exception_handler(Exception)
