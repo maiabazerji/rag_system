@@ -214,7 +214,15 @@ docker compose --env-file .env -f infra/docker-compose.yml exec backend python /
 docker compose --env-file .env -f infra/docker-compose.yml exec backend python /scripts/run_eval.py --dataset golden_v1
 ```
 
-Or drag files onto the Ingest page. Accepted types: `.pdf`, `.txt`, `.md`, `.markdown`, `.rst`, `.csv`, `.json`, up to `MAX_UPLOAD_MB` (25 MB by default).
+Or drag files onto the Ingest page. Accepted types: `.pdf`, `.docx`, `.pptx`, `.odt`, `.ods`, `.eml`, `.html`/`.htm`, `.txt`, `.md`, `.markdown`, `.rst`, `.csv`, `.json`, up to `MAX_UPLOAD_MB` (25 MB by default). `GET /ingest/formats` returns the same list, straight from the parser registry in [`parsers/`](backend/app/rag/parsers/), plus whether OCR is available.
+
+What ingestion does with them:
+
+- **Structure is kept.** Every parser emits markdown-ish text: Word/ODF/HTML headings become `#` headings, tables become pipe tables, lists become `-` items. Page headers and footers in `.docx` are skipped. Title, author, dates, page count and language come from the file's own metadata.
+- **Chunks follow headings.** Documents are cut at headings first, including French legal divisions written as plain lines (`Titre I`, `Chapitre 2`, `Section 3`, `Article L. 121-1`, `Art. 12`), then by size. Tables are never cut mid-row; a long table is split into row groups that each repeat the header. Every chunk's payload carries a `heading_path` such as `Chapitre 2 > Article 5`, and a `doc_metadata` object.
+- **Scanned PDFs are OCR'd** page by page when a page has almost no text layer (`OCR_MIN_CHARS_PER_PAGE`), with tesseract in `OCR_LANGUAGES` (`fra+eng`), up to `OCR_MAX_PAGES`. The Docker image ships tesseract and poppler; a local install without them logs a warning and indexes what text there is.
+- **Emails** index their headers and body (plain text preferred, HTML converted without scripts or styles) and list their attachments; attachments of a supported type are parsed too, two levels deep at most.
+- **Hostile files are refused with a 422**: password-protected PDFs and Office/ODF files, and zip-based documents that would inflate past `MAX_UNCOMPRESSED_MB` (a zip-bomb guard, checked before any parser runs).
 
 ### 6. Logs, stop, wipe
 

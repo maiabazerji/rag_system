@@ -14,8 +14,15 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 
 WORKDIR /app
 
+# tesseract (French and English language data) and poppler's pdftoppm let
+# ingestion OCR scanned PDFs. Without them OCR is skipped with a warning.
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends curl \
+    && apt-get install -y --no-install-recommends \
+        curl \
+        poppler-utils \
+        tesseract-ocr \
+        tesseract-ocr-eng \
+        tesseract-ocr-fra \
     && rm -rf /var/lib/apt/lists/*
 
 # Install CPU-only torch first so sentence-transformers does not pull ~2GB of

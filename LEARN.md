@@ -42,7 +42,8 @@ data/ ─► ingest ─► chunk ─► embed ─► Qdrant (vector DB)
 
 | Piece              | File                                                | What it does |
 |--------------------|-----------------------------------------------------|--------------|
-| **Chunking**       | `backend/app/rag/ingest.py:chunk_text`              | Splits documents into `CHUNK_SIZE_TOKENS`-word windows (default 600) with `CHUNK_OVERLAP_TOKENS` overlap (default 80). Smaller chunks = sharper retrieval; overlap stops sentences being chopped mid-thought. |
+| **Parsing**        | `backend/app/rag/parsers/`                          | One module per format (PDF with optional OCR, docx, pptx, odt/ods, eml, HTML, text, CSV), a registry that picks one by extension, MIME type or file signature, and the one list of supported types. Output is markdown-ish text plus file metadata. |
+| **Chunking**       | `backend/app/rag/chunking.py:chunk_structured`      | Cuts at headings (markdown and French legal divisions) first, then into `CHUNK_SIZE_TOKENS`-word pieces (default 600) with `CHUNK_OVERLAP_TOKENS` overlap (default 80), never inside a table row. Each chunk records its `heading_path`. Smaller chunks = sharper retrieval; overlap stops sentences being chopped mid-thought. |
 | **Embeddings**     | `backend/app/rag/embed.py`                          | Uses `BAAI/bge-small-en-v1.5` (a free local model) to turn text into a 384-dim vector. Nearby vectors = similar meaning. |
 | **Vector store**   | `backend/app/rag/store.py`                          | Qdrant (a vector DB). One vector per chunk + the original text as payload. |
 | **Vector search**  | `backend/app/rag/retrieve.py:dense_search`          | Embed the question → return the top `RETRIEVAL_TOP_K` chunks by cosine similarity. Dense only; the lexical signal enters at the rerank step. |
