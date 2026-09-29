@@ -44,12 +44,14 @@ from app.rag.grounding import (
     ground,
     grounded_system,
     grounding_extra,
+    validation_attributes,
 )
 from app.rag.providers.anthropic_provider import generate_structured
 from app.rag.rerank import rerank_async
 from app.rag.retrieve import hybrid_search
 from app.rag.store import fetch_chunks, readable_doc_ids
 from app.rag.strategies.base import Strategy, StrategyResult
+from app.rag.timing import stage
 from app.schemas import Chunk, Source
 
 logger = get_structured_logger(__name__)
@@ -208,7 +210,12 @@ class GraphRAG(Strategy):
             },
         )
 
-        extracted = await extract_question_entities(question)
+        # Entity extraction is query analysis for the graph walk, so its time
+        # counts toward retrieval; its tokens and cost count like any model call.
+        with stage("retrieval", span_name="graph.entity_extraction") as s:
+            extracted = await extract_question_entities(question)
+            if s is not None:
+                s.metadata["entities"] = len(extracted)
         # Entity extraction is a model call too; its tokens belong in the totals.
         extract_in = int(getattr(extracted, "input_tokens", 0) or 0)
         extract_out = int(getattr(extracted, "output_tokens", 0) or 0)
@@ -225,14 +232,19 @@ class GraphRAG(Strategy):
 
         # The graph is built from the whole corpus; walk only the part the
         # caller may read, or its triples would leak other documents' facts.
-        visible_docs = await readable_doc_ids(access) if access is not None else None
+        with stage("retrieval", span_name="graph.walk") as s:
+            visible_docs = await readable_doc_ids(access) if access is not None else None
 
-        graph_chunks: set[str] = set()
-        related_entities: set[str] = set()
-        for e in entities:
-            chunks, neigh = neighbors(e, hops=1, doc_ids=visible_docs)
-            graph_chunks |= chunks
-            related_entities |= neigh
+            graph_chunks: set[str] = set()
+            related_entities: set[str] = set()
+            for e in entities:
+                chunks, neigh = neighbors(e, hops=1, doc_ids=visible_docs)
+                graph_chunks |= chunks
+                related_entities |= neigh
+            if s is not None:
+                s.metadata.update(
+                    {"chunks": len(graph_chunks), "related_entities": len(related_entities)}
+                )
 
         logger.debug(
             "Graph walk completed",
@@ -279,7 +291,8 @@ class GraphRAG(Strategy):
             },
         )
 
-        extra = await _fetch_chunks_by_id(graph_only, access=access)
+        with stage("retrieval", log=False):
+            extra = await _fetch_chunks_by_id(graph_only, access=access)
         all_chunks = vector_chunks + extra
         logger.debug(
             "Combined chunks from graph and vector search",
@@ -291,7 +304,8 @@ class GraphRAG(Strategy):
             },
         )
 
-        ranked = await rerank_async(question, all_chunks, top_k=top_k)
+        with stage("rerank"):
+            ranked = await rerank_async(question, all_chunks, top_k=top_k)
         logger.debug(
             "Reranking completed",
             extra_fields={
@@ -319,17 +333,29 @@ class GraphRAG(Strategy):
                 input_tokens=extract_in,
                 output_tokens=extract_out,
                 trace=trace,
+                candidate_count=len(all_chunks),
             )
 
-        subgraph_text = describe_subgraph(
-            entities + sorted(related_entities)[:5], doc_ids=visible_docs
-        )
-        cited = cite_chunks(ranked)
-        ctx_block = format_context(cited)
-        augmented_ctx = (
-            f"# Knowledge graph (extracted from your documents)\n{subgraph_text}\n\n"
-            f"# Relevant passages\n{ctx_block}"
-        )
+        with stage("context_selection", span_name="context_selection") as s:
+            subgraph_text = describe_subgraph(
+                entities + sorted(related_entities)[:5], doc_ids=visible_docs
+            )
+            cited = cite_chunks(ranked)
+            ctx_block = format_context(cited)
+            augmented_ctx = (
+                f"# Knowledge graph (extracted from your documents)\n{subgraph_text}\n\n"
+                f"# Relevant passages\n{ctx_block}"
+            )
+            user_msg = render_prompt(prompt_version, question=question, context=augmented_ctx)
+            if s is not None:
+                s.metadata.update(
+                    {
+                        "candidates": len(all_chunks),
+                        "selected": len(cited),
+                        "context_chars": len(augmented_ctx),
+                        "prompt_version": prompt_version,
+                    }
+                )
         logger.debug(
             "Context prepared",
             extra_fields={
@@ -339,8 +365,6 @@ class GraphRAG(Strategy):
                 "passages_count": len(ranked),
             },
         )
-
-        user_msg = render_prompt(prompt_version, question=question, context=augmented_ctx)
         logger.debug(
             "Prompt rendered",
             extra_fields={
@@ -350,14 +374,18 @@ class GraphRAG(Strategy):
             },
         )
 
-        out = await generate_structured(
-            model=model,
-            prompt=user_msg,
-            tool=SUBMIT_ANSWER_TOOL,
-            system=grounded_system("anthropic"),
-            max_tokens=settings.max_answer_tokens,
-        )
-        grounded, raw = ground(question, out, cited)
+        with stage("generation"):
+            out = await generate_structured(
+                model=model,
+                prompt=user_msg,
+                tool=SUBMIT_ANSWER_TOOL,
+                system=grounded_system("anthropic"),
+                max_tokens=settings.max_answer_tokens,
+            )
+        with stage("citation_validation", span_name="citation_validation") as s:
+            grounded, raw = ground(question, out, cited)
+            if s is not None:
+                s.metadata.update(validation_attributes(grounded))
         trace.append(
             {"step": "generate", "mode": grounded.mode, "chars": len(out.get("text") or "")}
         )
@@ -390,6 +418,8 @@ class GraphRAG(Strategy):
             **grounded.result_fields(),
             input_tokens=out["input_tokens"] + extract_in,
             output_tokens=out["output_tokens"] + extract_out,
+            candidate_count=len(all_chunks),
+            context_count=len(ranked),
             trace=trace,
             extra={
                 "entities": entities,

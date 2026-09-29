@@ -49,10 +49,12 @@ from app.rag.grounding import (
     parse_structured,
     raw_from_mapping,
     validate_citations,
+    validation_attributes,
 )
 from app.rag.providers.anthropic_provider import tool_use_loop
 from app.rag.retrieve import hybrid_search
 from app.rag.strategies.base import Strategy, StrategyResult
+from app.rag.timing import stage
 from app.schemas import Source
 
 logger = get_structured_logger(__name__)
@@ -314,26 +316,33 @@ class AgenticRAG(Strategy):
             )
             return "ok"
 
-        out = await tool_use_loop(
-            model=model,
-            system=_SYSTEM,
-            user_message=f"Question: {question}",
-            tools=_TOOLS,
-            tool_handlers={
-                "search": _tool_search,
-                "fetch_chunk": _tool_fetch,
-                "finish": _tool_finish,
-            },
-            max_iters=settings.agentic_max_iters,
-            max_tokens=settings.max_answer_tokens,
-            terminal_tools={"finish"},
-        )
+        # The loop's own time is generation; the retrieval its search tool runs
+        # is timed as retrieval inside it and not counted twice.
+        with stage("generation"):
+            out = await tool_use_loop(
+                model=model,
+                system=_SYSTEM,
+                user_message=f"Question: {question}",
+                tools=_TOOLS,
+                tool_handlers={
+                    "search": _tool_search,
+                    "fetch_chunk": _tool_fetch,
+                    "finish": _tool_finish,
+                },
+                max_iters=settings.agentic_max_iters,
+                max_tokens=settings.max_answer_tokens,
+                terminal_tools={"finish"},
+            )
         context = list(seen.values())
         stop_reason = out.get("stop_reason", "end_turn")
         telemetry = {
             "input_tokens": out["input_tokens"],
             "output_tokens": out["output_tokens"],
             "iterations": out["iterations"],
+            "candidate_count": sum(
+                (d.get("counts") or {}).get("fused", 0) for d in retrieval_diagnostics
+            ),
+            "context_count": len(context),
         }
 
         raw: RawAnswer | None
@@ -366,7 +375,10 @@ class AgenticRAG(Strategy):
                 **telemetry,
             )
 
-        grounded = validate_citations(raw, context, question)
+        with stage("citation_validation", span_name="citation_validation") as s:
+            grounded = validate_citations(raw, context, question)
+            if s is not None:
+                s.metadata.update(validation_attributes(grounded))
         if not final.get("_called") and not raw.answer.strip():
             grounded.answer = localized("agent_no_answer", question)
 
