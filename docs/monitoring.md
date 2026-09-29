@@ -130,7 +130,11 @@ docker compose --env-file .env -f infra/docker-compose.yml --profile monitoring 
 
 - Prometheus: <http://localhost:9090>, 15 days retention.
 - Grafana: <http://localhost:3300> (user `admin`), with the **EvalRAG overview**
-  dashboard provisioned from `infra/monitoring/grafana/dashboards/`.
+  dashboard provisioned from `infra/monitoring/grafana/dashboards/`. Its
+  "Cost, pipeline stages and context" row shows estimated cost per hour and
+  over the time range by model and strategy, cost per request (p50/p95/mean),
+  unpriced model calls, stage latency p50/p95 by strategy and stage, and the
+  context-chunk distribution.
 
 `GET /metrics` answers only when `METRICS_ENABLED=true`, and then only to
 loopback callers or to requests carrying `X-Admin-Key: <ADMIN_KEY>`. Prometheus
