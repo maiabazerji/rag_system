@@ -1,5 +1,6 @@
 import { useId, useRef, useState } from "react";
 import { errorMessage, post } from "../api/client";
+import type { RequestMetrics } from "../api/eval";
 import { SendIcon } from "../components/Icons";
 import LoadingSpinner from "../components/LoadingSpinner";
 import ErrorAlert from "../components/ErrorAlert";
@@ -30,6 +31,7 @@ type Answer = Grounding & {
   output_tokens?: number;
   /** Present when the backend recorded a trace; fetch it from GET /traces/{id}. */
   trace_id?: string | null;
+  metrics?: RequestMetrics | null;
 };
 
 /** `id` is stable, so a slow answer lands on its own turn even after a Clear. */
@@ -264,6 +266,7 @@ function AnswerView({ a }: { a: Answer }) {
         latency_ms={a.latency_ms}
         input_tokens={a.input_tokens}
         output_tokens={a.output_tokens}
+        costUsd={a.metrics?.estimated_cost_usd}
       />
 
       {a.trace_id && (
