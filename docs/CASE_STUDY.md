@@ -60,7 +60,7 @@ The structured chunker (`chunking.py`) cuts at headings, then packs whole paragr
 
 ## 5. Evaluation methodology
 
-- **Datasets** (`data/golden/`): 175 questions over five files. `golden_v3` (54) and `golden_fr_business_v1` (37) are categorised into eight types: single-hop, multi-hop, comparison, aggregation, ambiguous, unanswerable, citation-sensitive and adversarial. Each carries difficulty labels and verbatim evidence quotes. The three older sets are frozen so that historical runs stay comparable.
+- **Datasets** (`data/golden/`): 178 questions over five files. `golden_v3` (54) and `golden_fr_business_v1` (40) are categorised into eight types: single-hop, multi-hop, comparison, aggregation, ambiguous, unanswerable, citation-sensitive and adversarial. Each carries difficulty labels and verbatim evidence quotes. The three older sets are frozen so that historical runs stay comparable.
 - **Deterministic retrieval metrics** (`backend/app/eval/retrieval.py`): Recall@K, Precision@K, HitRate@K, MRR and nDCG@K at K = 1, 3, 5, 10. They are scored on every strategy's ranked context at the same K. Examples without relevant documents are excluded, not scored as zero.
 - **LLM judge** (`judge.py`, `rubric.py`): five dimensions under a versioned rubric with five anchors each. The reply is validated with Pydantic, gets one repair retry, and out-of-range scores are rejected. Judge reasoning and judge tokens are stored per example.
 - **Failure accounting:** each example ends as `scored`, `judge_failed`, `generation_failed` or `not_judged`. Aggregates carry `n` per metric, so a partially failed run cannot pass for a complete one.
