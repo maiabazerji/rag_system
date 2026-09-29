@@ -115,6 +115,65 @@ class Source(BaseModel):
     )
 
 
+class RetrievedChunkDiagnostics(BaseModel):
+    """Where one final context chunk came from in the retrieval pipeline."""
+
+    chunk_id: str
+    doc_id: str
+    dense_rank: int | None = Field(
+        default=None, description="1-based rank in the dense list; null if absent"
+    )
+    sparse_rank: int | None = Field(
+        default=None, description="1-based rank in the BM25 list; null if absent"
+    )
+    fused_score: float | None = Field(
+        default=None, description="Reciprocal Rank Fusion score"
+    )
+    rerank_score: float | None = Field(
+        default=None, description="Reranker score; null when not reranked"
+    )
+
+
+class RetrievalStageCounts(BaseModel):
+    """Candidates coming out of each retrieval stage."""
+
+    dense: int = 0
+    sparse: int = 0
+    fused: int = 0
+    reranked: int = 0
+    final: int = 0
+
+
+class RetrievalStageLatency(BaseModel):
+    """Wall time of each retrieval stage, in milliseconds.
+
+    Dense and sparse run concurrently, so they overlap rather than add up.
+    """
+
+    preprocess: float = 0.0
+    dense: float = 0.0
+    sparse: float = 0.0
+    fusion: float = 0.0
+    rerank: float = 0.0
+
+
+class RetrievalDiagnostics(BaseModel):
+    """How the context behind an answer was retrieved. Never contains chunk text."""
+
+    mode: Literal["dense", "sparse", "hybrid"]
+    reranker: Literal["cross-encoder", "bm25-fallback", "none"] = "none"
+    query_truncated: bool = False
+    counts: RetrievalStageCounts = Field(default_factory=RetrievalStageCounts)
+    latency_ms: RetrievalStageLatency = Field(default_factory=RetrievalStageLatency)
+    degraded: list[str] = Field(
+        default_factory=list,
+        description="Stages that failed and were skipped, e.g. ['sparse']",
+    )
+    chunks: list[RetrievedChunkDiagnostics] = Field(
+        default_factory=list, description="The final context chunks, in rank order"
+    )
+
+
 class Answer(BaseModel):
     """A generated answer with sources and confidence.
 
@@ -173,6 +232,9 @@ class Answer(BaseModel):
     )
     trace_id: str | None = Field(
         default=None, description="Request trace id; fetch it from /traces/{trace_id}"
+    )
+    retrieval: RetrievalDiagnostics | None = Field(
+        default=None, description="Retrieval pipeline diagnostics, when the strategy has them"
     )
 
 
@@ -557,4 +619,7 @@ class StrategyComparison(BaseModel):
     extra: dict = Field(default_factory=dict, description="Additional metadata")
     trace_id: str | None = Field(
         default=None, description="Request trace id; fetch it from /traces/{trace_id}"
+    )
+    retrieval: RetrievalDiagnostics | None = Field(
+        default=None, description="Retrieval pipeline diagnostics, when the strategy has them"
     )
