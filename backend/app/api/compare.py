@@ -1,11 +1,18 @@
 import asyncio
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, HTTPException
 from fastapi.concurrency import run_in_threadpool
 
 from app.access import Principal
 from app.audit import audited
 from app.auth import charge, record_tokens, require_principal, strategy_units
+from app.eval.online import (
+    GoldenNotFound,
+    Reference,
+    evaluate_rows,
+    evaluation_units,
+    resolve_reference,
+)
 from app.logging_config import get_structured_logger
 from app.rag.generate import answer_question, grounding_fields, run_strategy_raw
 from app.schemas import (
@@ -132,26 +139,49 @@ async def compare_strategies(
     Strategies run sequentially: the agentic strategy issues many model calls,
     and running all three at once reliably trips provider rate limits.
 
+    With ``evaluate=true`` each row also gets an ``evaluation``: LLM-judge
+    scores (answer correctness only with a reference answer) and, when the
+    relevant documents are known, ranked retrieval metrics. The reference comes
+    from ``reference`` or from a golden example (``golden``). Judge calls run
+    concurrently after every strategy has answered.
+
     Args:
-        req: Question, strategies to run, and an optional model override.
+        req: Question, strategies to run, an optional model override and the
+            optional evaluation settings.
         principal: Authenticated caller; retrieval is limited to its scope.
 
     Returns:
         The question and one comparison row per strategy, in request order.
 
     Raises:
-        HTTPException: 429 if the strategies together exceed the key's rate
-            limit (agentic counts as three).
+        HTTPException: 404 if ``golden`` names a missing dataset or example;
+            429 if the strategies (plus one unit per judged strategy) exceed
+            the key's rate limit (agentic counts as three).
     """
+    reference: Reference | None = None
+    if req.evaluate:
+        try:
+            reference = await run_in_threadpool(resolve_reference, req.reference, req.golden)
+        except GoldenNotFound as e:
+            raise HTTPException(status_code=404, detail=str(e)) from e
+        except ValueError as e:
+            raise HTTPException(status_code=422, detail=str(e)) from e
+
+    units = sum(strategy_units(s) for s in req.strategies)
+    if reference is not None:
+        units += evaluation_units(len(req.strategies), reference)
+
     with audited(
         principal, "compare", strategy=",".join(req.strategies), question=req.question
     ) as event:
-        await run_in_threadpool(
-            charge, principal, sum(strategy_units(s) for s in req.strategies)
-        )
-        results, total_in, total_out = await _run_strategies(req, principal)
+        await run_in_threadpool(charge, principal, units)
+        results, failed, total_in, total_out = await _run_strategies(req, principal)
         for r in results:
             event.add_sources(r.sources)
+        if reference is not None:
+            evaluations = await evaluate_rows(results, failed, reference)
+            for row, evaluation in zip(results, evaluations, strict=True):
+                row.evaluation = evaluation
 
     await run_in_threadpool(
         record_tokens,
@@ -165,9 +195,14 @@ async def compare_strategies(
 
 async def _run_strategies(
     req: CompareStrategiesRequest, principal: Principal
-) -> tuple[list[StrategyComparison], int, int]:
-    """Run each requested strategy in turn; returns the rows and token totals."""
+) -> tuple[list[StrategyComparison], list[bool], int, int]:
+    """Run each requested strategy in turn.
+
+    Returns:
+        The rows, whether each row is a failure placeholder, and token totals.
+    """
     results: list[StrategyComparison] = []
+    failed: list[bool] = []
     total_in = total_out = 0
 
     for name in req.strategies:
@@ -187,6 +222,7 @@ async def _run_strategies(
             results.append(
                 _failed_comparison(name, req.question, err or "No result returned.")
             )
+            failed.append(True)
             continue
 
         total_in += result.input_tokens
@@ -211,4 +247,5 @@ async def _run_strategies(
                 **grounding_fields(result),
             )
         )
-    return results, total_in, total_out
+        failed.append(False)
+    return results, failed, total_in, total_out
