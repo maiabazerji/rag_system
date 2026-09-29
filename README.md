@@ -190,27 +190,27 @@ Details: [docs/monitoring.md](docs/monitoring.md).
 
 ## Current benchmark
 
-**Measured:** BM25 (sparse) first-stage retrieval, reranking off. Produced by `scripts/benchmark_retrieval.py` on 2026-09-29 from commit `885f3fd` ([data/benchmarks/](data/benchmarks/README.md)). Corpus `data/docs`: 41 documents, 467 chunks. `golden_fr_business_v1` uses its own corpus: 13 documents, 43 chunks. Unanswerable questions are excluded from the retrieval metrics.
+**Measured:** BM25 (sparse) first-stage retrieval, reranking off. Produced by `scripts/benchmark_retrieval.py` on 2026-09-29 from commit `ed63154` ([data/benchmarks/](data/benchmarks/README.md)). Corpus `data/docs`: 41 documents, 467 chunks. `golden_fr_business_v1` uses its own corpus: 13 documents, 43 chunks. Unanswerable questions are excluded from the retrieval metrics.
 
 | Dataset (questions scored) | K | Recall@K | Precision@K | HitRate@K | MRR | nDCG@K |
 |---|---:|---:|---:|---:|---:|---:|
-| golden_v1 (34/34) | 5 | 0.529 | 0.132 | 0.529 | 0.422 | 0.449 |
-| golden_v1 | 10 | 0.647 | 0.092 | 0.647 | 0.439 | 0.489 |
-| golden_v2 (32/34) | 5 | 0.669 | 0.384 | 0.875 | 0.724 | 0.636 |
-| golden_v2 | 10 | 0.815 | 0.280 | 0.938 | 0.735 | 0.704 |
-| golden_fr_v1 (16/16) | 5 | 0.760 | 0.419 | 0.875 | 0.750 | 0.700 |
-| golden_fr_v1 | 10 | 0.844 | 0.311 | 0.875 | 0.750 | 0.745 |
-| golden_v3 (47/54) | 5 | 0.938 | 0.402 | 1.000 | 0.888 | 0.877 |
-| golden_v3 | 10 | 0.968 | 0.238 | 1.000 | 0.888 | 0.891 |
-| golden_fr_business_v1 (32/37) | 5 | 0.867 | 0.340 | 0.906 | 0.708 | 0.739 |
-| golden_fr_business_v1 | 10 | 0.940 | 0.220 | 0.969 | 0.717 | 0.766 |
+| golden_v1 (34/34) | 5 | 0.559 | 0.112 | 0.559 | 0.463 | 0.460 |
+| golden_v1 | 10 | 0.765 | 0.076 | 0.765 | 0.463 | 0.525 |
+| golden_v2 (32/34) | 5 | 0.701 | 0.312 | 0.906 | 0.738 | 0.651 |
+| golden_v2 | 10 | 0.880 | 0.209 | 0.938 | 0.738 | 0.734 |
+| golden_fr_v1 (16/16) | 5 | 0.781 | 0.350 | 0.875 | 0.758 | 0.712 |
+| golden_fr_v1 | 10 | 0.875 | 0.206 | 0.875 | 0.758 | 0.759 |
+| golden_v3 (47/54) | 5 | 0.945 | 0.268 | 1.000 | 0.888 | 0.881 |
+| golden_v3 | 10 | 0.979 | 0.143 | 1.000 | 0.888 | 0.895 |
+| golden_fr_business_v1 (32/37) | 5 | 0.867 | 0.269 | 0.906 | 0.720 | 0.739 |
+| golden_fr_business_v1 | 10 | 0.958 | 0.153 | 0.969 | 0.720 | 0.775 |
 
 K = 1 and K = 3 are in the per-dataset files. How to read these numbers:
 
 - **Environment.** The benchmark environment had no access to Hugging Face, so the embedding model could not be loaded. Dense and hybrid modes were **skipped** and are listed as such in each file. No dense or hybrid number exists in this repository.
 - **Optimism.** `golden_v3` and `golden_fr_business_v1` were written by reading the source documents, so their questions share vocabulary with the relevant passages. BM25 is favoured on them, and their numbers are not evidence that lexical retrieval is sufficient.
 - **`golden_v1` labels.** They reference only 6 of the 41 documents, because the set was labelled when the corpus had 6. Documents added later on the same topics (for example `reranking_deep_dive.md` next to `reranking.md`) are not labelled relevant, so retrieving them counts as a miss.
-- **Definitions in the benchmark script.** K counts **chunks**: the documents behind the top K chunks are deduplicated and scored. Precision is the share of those distinct documents that are relevant, and MRR is computed within the top K. These differ from the eval harness's document-level @K metrics described above, so compare benchmark files only with each other.
+- **Definitions.** Documents are ranked by their best chunk and K counts documents. The script scores them with `app.eval.retrieval.ranked_retrieval_metrics`, the same function as the eval harness, so benchmark and eval-run retrieval numbers share one definition. MRR is over the full ranked list.
 
 ### Not yet measured
 
@@ -288,7 +288,6 @@ CI ([`.github/workflows/ci.yml`](.github/workflows/ci.yml)) runs ruff, mypy (app
 - **Only BM25 retrieval has current numbers.** Dense, hybrid, reranking and generation have not been measured on this pipeline (see above).
 - **The strategies were compared on one small corpus**, and only in the historical baseline. The Advisor's weights still come from it.
 - **BM25 index:** held in memory per process and per access scope, and rebuilt in full whenever the collection changes. It does not scale to large corpora, and each worker holds its own copy.
-- **Config fingerprint gaps.** `DENSE_TOP_K` and `FINAL_CONTEXT_K` fall outside the name prefixes the hash covers. Two runs that differ only in those settings are grouped as comparable.
 - **Access scoping gaps.** `GET /traces/{id}` and `/eval/runs` require authentication but are not scoped by tenant or principal. OIDC users are not rate-limited or metered, because they have no key row.
 - **Grafana.** The provisioned dashboard has no panels for the cost, stage-latency and context-size metrics.
 - **Graph strategy.** Entity linking is exact string matching, the graph is a JSONL file with an in-process index, and it must be rebuilt with `POST /graph/build` after ingestion.

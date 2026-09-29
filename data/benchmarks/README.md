@@ -2,13 +2,14 @@
 
 Output of `scripts/benchmark_retrieval.py`: deterministic retrieval metrics
 (Recall@K, Precision@K, HitRate@K, MRR, nDCG@K) per golden dataset, computed
-at document level against each question's `relevant_doc_ids` /
-`expected_sources`. Questions without relevant documents (unanswerable ones)
+at document level (each document ranked by its best chunk, K counting
+documents) with the eval harness's `ranked_retrieval_metrics`, against each
+question's `relevant_doc_ids` / `expected_sources`. Questions without relevant documents (unanswerable ones)
 are excluded from these metrics. No LLM is involved.
 
 ## What the committed files contain
 
-The files in this directory were produced on 2026-09-29 from commit `885f3fd`
+The files in this directory were produced on 2026-09-29 from commit `ed63154`
 in an environment with no access to Hugging Face. Consequently:
 
 - **Only `sparse` (BM25) mode was measured.** The `dense` and `hybrid` modes

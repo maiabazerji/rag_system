@@ -109,17 +109,17 @@ Only the following have been measured on the current pipeline.
 
 **Test suite.** 1,495 backend tests pass, with 95% line coverage (CI floor: 90%). The frontend has 102 Vitest tests. ruff and mypy are clean. The audit baseline was 928 tests at 92%. The offline end-to-end tests (commit `7b147c2`) run the real parsers, chunker, PII masking, in-memory Qdrant, BM25 and RRF, citation validation, the eval harness and erasure. The embedder and the model are replaced by documented test doubles.
 
-**BM25 retrieval benchmark** (`scripts/benchmark_retrieval.py`, sparse mode, reranking off, commit `885f3fd`; files in `data/benchmarks/`):
+**BM25 retrieval benchmark** (`scripts/benchmark_retrieval.py`, sparse mode, reranking off, commit `ed63154`; files in `data/benchmarks/`):
 
-| Dataset | Scored | Recall@5 | HitRate@5 | MRR@10 | nDCG@10 |
+| Dataset | Scored | Recall@5 | HitRate@5 | MRR | nDCG@10 |
 |---|---:|---:|---:|---:|---:|
-| golden_v1 | 34/34 | 0.529 | 0.529 | 0.439 | 0.489 |
-| golden_v2 | 32/34 | 0.669 | 0.875 | 0.735 | 0.704 |
-| golden_fr_v1 | 16/16 | 0.760 | 0.875 | 0.750 | 0.745 |
-| golden_v3 | 47/54 | 0.938 | 1.000 | 0.888 | 0.891 |
-| golden_fr_business_v1 | 32/37 | 0.867 | 0.906 | 0.717 | 0.766 |
+| golden_v1 | 34/34 | 0.559 | 0.559 | 0.463 | 0.525 |
+| golden_v2 | 32/34 | 0.701 | 0.906 | 0.738 | 0.734 |
+| golden_fr_v1 | 16/16 | 0.781 | 0.875 | 0.758 | 0.759 |
+| golden_v3 | 47/54 | 0.945 | 1.000 | 0.888 | 0.895 |
+| golden_fr_business_v1 | 32/37 | 0.867 | 0.906 | 0.720 | 0.775 |
 
-In this script, K counts chunks: the documents behind the top K chunks are deduplicated and scored, and MRR is computed within the top K. These numbers come with three caveats:
+K counts documents (each ranked by its best chunk), and the metrics come from the same function as the eval harness. These numbers come with three caveats:
 
 - **Dense and hybrid were not measured.** The embedding model could not be downloaded in the benchmark environment, so both modes were skipped.
 - **The two newest datasets favour BM25.** `golden_v3` and `golden_fr_business_v1` were written from the documents and share their vocabulary.
@@ -145,9 +145,8 @@ What the audit and the datasets revealed about the measurements themselves:
 
 - **`golden_v1` was labelled against a 6-document seed corpus.** Its 34 questions reference only 6 filenames, the documents present at the initial commit, while `data/docs` now holds 41. Later documents on the same topics, such as `reranking_deep_dive.md` and `cross_encoder_reranking.md` next to `reranking.md`, count as misses. This is why `golden_v2` relabels the same questions with every covering document, and why v1 is kept frozen only for comparison with old runs.
 - **The corpus contradicts itself.** `dense_embeddings_vector_search.md` gives BGE-Large 768 dimensions, while `embedding_models_guide.md` gives 1024. text-embedding-3-large is priced at $0.02 per million tokens in one document and $0.13 in another. Rather than editing the corpus, `golden_v3` turns these conflicts into `ambiguous` questions whose ideal answer names the conflict (see `data/golden/README.md`).
-- **Self-authored datasets have a lexical-overlap bias.** Questions written while reading the source share its terms. BM25 reaches HitRate@5 = 1.000 on `golden_v3` but 0.529 on `golden_v1`. That gap measures how the datasets were written as much as how well retrieval works.
+- **Self-authored datasets have a lexical-overlap bias.** Questions written while reading the source share its terms. BM25 reaches HitRate@5 = 1.000 on `golden_v3` but 0.559 on `golden_v1`. That gap measures how the datasets were written as much as how well retrieval works.
 - **The eval corpus included the documentation.** `scripts/ingest.py` used to ingest `README.md`, `EvalRAG.md` and `LEARN.md` by default, so editing the docs changed the corpus the `data/docs` datasets are evaluated against. It now ingests `data/docs` only unless `--with-meta` is passed, matching the offline benchmark.
-- **Configuration drift remains possible in two settings.** The config hash covers settings by name prefix. `DENSE_TOP_K` and `FINAL_CONTEXT_K` do not match any prefix, so two runs that differ only in them are grouped together.
 
 ## 12. Lessons learned
 
@@ -166,4 +165,4 @@ What the audit and the datasets revealed about the measurements themselves:
 - **Evaluate query rewriting and HyDE with the harness,** by category, before enabling either by default.
 - **Route by question type.** The advisor could choose a strategy per question type from measured per-category results instead of the historical weights it uses today.
 - **Add a CI eval gate on a small dataset.** Run `run_eval.py --fail-on-regression` on a subset with a pinned baseline, with the judge enabled only where a key is available.
-- **Close the known gaps.** Add `DENSE_TOP_K` and `FINAL_CONTEXT_K` to the config hash, scope `/traces` and `/eval/runs` by principal, and add Grafana panels for cost and stage latency.
+- **Close the known gaps.** Scope `/traces` and `/eval/runs` by principal, and add Grafana panels for cost and stage latency.
