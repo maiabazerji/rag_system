@@ -9,18 +9,17 @@ from pathlib import Path
 
 import pytest
 
+from app.eval.dataset import corpus_dir_for
 from app.eval.metrics import GOLDEN_DIR, load_dataset
 
 DATA_DIR = Path(__file__).resolve().parents[2] / "data"
 DOCS_DIR = DATA_DIR / "docs"
 DATASETS = [p.stem for p in sorted(GOLDEN_DIR.glob("*.jsonl"))]
-# Datasets labelled against a corpus other than data/docs.
-CORPUS_DIRS = {"golden_fr_business_v1": DATA_DIR / "demo_fr_business" / "docs"}
 
 
 def corpus_for(name: str) -> set[str]:
-    """Filenames in the corpus a dataset is labelled against."""
-    root = CORPUS_DIRS.get(name, DOCS_DIR)
+    """Filenames in the corpus a dataset is labelled against (golden/corpora.toml)."""
+    root = corpus_dir_for(name, DATA_DIR)
     pattern = "*.md" if root == DOCS_DIR else "*"
     return {p.name for p in root.glob(pattern) if p.is_file()}
 
@@ -114,3 +113,13 @@ class TestGoldenV2Coverage:
         assert len(v1) == 34
         single = [ex for ex in v1 if len(ex["expected_sources"]) == 1]
         assert len(single) == 32, "golden_v1 should still be the original labelling"
+
+
+def test_corpus_mapping_points_at_existing_directories():
+    """Every dataset resolves to a corpus that exists; unmapped ones use data/docs."""
+    assert corpus_dir_for("golden_v1", DATA_DIR) == DOCS_DIR
+    assert corpus_dir_for("golden_fr_business_v1.jsonl", DATA_DIR) == (
+        DATA_DIR / "demo_fr_business" / "docs"
+    )
+    for name in DATASETS:
+        assert corpus_dir_for(name, DATA_DIR).is_dir(), name

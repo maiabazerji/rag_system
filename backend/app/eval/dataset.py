@@ -33,6 +33,7 @@ exists in the corpus directory. ``scripts/run_eval.py --dry-run`` uses it.
 from __future__ import annotations
 
 import json
+import tomllib
 from collections import Counter
 from collections.abc import Mapping
 from dataclasses import dataclass, field
@@ -100,6 +101,32 @@ def difficulty_of(example: Mapping[str, Any]) -> str | None:
 def expected_behavior_of(example: Mapping[str, Any]) -> str:
     """``"refuse"`` for unanswerable examples, else ``"answer"``."""
     return "refuse" if example.get("expected_behavior") == "refuse" else "answer"
+
+
+DEFAULT_CORPUS = "docs"
+
+
+def corpus_dir_for(dataset: str, data_dir: Path) -> Path:
+    """The corpus a dataset is labelled against, per ``golden/corpora.toml``.
+
+    Args:
+        dataset: Dataset name, with or without the ``.jsonl`` suffix.
+        data_dir: The data directory (``settings.data_path``).
+
+    Returns:
+        ``data_dir / <mapped path>``, or ``data_dir / "docs"`` for an
+        unmapped dataset or a missing mapping file.
+    """
+    name = dataset.removesuffix(".jsonl")
+    mapping_file = data_dir / "golden" / "corpora.toml"
+    mapped = DEFAULT_CORPUS
+    if mapping_file.is_file():
+        with mapping_file.open("rb") as fh:
+            corpora = tomllib.load(fh).get("corpora", {})
+        value = corpora.get(name)
+        if isinstance(value, str) and value.strip():
+            mapped = value.strip()
+    return data_dir / mapped
 
 
 def corpus_keys(corpus_dir: Path) -> set[str]:
