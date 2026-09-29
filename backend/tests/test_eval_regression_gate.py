@@ -380,7 +380,7 @@ class TestGroupingKey:
                 json.dumps({"dataset": "d", "config_hash": cfg, "aggregate": {"faithfulness": faith}}),
                 encoding="utf-8",
             )
-        assert regression.load_regressions() == []
+        assert find_baseline(regression.get_run("20260102T000000Z-b")) == (None, None)
 
     def test_rubric_version_separates_groups(self, tmp_path, monkeypatch):
         monkeypatch.setattr(regression, "RUNS_DIR", tmp_path)
@@ -389,7 +389,7 @@ class TestGroupingKey:
                 json.dumps({"dataset": "d", "rubric_version": rv, "aggregate": {"faithfulness": faith}}),
                 encoding="utf-8",
             )
-        assert regression.load_regressions() == []
+        assert find_baseline(regression.get_run("20260102T000000Z-b")) == (None, None)
 
 
 class TestRegressionRoute:
@@ -413,6 +413,10 @@ class TestRegressionRoute:
 
     def test_unknown_run_is_404(self, client):
         assert client.get("/eval/runs/nope/regression").status_code == 404
+
+    def test_legacy_consecutive_run_listing_is_gone(self, client):
+        """Per-run reports replaced GET /eval/regressions."""
+        assert client.get("/eval/regressions").status_code == 404
 
     def test_bad_thresholds_file_is_a_500(self, client, tmp_path, monkeypatch):
         self._save(_run(run_id="20260101T000000Z-a"))

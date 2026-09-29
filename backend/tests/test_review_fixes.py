@@ -638,7 +638,7 @@ class TestEvalRuns:
 
 
 def test_regressions_do_not_compare_across_judges(tmp_path, monkeypatch):
-    from app.eval.regression import load_regressions
+    from app.eval.regression import find_baseline, get_run
 
     monkeypatch.setattr("app.eval.regression.RUNS_DIR", tmp_path)
     for name, judge_model, faith in (("20260101T000000Z-a", "j1", 0.9), ("20260102T000000Z-b", "j2", 0.3)):
@@ -654,7 +654,7 @@ def test_regressions_do_not_compare_across_judges(tmp_path, monkeypatch):
             ),
             encoding="utf-8",
         )
-    assert load_regressions() == []
+    assert find_baseline(get_run("20260102T000000Z-b")) == (None, None)
 
 
 class TestDataDir:
