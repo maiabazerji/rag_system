@@ -197,6 +197,12 @@ MESSAGES: dict[str, dict[str, str]] = {
         "en": "No relevant context found in the indexed documents.",
         "fr": "Aucun passage pertinent n'a été trouvé dans les documents indexés.",
     },
+    "insufficient_context": {
+        "en": "I cannot answer this from the retrieved documents: they do not "
+        "contain the information needed.",
+        "fr": "Je ne peux pas répondre à partir des documents récupérés : ils ne "
+        "contiennent pas l'information nécessaire.",
+    },
     "graph_not_built": {
         "en": "Graph RAG needs setup first. Go to Compare page and click 'Build graph' "
         "to extract connections between concepts in your documents.",
