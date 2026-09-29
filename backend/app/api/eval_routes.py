@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, HTTPException, Path, Query
+from fastapi import APIRouter, Depends, HTTPException, Path
 from fastapi.concurrency import run_in_threadpool
 
 from app.access import Principal
@@ -11,7 +11,6 @@ from app.eval.online import GoldenNotFound, golden_questions
 from app.eval.regression import (
     get_run,
     list_run_summaries,
-    load_regressions,
     regression_report_for,
     render_markdown,
 )
@@ -155,20 +154,6 @@ def run_regression(run_id: str) -> dict:
     except (OSError, ValueError) as e:
         raise HTTPException(status_code=500, detail=f"Invalid regression thresholds: {e}") from e
     return {**report, "markdown": render_markdown(report)}
-
-
-@router.get("/regressions", summary="List detected regressions")
-def regressions(
-    threshold: float = Query(
-        default=0.05, ge=0, le=1, description="Minimum drop counted as a regression"
-    ),
-) -> list[dict]:
-    """List metric drops between consecutive comparable runs.
-
-    Runs are only compared when they share a dataset, model, provider and
-    prompt version, so unrelated runs are never reported as a regression.
-    """
-    return load_regressions(threshold=threshold)
 
 
 @router.post("/human-rate", response_model=HumanRating, summary="Record a human rating")
