@@ -1,8 +1,9 @@
 import logging
 from pathlib import Path
+from typing import Self
 from urllib.parse import urlparse
 
-from pydantic import Field, field_validator
+from pydantic import Field, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 logger = logging.getLogger(__name__)
@@ -34,6 +35,7 @@ VALID_PROVIDERS = {"anthropic", "openai", "local"}
 
 # Valid RAG strategies
 VALID_STRATEGIES = {"classic", "graph", "agentic"}
+VALID_RETRIEVAL_MODES = {"dense", "sparse", "hybrid"}
 
 # Wandb modes
 VALID_WANDB_MODES = {"online", "offline", "disabled"}
@@ -292,11 +294,34 @@ class Settings(BaseSettings):
             "when embedded or reranked. 0 disables the cap."
         ),
     )
+    # Retrieval pipeline: preprocess -> dense + BM25 -> RRF -> rerank -> context.
+    retrieval_mode: str = Field(
+        default="hybrid",
+        description="Retrievers to run: dense (vectors), sparse (BM25) or hybrid (both, fused).",
+    )
     retrieval_top_k: int = Field(
-        default=50, ge=1, le=100, description="Candidates to retrieve before reranking."
+        default=50,
+        ge=1,
+        le=100,
+        description="Deprecated alias of DENSE_TOP_K, honoured when DENSE_TOP_K is unset.",
+    )
+    dense_top_k: int = Field(
+        default=50, ge=1, le=200, description="Candidates from dense (vector) retrieval."
+    )
+    bm25_top_k: int = Field(
+        default=50, ge=1, le=200, description="Candidates from sparse (BM25) retrieval."
+    )
+    rrf_k: int = Field(
+        default=60, ge=1, le=1000, description="Reciprocal Rank Fusion constant k."
     )
     rerank_top_k: int = Field(
         default=8, ge=1, le=50, description="Chunks to keep after reranking."
+    )
+    final_context_k: int = Field(
+        default=8,
+        ge=1,
+        le=50,
+        description="Chunks sent to the model. Defaults to RERANK_TOP_K when unset.",
     )
     max_answer_tokens: int = Field(
         default=1024, ge=64, le=8192, description="Max tokens in a generated answer."
@@ -660,6 +685,39 @@ class Settings(BaseSettings):
     @classmethod
     def _v_wandb_base_url(cls, v: str) -> str:
         return _validate_url(v, "WANDB_BASE_URL", schemes=("http", "https")) if v else v
+
+    @field_validator("retrieval_mode")
+    @classmethod
+    def _v_retrieval_mode(cls, v: str) -> str:
+        mode = v.strip().lower()
+        if mode not in VALID_RETRIEVAL_MODES:
+            raise ValueError(
+                f"RETRIEVAL_MODE must be one of {sorted(VALID_RETRIEVAL_MODES)}, got '{v}'"
+            )
+        return mode
+
+    @model_validator(mode="after")
+    def _v_retrieval_depths(self) -> Self:
+        explicit = self.model_fields_set
+        if "retrieval_top_k" in explicit:
+            if "dense_top_k" not in explicit:
+                logger.warning("RETRIEVAL_TOP_K is deprecated; set DENSE_TOP_K instead.")
+                self.dense_top_k = self.retrieval_top_k
+            elif self.dense_top_k != self.retrieval_top_k:
+                logger.warning(
+                    "Both DENSE_TOP_K (%d) and deprecated RETRIEVAL_TOP_K (%d) are set; "
+                    "using DENSE_TOP_K.",
+                    self.dense_top_k,
+                    self.retrieval_top_k,
+                )
+        if "final_context_k" not in explicit:
+            self.final_context_k = self.rerank_top_k
+        if self.final_context_k > self.rerank_top_k:
+            raise ValueError(
+                f"FINAL_CONTEXT_K ({self.final_context_k}) cannot exceed RERANK_TOP_K "
+                f"({self.rerank_top_k}): the context is cut from the reranked list."
+            )
+        return self
 
     @field_validator("chunk_overlap_tokens")
     @classmethod

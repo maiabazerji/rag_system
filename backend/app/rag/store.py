@@ -36,6 +36,24 @@ _qdrant_breaker = CircuitBreaker(
 )
 
 
+# Bumped whenever this process writes to or deletes from the collection, so
+# in-memory derivatives of the corpus (the BM25 index in app.rag.sparse) know
+# to rebuild. Writes by other processes are caught by the point-count check.
+_corpus_generation = 0
+
+
+def bump_corpus_generation() -> int:
+    """Record that the indexed corpus changed; returns the new generation."""
+    global _corpus_generation
+    _corpus_generation += 1
+    return _corpus_generation
+
+
+def corpus_generation() -> int:
+    """How many times this process has changed the indexed corpus."""
+    return _corpus_generation
+
+
 class StoreUnavailable(RuntimeError):
     """The vector store could not be reached, or its circuit breaker is open.
 
@@ -243,8 +261,11 @@ async def upsert(chunks, vectors) -> None:
                 timeout=_UPSERT_TIMEOUT,
                 service_name="Qdrant",
             )
+        bump_corpus_generation()
         _qdrant_breaker.record_success()
     except Exception as e:
+        # Earlier batches may have landed, so the corpus may have changed.
+        bump_corpus_generation()
         logger.error(f"Qdrant upsert failed: {type(e).__name__}: {e}")
         _qdrant_breaker.record_failure()
         raise StoreUnavailable(f"Qdrant upsert failed: {type(e).__name__}: {e}") from e
@@ -504,6 +525,7 @@ async def delete_stale_revisions(source_key: str, keep_doc_id: str) -> StaleRevi
             timeout=5.0,
             service_name="Qdrant",
         )
+        bump_corpus_generation()
         _qdrant_breaker.record_success()
         return StaleRevisions(points=before.count, doc_ids=frozenset(doc_ids))
     except Exception as e:
@@ -596,6 +618,7 @@ async def delete_matching(selector: qm.Filter) -> int:
                 timeout=10.0,
                 service_name="Qdrant",
             )
+            bump_corpus_generation()
         _qdrant_breaker.record_success()
         return matched.count
     except Exception as e:
