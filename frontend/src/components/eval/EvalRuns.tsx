@@ -198,7 +198,7 @@ function RunCard({
           </div>
         </div>
         <div className="flex items-center gap-2">
-          <RegressionBadge status={run.regression_status} />
+          <RegressionBadge status={run.regression_status} tip="eval.regTip" />
           {rerunnable && (
             <button
               type="button"
@@ -287,7 +287,7 @@ function RegressionReportView({ runId }: { runId: string }) {
   return (
     <div className="flex flex-col gap-2">
       <div className="flex flex-wrap items-center gap-2 text-xs text-zinc-400">
-        <RegressionBadge status={data.status} />
+        <RegressionBadge status={data.status} tip="eval.regTip" />
         {data.baseline?.id ? (
           <span>
             {t("eval.reportBaseline", {
@@ -320,7 +320,7 @@ function RegressionReportView({ runId }: { runId: string }) {
               {checks.map((c) => (
                 <tr key={c.metric} className="border-t border-bg-border align-top">
                   <td className="py-1.5 px-1">
-                    <RegressionBadge status={c.status} />
+                    <RegressionBadge status={c.status} tip={null} />
                   </td>
                   <th scope="row" className="py-1.5 px-1 text-left font-mono font-normal text-zinc-200">{c.metric}</th>
                   <td className="py-1.5 px-1 tabular-nums">

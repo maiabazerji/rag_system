@@ -240,6 +240,7 @@ export const en = {
   "eval.count.unscored": "Unscored",
   "eval.count.generationFailed": "Generation failed",
   "eval.noScores": "This run recorded no scores.",
+  "eval.regTip": "Regression status of this run against its configuration's baseline.",
   "eval.showReport": "Show regression report",
   "eval.hideReport": "Hide regression report",
   "eval.reportLoading": "Loading regression report…",

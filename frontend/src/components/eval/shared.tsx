@@ -14,12 +14,21 @@ const REG_STYLE: Record<RegressionStatus, { icon: string; cls: string; label: Me
   ERROR: { icon: "!", cls: "!text-amber-300 !border-amber-500/40 !bg-amber-500/10", label: "dash.reg.ERROR" },
 };
 
-/** PASS / FAIL / SKIPPED / ERROR chip; "Not checked" when the run has no status. */
-export function RegressionBadge({ status }: { status: RegressionStatus | string | null | undefined }) {
+/**
+ * PASS / FAIL / SKIPPED / ERROR chip; "Not checked" when the run has no status.
+ * `tip` explains what the status refers to; pass null for none.
+ */
+export function RegressionBadge({
+  status,
+  tip = "dash.regTip",
+}: {
+  status: RegressionStatus | string | null | undefined;
+  tip?: MessageKey | null;
+}) {
   const { t } = useI18n();
   const style = status && status in REG_STYLE ? REG_STYLE[status as RegressionStatus] : undefined;
   return (
-    <span className={`chip ${style?.cls ?? ""}`} title={t("dash.regTip")}>
+    <span className={`chip ${style?.cls ?? ""}`} title={tip ? t(tip) : undefined}>
       <span aria-hidden="true">{style?.icon ?? "·"}</span>
       {t(style?.label ?? "dash.reg.none")}
     </span>
