@@ -8,6 +8,7 @@ attempts do not multiply.
 from __future__ import annotations
 
 import asyncio
+import re
 from typing import Any
 
 import anthropic
@@ -137,6 +138,40 @@ def supports_temperature(model: str) -> bool:
     return not model.startswith(_NO_SAMPLING_PREFIXES)
 
 
+# Models that return 400 for a forced ``tool_choice`` (``any`` / ``tool``), or
+# whose default adaptive thinking is incompatible with it. They get ``auto``
+# plus a prompt instruction naming the tool. The advisor's ``_request_options``
+# delegates here, so there is one rule.
+_NO_FORCED_TOOL = re.compile(r"(sonnet-5|opus-5|opus-4-[78]|fable|mythos)")
+
+# Models that accept ``strict: true`` on a tool definition (structured outputs).
+_STRICT_TOOLS = re.compile(r"(sonnet-5|opus-5|opus-4-8|haiku-4-5|fable|mythos)")
+
+
+def supports_forced_tool_choice(model: str) -> bool:
+    """Whether `model` accepts ``tool_choice`` ``{"type": "tool", ...}``."""
+    return not _NO_FORCED_TOOL.search(model)
+
+
+def supports_strict_tools(model: str) -> bool:
+    """Whether `model` accepts ``strict: true`` on a tool definition."""
+    return bool(_STRICT_TOOLS.search(model))
+
+
+def tool_request_options(model: str, tool_name: str) -> dict[str, Any]:
+    """``tool_choice`` (and ``temperature``) for a call that must use `tool_name`.
+
+    Older models get a forced tool call at temperature 0; newer ones reject
+    both, so they get ``auto`` and the caller's prompt must name the tool.
+    """
+    if supports_forced_tool_choice(model):
+        opts: dict[str, Any] = {"tool_choice": {"type": "tool", "name": tool_name}}
+        if supports_temperature(model):
+            opts["temperature"] = 0
+        return opts
+    return {"tool_choice": {"type": "auto"}}
+
+
 def _text_of(response: Any) -> str:
     """Concatenate the text blocks of a message response."""
     return "".join(
@@ -258,6 +293,80 @@ async def generate_with_usage(
         "text": text,
         "input_tokens": resp.usage.input_tokens,
         "output_tokens": resp.usage.output_tokens,
+    }
+
+
+async def generate_structured(
+    *,
+    model: str,
+    prompt: str,
+    tool: dict,
+    system: str | None = None,
+    max_tokens: int = 1024,
+) -> dict:
+    """Ask for one call of `tool` and return its input, plus any text.
+
+    The tool is sent with ``strict: true`` where the model supports it, so its
+    input matches the schema; ``tool_choice`` follows `tool_request_options`.
+    With ``auto`` a model may still answer in prose, so callers must accept
+    ``structured is None`` and fall back to parsing ``text``.
+
+    Args:
+        model: Anthropic model ID.
+        prompt: The user prompt.
+        tool: Tool definition (``name``, ``description``, ``input_schema``).
+        system: Optional system prompt.
+        max_tokens: Maximum tokens to generate.
+
+    Returns:
+        Dict with ``structured`` (the tool input dict, or None), ``text``,
+        ``input_tokens``, ``output_tokens`` and ``stop_reason``.
+
+    Raises:
+        MissingKeyError: If no API key is configured.
+        ProviderError: If the service is unavailable.
+    """
+    tool_def = dict(tool)
+    if supports_strict_tools(model):
+        tool_def["strict"] = True
+    kwargs: dict[str, Any] = {
+        "model": model,
+        "max_tokens": max_tokens,
+        "messages": [{"role": "user", "content": prompt}],
+        "tools": [tool_def],
+        "_operation": "generate_structured",
+        **tool_request_options(model, tool["name"]),
+    }
+    if system:
+        kwargs["system"] = system
+
+    resp = await _create_message(**kwargs)
+    block = next(
+        (
+            b
+            for b in resp.content
+            if getattr(b, "type", None) == "tool_use" and getattr(b, "name", None) == tool["name"]
+        ),
+        None,
+    )
+    structured = block.input if block is not None and isinstance(block.input, dict) else None
+    text = _text_of(resp)
+    logger.info(
+        "Anthropic structured call succeeded",
+        extra_fields={
+            "model": model,
+            "input_tokens": resp.usage.input_tokens,
+            "output_tokens": resp.usage.output_tokens,
+            "tool_called": structured is not None,
+            "stop_reason": resp.stop_reason,
+        },
+    )
+    return {
+        "structured": structured,
+        "text": text,
+        "input_tokens": resp.usage.input_tokens,
+        "output_tokens": resp.usage.output_tokens,
+        "stop_reason": resp.stop_reason,
     }
 
 
