@@ -3,6 +3,7 @@ import {
   cleanAnswer,
   formatConfidence,
   formatLatency,
+  formatUsd,
   formatScore,
   formatTokens,
 } from "./formatting";
@@ -46,5 +47,14 @@ describe("cleanAnswer", () => {
 
   it("drops horizontal rules and blockquote markers", () => {
     expect(cleanAnswer("> quoted\n---\nafter")).toBe("quoted\nafter");
+  });
+});
+
+describe("formatUsd", () => {
+  it("uses 4 decimals under a dollar and flags tiny amounts", () => {
+    expect(formatUsd(0.00123)).toBe("$0.0012");
+    expect(formatUsd(12.5)).toBe("$12.50");
+    expect(formatUsd(0.00001)).toBe("< $0.0001");
+    expect(formatUsd(0)).toBe("$0.0000");
   });
 });
