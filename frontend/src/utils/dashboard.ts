@@ -1,5 +1,5 @@
 /**
- * Pure aggregation for the Dashboard: group recorded eval runs into
+ * Pure aggregation for the Evaluation Overview: group recorded eval runs into
  * configurations, pick the latest run of each, and shape them for the
  * quality-vs-cost chart and tables. No value is invented: a metric a run did
  * not measure stays null and is shown as such.

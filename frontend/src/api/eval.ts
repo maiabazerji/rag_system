@@ -5,7 +5,7 @@
  * older payloads (and backends without per-request metrics) still type-check
  * and render.
  */
-import { get, post } from "./client";
+import { LONG_TIMEOUT_MS, get, post } from "./client";
 import type { CitedSource, Grounding } from "../components/Citations";
 
 export type StrategyName = "classic" | "graph" | "agentic";
@@ -162,6 +162,10 @@ export interface EvalRunSummary {
   config_hash?: string | null;
   regression_status?: RegressionStatus | null;
   aggregates?: Record<string, MetricAggregate> | null;
+  /** Older runs: flat judge means, before `aggregates` carried std and n. */
+  aggregate?: Record<string, number | null> | null;
+  /** Older runs: flat retrieval means (mrr, recall@K, ...). */
+  retrieval_aggregate?: Record<string, number | null> | null;
   cost?: RunCost | null;
   created_at?: string | null;
 }
@@ -181,18 +185,40 @@ export interface EvalRun extends EvalRunSummary {
   per_example?: Record<string, unknown>[];
 }
 
+/** One metric of a regression report. */
 export interface RegressionCheck {
   metric: string;
-  status: string;
+  status: RegressionStatus | string;
   baseline?: number | null;
   current?: number | null;
   delta?: number | null;
+  delta_pct?: number | null;
+  /** Human-readable bound, e.g. "delta >= -0.03". */
+  threshold?: string | null;
+  /** Why the check failed or was skipped. */
+  reason?: string | null;
 }
 
+export interface RegressionRunRef {
+  id: string | null;
+  created_at?: string | null;
+}
+
+/** GET /eval/runs/{id}/regression. */
 export interface RegressionReport {
   status: RegressionStatus;
   checks?: RegressionCheck[];
+  baseline?: RegressionRunRef | null;
+  baseline_source?: "pinned" | "previous" | "explicit" | null;
+  comparable?: boolean;
+  config_mismatch?: string[];
   markdown?: string;
+}
+
+/** Body of POST /eval/run. */
+export interface EvalRunRequest {
+  dataset: string;
+  strategy?: StrategyName;
 }
 
 const enc = encodeURIComponent;
@@ -210,6 +236,14 @@ export function listGoldenDatasets(): Promise<string[]> {
 /** GET /eval/golden/{dataset}: questions only, never the reference answers. */
 export function listGoldenQuestions(dataset: string): Promise<GoldenQuestion[]> {
   return get<GoldenQuestion[]>(`/eval/golden/${enc(dataset)}`);
+}
+
+/**
+ * POST /eval/run. Answers and judges every golden question inside one request,
+ * so it gets the long timeout.
+ */
+export function runEvaluation(req: EvalRunRequest): Promise<EvalRun> {
+  return post<EvalRun>("/eval/run", req, { timeoutMs: LONG_TIMEOUT_MS });
 }
 
 /** GET /eval/runs: every recorded run, newest first. */

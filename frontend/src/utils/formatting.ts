@@ -61,15 +61,6 @@ export function formatScore(value: number, digits = 2, locale: string = DEFAULT_
   return num(value, locale, { minimumFractionDigits: digits, maximumFractionDigits: digits });
 }
 
-export function formatDuration(ms: number): string {
-  if (ms < 60000) {
-    return `${Math.round(ms / 1000)}s`;
-  }
-  const mins = Math.floor(ms / 60000);
-  const secs = Math.round((ms % 60000) / 1000);
-  return `${mins}m ${secs}s`;
-}
-
 /**
  * Strip Markdown syntax but keep the structure: headings stay as their own
  * lines, paragraphs keep their blank lines, and citations like [abc:4] stay so

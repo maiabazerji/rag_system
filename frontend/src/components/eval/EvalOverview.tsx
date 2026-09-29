@@ -12,11 +12,12 @@ import {
   YAxis,
   ZAxis,
 } from "recharts";
-import { errorMessage } from "../api/client";
-import { getEvalRun, listEvalRuns, type EvalRun, type MetricAggregate, type RegressionStatus } from "../api/eval";
-import ErrorAlert from "../components/ErrorAlert";
-import LoadingSpinner from "../components/LoadingSpinner";
-import { CHART_INK, strategyColor } from "../utils/chartColors";
+import { errorMessage } from "../../api/client";
+import { getEvalRun, listEvalRuns, type EvalRun } from "../../api/eval";
+import ErrorAlert from "../ErrorAlert";
+import { AggCell, RegressionBadge, StrategyKey } from "./shared";
+import LoadingSpinner from "../LoadingSpinner";
+import { CHART_INK, strategyColor } from "../../utils/chartColors";
 import {
   COST_AXES,
   QUALITY_METRICS,
@@ -31,20 +32,19 @@ import {
   type CostAxis,
   type QualityMetric,
   type ScatterPoint,
-} from "../utils/dashboard";
-import { formatLatency, formatScore, formatTokens, formatUsd } from "../utils/formatting";
-import { useI18n, type MessageKey } from "../i18n";
+} from "../../utils/dashboard";
+import { formatLatency, formatScore, formatTokens, formatUsd } from "../../utils/formatting";
+import { useI18n } from "../../i18n";
 
 const EMPTY_COMMAND = "python scripts/run_eval.py --dataset golden_v3 --all";
 
-const REG_STYLE: Record<RegressionStatus, { icon: string; cls: string; label: MessageKey }> = {
-  PASS: { icon: "✓", cls: "!text-emerald-300 !border-emerald-500/40 !bg-emerald-500/10", label: "dash.reg.PASS" },
-  FAIL: { icon: "✕", cls: "!text-rose-300 !border-rose-500/40 !bg-rose-500/10", label: "dash.reg.FAIL" },
-  SKIPPED: { icon: "–", cls: "", label: "dash.reg.SKIPPED" },
-  ERROR: { icon: "!", cls: "!text-amber-300 !border-amber-500/40 !bg-amber-500/10", label: "dash.reg.ERROR" },
-};
-
-export default function Dashboard() {
+/**
+ * Overview tab of the Evaluation page: the latest run of every configuration of
+ * one dataset, as a quality-vs-cost scatter, a table and a per-question-type
+ * breakdown. It is the only place that ships the charting library, so the
+ * Evaluation page loads it lazily.
+ */
+export default function EvalOverview() {
   const { t } = useI18n();
   const ids = { dataset: useId(), metric: useId(), axis: useId() };
   const runs = useQuery({ queryKey: ["runs"], queryFn: listEvalRuns });
@@ -77,11 +77,10 @@ export default function Dashboard() {
 
   return (
     <div className="flex flex-col gap-6">
-      <header className="space-y-2">
-        <h1 className="display text-4xl font-semibold text-white">{t("dash.title")}</h1>
-        <p className="text-zinc-400 max-w-2xl">{t("dash.subtitle")}</p>
+      <div className="space-y-1">
+        <p className="text-sm text-zinc-400 max-w-2xl">{t("dash.subtitle")}</p>
         <p className="text-xs text-zinc-500 max-w-2xl">{t("dash.caption")}</p>
-      </header>
+      </div>
 
       {runs.isLoading && <LoadingSpinner message={t("dash.loading")} />}
       {runs.error && (
@@ -273,38 +272,6 @@ function QualityCostChart({
         <p className="text-xs text-zinc-500">{t("dash.missing", { list: missing.join("; ") })}</p>
       )}
     </section>
-  );
-}
-
-function AggCell({ agg }: { agg: MetricAggregate | null | undefined }) {
-  const { t, locale } = useI18n();
-  if (!agg || agg.mean == null) return <span className="text-zinc-600">{t("common.na")}</span>;
-  return (
-    <span className="tabular-nums">
-      {formatScore(agg.mean, 2, locale)}
-      {agg.std != null && <span className="text-zinc-500"> ± {formatScore(agg.std, 2, locale)}</span>}
-      <span className="text-zinc-600"> ({agg.n})</span>
-    </span>
-  );
-}
-
-function StrategyKey({ strategy, label }: { strategy: string; label: string }) {
-  return (
-    <span className="inline-flex items-center gap-1.5">
-      <span aria-hidden="true" className="inline-block h-2.5 w-2.5 rounded-full shrink-0" style={{ backgroundColor: strategyColor(strategy) }} />
-      <span className="break-words">{label}</span>
-    </span>
-  );
-}
-
-function RegressionBadge({ status }: { status: RegressionStatus | null }) {
-  const { t } = useI18n();
-  const style = status ? REG_STYLE[status] : undefined;
-  return (
-    <span className={`chip ${style?.cls ?? ""}`} title={t("dash.regTip")}>
-      <span aria-hidden="true">{style?.icon ?? "·"}</span>
-      {t(style?.label ?? "dash.reg.none")}
-    </span>
   );
 }
 
