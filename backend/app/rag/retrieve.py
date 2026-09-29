@@ -304,6 +304,13 @@ async def hybrid_search(
     scores = list(outcome.scores[: len(final)])
     scores += [None] * (len(final) - len(scores))
     by_id: dict[str, FusedCandidate] = {c.chunk_id: c for c in fused}
+    # Carry the scores on the chunks themselves, so generation can weigh the
+    # evidence it cites (see app.rag.grounding) without the diagnostics object.
+    for chunk, score in zip(final, scores, strict=True):
+        if score is not None:
+            chunk.metadata["rerank_score"] = score
+        if chunk.id in by_id:
+            chunk.metadata["fused_score"] = by_id[chunk.id].fused_score
     diagnostics = RetrievalDiagnostics(
         mode=mode,
         reranker=outcome.reranker,

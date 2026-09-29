@@ -113,6 +113,22 @@ class Source(BaseModel):
     score: float | None = Field(
         default=None, ge=0, le=1, description="Relevance score (0-1)"
     )
+    # Citation metadata (additive; every field is optional so older clients and
+    # payloads without these fields keep working).
+    handle: str | None = Field(
+        default=None,
+        description="Citation handle the answer text uses for this source, e.g. 'S1'. "
+        "Inline markers like [S1] in the answer refer to it.",
+    )
+    document_id: str | None = Field(default=None, description="Parent document id")
+    title: str | None = Field(default=None, description="Document title, when known")
+    section: str | None = Field(default=None, description="Section or heading, when known")
+    page: int | None = Field(default=None, description="First page of the chunk, when known")
+    relevance_score: float | None = Field(
+        default=None,
+        description="Raw retrieval score of this chunk: the rerank score when "
+        "available, else the fused or dense score. Not bounded to 0-1.",
+    )
 
 
 class RetrievedChunkDiagnostics(BaseModel):
@@ -174,7 +190,53 @@ class RetrievalDiagnostics(BaseModel):
     )
 
 
-class Answer(BaseModel):
+GroundingStatus = Literal["answered", "partial", "insufficient_context"]
+
+
+class Claim(BaseModel):
+    """One factual statement of an answer and the sources that back it."""
+
+    text: str = Field(description="The claim, as stated in the answer")
+    citations: list[str] = Field(
+        default_factory=list, description="Validated citation handles, e.g. ['S1', 'S3']"
+    )
+    chunk_ids: list[str] = Field(
+        default_factory=list, description="Chunk ids behind `citations`, in the same order"
+    )
+    supported: bool = Field(
+        default=True, description="Whether the model marked the claim as supported by the context"
+    )
+
+
+class _GroundingFields(BaseModel):
+    """Grounding and citation fields shared by Answer and StrategyComparison."""
+
+    grounded: bool = Field(
+        default=False,
+        description="True when status is 'answered', every claim cites at least one "
+        "retrieved chunk, and no citation pointed outside the context.",
+    )
+    status: GroundingStatus | None = Field(
+        default=None,
+        description="'answered', 'partial' or 'insufficient_context'. None when no "
+        "answer was generated (e.g. a provider error).",
+    )
+    claims: list[Claim] = Field(default_factory=list, description="Claims with their citations")
+    invalid_citations: list[str] = Field(
+        default_factory=list,
+        description="Citation handles the model used that were not in its context; "
+        "they were removed from the answer text.",
+    )
+    citation_count: int = Field(
+        default=0, ge=0, description="Number of distinct valid sources cited"
+    )
+    unsupported_notes: str | None = Field(
+        default=None,
+        description="What the model said the context does not cover, if anything.",
+    )
+
+
+class Answer(_GroundingFields):
     """A generated answer with sources and confidence.
 
     Attributes:
@@ -207,10 +269,14 @@ class Answer(BaseModel):
     question: str = Field(description="The question asked")
     answer: str = Field(description="The generated answer text")
     sources: list[Source] = Field(
-        min_length=1, description="Chunks supporting this answer"
+        min_length=1,
+        description="Chunks the answer cites (validated), in order of first citation",
     )
     confidence: float = Field(
-        ge=0, le=1, description="Model confidence in the answer (0-1)"
+        ge=0,
+        le=1,
+        description="Evidence score (0-1) derived from citation coverage, grounding "
+        "status and the relevance of cited chunks; not a calibrated probability",
     )
     refusal: bool = Field(
         default=False, description="Whether the model refused to answer"
@@ -567,7 +633,7 @@ class HumanRating(HumanRatingRequest):
     created_at: str = Field(description="ISO 8601 creation timestamp")
 
 
-class StrategyComparison(BaseModel):
+class StrategyComparison(_GroundingFields):
     """Result of running one strategy on a question.
 
     Used internally to compare strategies side-by-side.
@@ -606,8 +672,8 @@ class StrategyComparison(BaseModel):
     strategy: str = Field(description="Strategy name (classic, graph, agentic)")
     question: str = Field(description="The question")
     answer: str = Field(description="The answer")
-    sources: list[Source] = Field(description="Retrieved sources")
-    confidence: float = Field(ge=0, le=1, description="Confidence (0-1)")
+    sources: list[Source] = Field(description="Cited sources (validated)")
+    confidence: float = Field(ge=0, le=1, description="Evidence score (0-1), see Answer")
     refusal: bool = Field(default=False, description="Whether model refused")
     latency_ms: int = Field(ge=0, description="Response time (ms)")
     input_tokens: int = Field(ge=0, description="Tokens sent to model")

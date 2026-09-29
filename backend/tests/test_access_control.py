@@ -6,6 +6,7 @@ whatever the code sends.
 """
 from __future__ import annotations
 
+import json
 from unittest.mock import AsyncMock, patch
 
 import pytest
@@ -405,7 +406,7 @@ class TestGraphStrategy:
 
         async def fake_generate(**kwargs):
             prompts.append(kwargs["prompt"])
-            return {"text": "ok", "input_tokens": 1, "output_tokens": 1}
+            return {"text": "ok [S1]", "input_tokens": 1, "output_tokens": 1}
 
         prompts: list[str] = []
         with (
@@ -418,7 +419,7 @@ class TestGraphStrategy:
                 "app.rag.strategies.graph.rerank_async",
                 new=AsyncMock(side_effect=lambda q, chunks, top_k: chunks[:top_k]),
             ),
-            patch("app.rag.strategies.graph.generate_with_usage", new=fake_generate),
+            patch("app.rag.strategies.graph.generate_structured", new=fake_generate),
         ):
             result = await GraphRAG().run(
                 "Who does Alice work with?",
@@ -432,8 +433,12 @@ class TestGraphStrategy:
         assert "manages" in prompt
         assert "audits" not in prompt and "Ledger" not in prompt
         assert "text of fin" not in prompt and "text of acme" not in prompt
+        assert result.refusal is False
         assert {s.chunk_id.split(":")[0] for s in result.sources} <= _expected(
             scope("default", "hr")
+        )
+        assert {c["chunk_id"].split(":")[0] for c in result.extra["context_sources"]} <= (
+            _expected(scope("default", "hr"))
         )
         assert "ledger" not in result.extra["related_entities"]
 
@@ -456,7 +461,7 @@ class TestClassicStrategy:
                 ),
             ),
             patch(
-                "app.rag.strategies.classic.generate_with_usage",
+                "app.rag.strategies.classic.generate_structured",
                 new=AsyncMock(return_value={"text": "a", "input_tokens": 1, "output_tokens": 1}),
             ),
         ):
@@ -476,8 +481,20 @@ class TestAgenticStrategy:
         async def fake_loop(**kwargs):
             tools = kwargs["tool_handlers"]
             seen["search"] = await tools["search"]({"query": "anything", "top_k": 12})
-            seen["fetch_forbidden"] = await tools["fetch_chunk"]({"chunk_id": "fin:0"})
-            seen["fetch_allowed"] = await tools["fetch_chunk"]({"chunk_id": "hr:0"})
+            handles = {r["preview"]: r["source"] for r in json.loads(seen["search"])}
+            # A raw chunk id, even of a real chunk, is not a handle the agent was given.
+            seen["fetch_forbidden"] = await tools["fetch_chunk"]({"source": "fin:0"})
+            seen["fetch_unseen"] = await tools["fetch_chunk"]({"source": "S99"})
+            seen["fetch_allowed"] = await tools["fetch_chunk"]({"source": handles["text of hr"]})
+            # Citing a handle it never saw cannot smuggle a forbidden chunk in.
+            await tools["finish"](
+                {
+                    "answer": "hr says so [S1] and fin too [S99]",
+                    "claims": [],
+                    "status": "answered",
+                    "unsupported_notes": "",
+                }
+            )
             return {"text": "", "input_tokens": 0, "output_tokens": 0, "iterations": 1, "trace": []}
 
         with (
@@ -489,9 +506,14 @@ class TestAgenticStrategy:
             )
 
         assert "fin:0" not in seen["search"] and "acme" not in seen["search"]
-        assert seen["fetch_forbidden"] == "error: chunk 'fin:0' not found"
+        assert "text of fin" not in seen["search"]
+        assert seen["fetch_forbidden"].startswith("error: unknown source")
+        assert seen["fetch_unseen"].startswith("error: unknown source")
         assert seen["fetch_allowed"] == "text of hr"
         assert "fin:0" not in result.extra["retrieved_ids"]
+        assert result.invalid_citations == ["S99"]
+        assert "[S99]" not in result.answer
+        assert all(not s.chunk_id.startswith("fin") for s in result.sources)
 
 
 # ---------------------------------------------------------------------------

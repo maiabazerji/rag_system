@@ -163,7 +163,7 @@ class TestProviderRouting:
                 "app.rag.retrieve.rerank_scored_async",
                 new=AsyncMock(return_value=RerankOutcome.unscored(chunks)),
             ),
-            patch("app.rag.strategies.classic.generate_with_usage", new=gen),
+            patch("app.rag.strategies.classic.generate_structured", new=gen),
         ):
             ans = await answer_question("q", provider="local")
 
@@ -218,7 +218,7 @@ class TestGraphTokens:
             patch("app.rag.strategies.graph.rerank_async", new=AsyncMock(return_value=chunks)),
             patch("app.rag.strategies.graph.describe_subgraph", return_value="G"),
             patch(
-                "app.rag.strategies.graph.generate_with_usage",
+                "app.rag.strategies.graph.generate_structured",
                 new=AsyncMock(
                     return_value={"text": "a", "input_tokens": 200, "output_tokens": 50}
                 ),
@@ -303,7 +303,14 @@ class TestAgenticOutcomes:
         async def fake_loop(**kwargs):
             handlers = kwargs["tool_handlers"]
             await handlers["search"]({"query": "x"})
-            await handlers["finish"]({"answer": "A", "citations": ["c1"]})
+            await handlers["finish"](
+                {
+                    "answer": "A [S1]",
+                    "claims": [{"text": "A", "citations": ["S1"], "supported": True}],
+                    "status": "answered",
+                    "unsupported_notes": "",
+                }
+            )
             return _loop_out("", "terminal_tool", False)
 
         hit = {"chunk_id": "c1", "doc_id": "d", "text": "chunk text", "filename": "f.md"}
@@ -314,7 +321,9 @@ class TestAgenticOutcomes:
         ):
             result = await AgenticRAG().run("q", top_k=8, model="claude-sonnet-5", prompt_version="default")
 
-        assert result.answer == "A" and result.refusal is False
+        assert result.answer == "A [S1]" and result.refusal is False
+        assert result.grounded is True
+        assert [src.chunk_id for src in result.sources] == ["c1"]
         assert result.extra["retrieved_ids"] == ["c1"]
         assert result.extra["retrieved_docs"] == ["f.md"]
         assert "chunk text" in result.extra["context_text"]

@@ -424,9 +424,9 @@ class TestAskResponse:
         with (
             patch("app.rag.generate.store_count", new=AsyncMock(return_value=10)),
             patch(
-                "app.rag.strategies.classic.generate_with_usage",
+                "app.rag.strategies.classic.generate_structured",
                 new=AsyncMock(
-                    return_value={"text": "An answer.", "input_tokens": 1, "output_tokens": 1}
+                    return_value={"text": "An answer [S1].", "input_tokens": 1, "output_tokens": 1}
                 ),
             ),
         ):
@@ -446,9 +446,9 @@ class TestAskResponse:
         with (
             patch("app.rag.generate.store_count", new=AsyncMock(return_value=10)),
             patch(
-                "app.rag.strategies.classic.generate_with_usage",
+                "app.rag.strategies.classic.generate_structured",
                 new=AsyncMock(
-                    return_value={"text": "An answer.", "input_tokens": 1, "output_tokens": 1}
+                    return_value={"text": "An answer [S1].", "input_tokens": 1, "output_tokens": 1}
                 ),
             ),
         ):

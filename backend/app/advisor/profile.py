@@ -27,7 +27,7 @@ from app.advisor.schemas import (
 )
 from app.config import settings
 from app.logging_config import get_structured_logger
-from app.rag.providers.anthropic_provider import _create_message
+from app.rag.providers.anthropic_provider import _create_message, tool_request_options
 
 logger = get_structured_logger(__name__)
 
@@ -129,21 +129,15 @@ SYSTEM_PROMPT = (
     "default rather than an extreme. Never invent compliance requirements."
 )
 
-# Models that reject sampling parameters and/or forced tool_choice. Everything
-# else (Haiku 4.5, Sonnet/Opus 4.6 and older) accepts temperature=0 and a forced tool.
-_MODERN_MODEL = re.compile(r"(sonnet-5|opus-5|opus-4-[78]|fable|mythos)")
-
-
 def _request_options(model: str) -> dict[str, Any]:
     """Determinism controls the model accepts.
 
     Newer models return 400 for ``temperature`` and for forced ``tool_choice``
     (forced tool use is also incompatible with the adaptive thinking they run by
-    default), so those get ``auto`` and rely on the system instruction.
+    default), so those get ``auto`` and rely on the system instruction. The
+    rule lives in the Anthropic provider, shared with grounded generation.
     """
-    if _MODERN_MODEL.search(model):
-        return {"tool_choice": {"type": "auto"}}
-    return {"tool_choice": {"type": "tool", "name": TOOL_NAME}, "temperature": 0}
+    return tool_request_options(model, TOOL_NAME)
 
 
 async def extract_with_llm(description: str) -> tuple[ProjectProfile, int, int]:

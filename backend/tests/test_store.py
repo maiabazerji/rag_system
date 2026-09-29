@@ -15,6 +15,7 @@ from qdrant_client.http import models as qm
 
 from app.rag import graph_store, store
 from app.rag.graph_store import Triple
+from app.rag.retrieve import RetrievalResult
 from app.rag.store import StoreUnavailable
 from app.resilience import CircuitBreaker
 from app.schemas import Chunk
@@ -122,28 +123,37 @@ class TestFetchChunks:
         assert [c.id for c in chunks] == ["d:1"]
         assert chunks[0].text == "hello"
 
-    async def test_agentic_fetch_tool_fetches_by_id(self):
+    async def test_agentic_fetch_tool_reads_a_searched_source_by_handle(self):
         from app.rag.strategies.agentic import AgenticRAG
 
         captured = {}
 
         async def fake_loop(**kwargs):
-            captured["out"] = await kwargs["tool_handlers"]["fetch_chunk"]({"chunk_id": "d:1"})
+            tools = kwargs["tool_handlers"]
+            captured["search"] = await tools["search"]({"query": "q"})
+            captured["out"] = await tools["fetch_chunk"]({"source": "S1"})
+            captured["raw_id"] = await tools["fetch_chunk"]({"source": "d:1"})
             return {"text": "", "input_tokens": 0, "output_tokens": 0, "iterations": 1, "trace": []}
 
+        body = "chunk body " * 50
         with (
             patch("app.rag.strategies.agentic.tool_use_loop", new=fake_loop),
             patch(
-                "app.rag.strategies.agentic.fetch_chunks",
-                new=AsyncMock(return_value=[_record("d:1", "d", "chunk body")]),
-            ) as mock_fetch,
-            patch("app.rag.strategies.agentic.hybrid_search", new=AsyncMock()) as mock_search,
+                "app.rag.strategies.agentic.hybrid_search",
+                new=AsyncMock(
+                    return_value=RetrievalResult(
+                        chunks=[Chunk(id="d:1", doc_id="d", text=body, tokens=100, metadata={})]
+                    )
+                ),
+            ),
         ):
             await AgenticRAG().run("q", top_k=8, model="claude-sonnet-5", prompt_version="v1")
 
-        mock_fetch.assert_awaited_once_with(["d:1"], access=None)
-        mock_search.assert_not_awaited()
-        assert captured["out"] == "chunk body"
+        # The agent sees a handle, never the chunk id, and fetches by that handle.
+        assert "d:1" not in captured["search"]
+        assert '"source": "S1"' in captured["search"]
+        assert captured["out"] == body
+        assert captured["raw_id"].startswith("error: unknown source")
 
 
 class TestScrollChunks:

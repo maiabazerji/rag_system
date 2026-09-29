@@ -14,7 +14,7 @@ from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 
 from app.access import AccessScope
-from app.schemas import Source
+from app.schemas import Claim, Source
 
 
 @dataclass
@@ -30,7 +30,8 @@ class StrategyResult:
         sources: List of Source objects citing specific chunks that support the answer.
         refusal: Whether the strategy refused to answer (no relevant context found).
             Defaults to False.
-        confidence: Model's confidence in the answer (0.0-1.0). Defaults to 0.85.
+        confidence: Evidence score (0.0-1.0) from :func:`app.rag.grounding.evidence_score`;
+            not a calibrated probability. Defaults to 0.0.
         latency_ms: Total execution time in milliseconds. Defaults to 0.
         input_tokens: Number of tokens consumed for input. Defaults to 0.
         output_tokens: Number of tokens generated. Defaults to 0.
@@ -44,6 +45,14 @@ class StrategyResult:
             ``retrieved_docs`` (the filename behind each of those ids) and
             ``context_text`` (the context exactly as the generator saw it).
         trace_id: Id of the request trace, retrievable from ``/traces/{id}``.
+        grounded: Whether every claim is backed by a valid citation (see
+            :func:`app.rag.grounding.validate_citations`).
+        status: ``answered``, ``partial`` or ``insufficient_context``; None
+            when no answer was generated.
+        claims: Claims with their validated citations.
+        invalid_citations: Handles the model cited that were not in its context.
+        citation_count: Distinct valid sources cited.
+        unsupported_notes: What the model said the context does not cover.
 
     Example:
         >>> result = StrategyResult(
@@ -58,7 +67,7 @@ class StrategyResult:
     answer: str
     sources: list[Source]
     refusal: bool = False
-    confidence: float = 0.85
+    confidence: float = 0.0
     latency_ms: int = 0
     input_tokens: int = 0
     output_tokens: int = 0
@@ -66,6 +75,12 @@ class StrategyResult:
     trace: list[dict] = field(default_factory=list)
     extra: dict = field(default_factory=dict)
     trace_id: str | None = None
+    grounded: bool = False
+    status: str | None = None
+    claims: list[Claim] = field(default_factory=list)
+    invalid_citations: list[str] = field(default_factory=list)
+    citation_count: int = 0
+    unsupported_notes: str | None = None
 
 
 class Strategy(ABC):

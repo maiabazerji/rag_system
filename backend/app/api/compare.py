@@ -7,7 +7,7 @@ from app.access import Principal
 from app.audit import audited
 from app.auth import charge, record_tokens, require_principal, strategy_units
 from app.logging_config import get_structured_logger
-from app.rag.generate import answer_question, run_strategy_raw
+from app.rag.generate import answer_question, grounding_fields, run_strategy_raw
 from app.schemas import (
     CompareRequest,
     CompareStrategiesRequest,
@@ -207,6 +207,7 @@ async def _run_strategies(
                 extra=result.extra,
                 trace_id=result.trace_id,
                 retrieval=result.extra.get("retrieval"),
+                **grounding_fields(result),
             )
         )
     return results, total_in, total_out
