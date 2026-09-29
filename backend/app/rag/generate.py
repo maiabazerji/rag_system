@@ -226,7 +226,7 @@ async def answer_question_detailed(
         effective_provider = provider or settings.generator_provider
     model = model or _default_model(effective_provider, strategy)
     prompt_version = prompt_version or "default"
-    top_k = settings.rerank_top_k if top_k is None else top_k
+    top_k = settings.final_context_k if top_k is None else top_k
 
     try:
         doc_count = await store_count(access)
@@ -391,6 +391,7 @@ async def answer_question_detailed(
             input_tokens=result.input_tokens,
             output_tokens=result.output_tokens,
             trace_id=trace.id,
+            retrieval=result.extra.get("retrieval"),
         )
         return trace.finish(answer), result
 
@@ -437,7 +438,7 @@ async def run_strategy_raw(
         ...     print(f"Trace: {result.trace}")
     """
     model = model or _default_model("anthropic", strategy)
-    top_k = settings.rerank_top_k if top_k is None else top_k
+    top_k = settings.final_context_k if top_k is None else top_k
     try:
         doc_count = await store_count(access)
         if doc_count == 0:

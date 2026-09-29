@@ -12,6 +12,8 @@ from fastapi import HTTPException
 from app import auth
 from app.config import VALID_ANTHROPIC_MODELS, Settings
 from app.rag.providers.base import MissingKeyError, ProviderError
+from app.rag.rerank import RerankOutcome
+from app.rag.retrieve import RetrievalResult
 from app.rag.strategies.base import StrategyResult
 from app.schemas import (
     Answer,
@@ -156,8 +158,11 @@ class TestProviderRouting:
         gen = AsyncMock(return_value={"text": "hi", "input_tokens": 7, "output_tokens": 2})
         with (
             patch("app.rag.generate.store_count", new=AsyncMock(return_value=5)),
-            patch("app.rag.strategies.classic.dense_search", new=AsyncMock(return_value=chunks)),
-            patch("app.rag.strategies.classic.rerank_async", new=AsyncMock(return_value=chunks)),
+            patch("app.rag.retrieve.dense_search", new=AsyncMock(return_value=chunks)),
+            patch(
+                "app.rag.retrieve.rerank_scored_async",
+                new=AsyncMock(return_value=RerankOutcome.unscored(chunks)),
+            ),
             patch("app.rag.strategies.classic.generate_with_usage", new=gen),
         ):
             ans = await answer_question("q", provider="local")
@@ -208,7 +213,7 @@ class TestGraphTokens:
                 new=AsyncMock(return_value=ents),
             ),
             patch("app.rag.strategies.graph.neighbors", return_value=(set(), set())),
-            patch("app.rag.strategies.graph.dense_search", new=AsyncMock(return_value=chunks)),
+            patch("app.rag.retrieve.dense_search", new=AsyncMock(return_value=chunks)),
             patch("app.rag.strategies.graph._fetch_chunks_by_id", new=AsyncMock(return_value=[])),
             patch("app.rag.strategies.graph.rerank_async", new=AsyncMock(return_value=chunks)),
             patch("app.rag.strategies.graph.describe_subgraph", return_value="G"),
@@ -281,17 +286,16 @@ class TestAgenticOutcomes:
             captured["search"] = kwargs["tool_handlers"]["search"]
             return _loop_out("", "end_turn", False)
 
-        search = AsyncMock(return_value=[])
+        search = AsyncMock(return_value=RetrievalResult(chunks=[]))
         with (
             patch("app.rag.strategies.agentic.tool_use_loop", new=fake_loop),
-            patch("app.rag.strategies.agentic.embed_query_async", new=AsyncMock(return_value=[0.0])),
-            patch("app.rag.strategies.agentic.vector_search", new=search),
+            patch("app.rag.strategies.agentic.hybrid_search", new=search),
         ):
             await AgenticRAG().run("q", top_k=8, model="claude-sonnet-5", prompt_version="default")
             await captured["search"]({"query": "x", "top_k": 5000})
             await captured["search"]({"query": "x", "top_k": "junk"})
 
-        assert [c.kwargs["top_k"] for c in search.await_args_list] == [12, 5]
+        assert [c.kwargs["final_k"] for c in search.await_args_list] == [12, 5]
 
     async def test_finish_answer_carries_the_context_it_read(self):
         from app.rag.strategies.agentic import AgenticRAG
@@ -302,11 +306,11 @@ class TestAgenticOutcomes:
             await handlers["finish"]({"answer": "A", "citations": ["c1"]})
             return _loop_out("", "terminal_tool", False)
 
-        hit = MagicMock(payload={"chunk_id": "c1", "doc_id": "d", "text": "chunk text", "filename": "f.md"})
+        hit = {"chunk_id": "c1", "doc_id": "d", "text": "chunk text", "filename": "f.md"}
         with (
             patch("app.rag.strategies.agentic.tool_use_loop", new=fake_loop),
-            patch("app.rag.strategies.agentic.embed_query_async", new=AsyncMock(return_value=[0.0])),
-            patch("app.rag.strategies.agentic.vector_search", new=AsyncMock(return_value=[hit])),
+            patch("app.rag.retrieve.embed_query_async", new=AsyncMock(return_value=[0.0])),
+            patch("app.rag.retrieve.search", new=AsyncMock(return_value=[MagicMock(payload=hit)])),
         ):
             result = await AgenticRAG().run("q", top_k=8, model="claude-sonnet-5", prompt_version="default")
 

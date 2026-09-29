@@ -2,6 +2,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
+from app.rag.rerank import RerankOutcome
 from app.rag.strategies.agentic import AgenticRAG
 from app.rag.strategies.classic import ClassicRAG
 from app.rag.strategies.graph import GraphRAG
@@ -15,11 +16,11 @@ class TestClassicRAG:
 
         strategy = ClassicRAG()
 
-        with patch("app.rag.strategies.classic.dense_search", new_callable=AsyncMock) as mock_search:
-            with patch("app.rag.strategies.classic.rerank_async") as mock_rerank:
+        with patch("app.rag.retrieve.dense_search", new_callable=AsyncMock) as mock_search:
+            with patch("app.rag.retrieve.rerank_scored_async") as mock_rerank:
                 with patch("app.rag.strategies.classic.generate_with_usage", new_callable=AsyncMock) as mock_gen:
                     mock_search.return_value = chunks
-                    mock_rerank.return_value = chunks[:2]
+                    mock_rerank.return_value = RerankOutcome.unscored(chunks[:2])
                     mock_gen.return_value = {
                         "text": "Test answer based on the context.",
                         "input_tokens": 150,
@@ -47,10 +48,10 @@ class TestClassicRAG:
         """Test classic RAG with empty context."""
         strategy = ClassicRAG()
 
-        with patch("app.rag.strategies.classic.dense_search", new_callable=AsyncMock) as mock_search:
-            with patch("app.rag.strategies.classic.rerank_async") as mock_rerank:
+        with patch("app.rag.retrieve.dense_search", new_callable=AsyncMock) as mock_search:
+            with patch("app.rag.retrieve.rerank_scored_async") as mock_rerank:
                 mock_search.return_value = []
-                mock_rerank.return_value = []
+                mock_rerank.return_value = RerankOutcome.unscored([])
 
                 result = await strategy.run(
                     "What is the test topic?",
@@ -69,11 +70,11 @@ class TestClassicRAG:
         chunks = fake_chunks(2)
         strategy = ClassicRAG()
 
-        with patch("app.rag.strategies.classic.dense_search", new_callable=AsyncMock) as mock_search:
-            with patch("app.rag.strategies.classic.rerank_async") as mock_rerank:
+        with patch("app.rag.retrieve.dense_search", new_callable=AsyncMock) as mock_search:
+            with patch("app.rag.retrieve.rerank_scored_async") as mock_rerank:
                 with patch("app.rag.strategies.classic.generate_with_usage", new_callable=AsyncMock) as mock_gen:
                     mock_search.return_value = chunks
-                    mock_rerank.return_value = chunks
+                    mock_rerank.return_value = RerankOutcome.unscored(chunks)
                     mock_gen.side_effect = RuntimeError("API timeout")
 
                     with pytest.raises(RuntimeError):
@@ -89,11 +90,11 @@ class TestClassicRAG:
         chunks = fake_chunks(2)
         strategy = ClassicRAG()
 
-        with patch("app.rag.strategies.classic.dense_search", new_callable=AsyncMock) as mock_search:
-            with patch("app.rag.strategies.classic.rerank_async") as mock_rerank:
+        with patch("app.rag.retrieve.dense_search", new_callable=AsyncMock) as mock_search:
+            with patch("app.rag.retrieve.rerank_scored_async") as mock_rerank:
                 with patch("app.rag.strategies.classic.generate_with_usage", new_callable=AsyncMock) as mock_gen:
                     mock_search.return_value = chunks
-                    mock_rerank.return_value = chunks
+                    mock_rerank.return_value = RerankOutcome.unscored(chunks)
                     mock_gen.return_value = {
                         "text": "",
                         "input_tokens": 100,
@@ -140,7 +141,7 @@ class TestGraphRAG:
         with patch("app.rag.strategies.graph.load_graph") as mock_load:
             with patch("app.rag.strategies.graph.extract_question_entities", new_callable=AsyncMock) as mock_extract:
                 with patch("app.rag.strategies.graph.neighbors") as mock_neighbors:
-                    with patch("app.rag.strategies.graph.dense_search", new_callable=AsyncMock) as mock_search:
+                    with patch("app.rag.retrieve.dense_search", new_callable=AsyncMock) as mock_search:
                         with patch("app.rag.strategies.graph._fetch_chunks_by_id", new_callable=AsyncMock) as mock_fetch:
                             with patch("app.rag.strategies.graph.rerank_async") as mock_rerank:
                                 with patch("app.rag.strategies.graph.describe_subgraph") as mock_describe:
@@ -181,7 +182,7 @@ class TestGraphRAG:
         with patch("app.rag.strategies.graph.load_graph") as mock_load:
             with patch("app.rag.strategies.graph.extract_question_entities", new_callable=AsyncMock) as mock_extract:
                 with patch("app.rag.strategies.graph.neighbors") as mock_neighbors:
-                    with patch("app.rag.strategies.graph.dense_search", new_callable=AsyncMock) as mock_search:
+                    with patch("app.rag.retrieve.dense_search", new_callable=AsyncMock) as mock_search:
                         with patch("app.rag.strategies.graph._fetch_chunks_by_id", new_callable=AsyncMock) as mock_fetch:
                             with patch("app.rag.strategies.graph.rerank_async") as mock_rerank:
                                 mock_graph = MagicMock()
@@ -271,8 +272,8 @@ class TestAgenticRAG:
                 "trace": [],
             }
 
-            with patch("app.rag.strategies.agentic.embed_query_async"):
-                with patch("app.rag.strategies.agentic.vector_search", new_callable=AsyncMock):
+            with patch("app.rag.retrieve.embed_query_async"):
+                with patch("app.rag.strategies.agentic.hybrid_search", new_callable=AsyncMock):
                     await strategy.run(
                         "What?",
                         top_k=8,

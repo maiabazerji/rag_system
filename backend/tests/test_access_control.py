@@ -24,6 +24,7 @@ from app.access import (
 )
 from app.rag import graph_store, store
 from app.rag.graph_store import Triple
+from app.rag.rerank import RerankOutcome
 from app.resilience import CircuitBreaker
 from app.schemas import Answer, Chunk, Source
 
@@ -449,8 +450,10 @@ class TestClassicStrategy:
         with (
             patch("app.rag.retrieve.embed_query_async", new=AsyncMock(return_value=VEC)),
             patch(
-                "app.rag.strategies.classic.rerank_async",
-                new=AsyncMock(side_effect=lambda q, chunks, top_k: chunks[:top_k]),
+                "app.rag.retrieve.rerank_scored_async",
+                new=AsyncMock(
+                    side_effect=lambda q, chunks, top_k: RerankOutcome.unscored(chunks[:top_k])
+                ),
             ),
             patch(
                 "app.rag.strategies.classic.generate_with_usage",
@@ -479,7 +482,7 @@ class TestAgenticStrategy:
 
         with (
             patch("app.rag.strategies.agentic.tool_use_loop", new=fake_loop),
-            patch("app.rag.strategies.agentic.embed_query_async", new=AsyncMock(return_value=VEC)),
+            patch("app.rag.retrieve.embed_query_async", new=AsyncMock(return_value=VEC)),
         ):
             result = await AgenticRAG().run(
                 "q", top_k=8, model="m", prompt_version="v", access=scope("default", "hr")

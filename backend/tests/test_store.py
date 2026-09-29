@@ -137,7 +137,7 @@ class TestFetchChunks:
                 "app.rag.strategies.agentic.fetch_chunks",
                 new=AsyncMock(return_value=[_record("d:1", "d", "chunk body")]),
             ) as mock_fetch,
-            patch("app.rag.strategies.agentic.vector_search", new=AsyncMock()) as mock_search,
+            patch("app.rag.strategies.agentic.hybrid_search", new=AsyncMock()) as mock_search,
         ):
             await AgenticRAG().run("q", top_k=8, model="claude-sonnet-5", prompt_version="v1")
 
