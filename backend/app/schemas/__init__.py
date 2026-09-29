@@ -431,6 +431,29 @@ class CompareRequest(_QuestionMixin):
     )
 
 
+_NAME_PATTERN = r"^[A-Za-z0-9_-][A-Za-z0-9._-]*$"
+
+
+class CompareReference(BaseModel):
+    """A caller-supplied reference for scoring a strategy comparison."""
+
+    ideal_answer: str | None = Field(
+        default=None, max_length=8000, description="Reference answer"
+    )
+    relevant_doc_ids: list[str] | None = Field(
+        default=None,
+        max_length=50,
+        description="Documents relevant to the question (filenames or ids)",
+    )
+
+
+class GoldenRef(BaseModel):
+    """Points at one example of a golden dataset."""
+
+    dataset: str = Field(min_length=1, max_length=64, pattern=_NAME_PATTERN)
+    id: str = Field(min_length=1, max_length=128)
+
+
 class CompareStrategiesRequest(_QuestionMixin, _RunOptionsMixin):
     """Request to compare RAG strategies on the same question.
 
@@ -459,6 +482,28 @@ class CompareStrategiesRequest(_QuestionMixin, _RunOptionsMixin):
     model: str | None = Field(
         default=None, max_length=128, description="Optional model override"
     )
+    evaluate: bool = Field(
+        default=False,
+        description="Also score each strategy's answer with the LLM judge and, when "
+        "relevant documents are known, with deterministic retrieval metrics. "
+        "Costs one extra rate-limit unit per strategy.",
+    )
+    reference: CompareReference | None = Field(
+        default=None,
+        description="Reference to score against: an ideal answer (enables "
+        "answer_correctness) and/or relevant documents (enables recall@K, MRR, nDCG).",
+    )
+    golden: GoldenRef | None = Field(
+        default=None,
+        description="Take the reference from a golden dataset example instead. "
+        "Mutually exclusive with `reference`.",
+    )
+
+    @model_validator(mode="after")
+    def _one_reference(self):
+        if self.reference is not None and self.golden is not None:
+            raise ValueError("pass either `reference` or `golden`, not both")
+        return self
 
 
 class EvalRunRequest(_RunOptionsMixin):
@@ -695,3 +740,51 @@ class StrategyComparison(_GroundingFields):
     retrieval: RetrievalDiagnostics | None = Field(
         default=None, description="Retrieval pipeline diagnostics, when the strategy has them"
     )
+    evaluation: "StrategyEvaluation | None" = Field(
+        default=None,
+        description="Judge and retrieval scores; only with /compare/strategies evaluate=true",
+    )
+
+
+class StrategyEvaluation(BaseModel):
+    """Scores for one strategy's row of a comparison (``evaluate=true``).
+
+    Judge scores are ``None`` when the judge failed -- never a default -- and
+    ``error`` says why. Retrieval metrics are present only when the relevant
+    documents are known.
+    """
+
+    status: Literal["scored", "judge_failed", "refusal_checked", "not_evaluated"] = Field(
+        description="'scored': judge verdict recorded; 'judge_failed': see error; "
+        "'refusal_checked': golden example expects a refusal, scored "
+        "deterministically; 'not_evaluated': the strategy produced no answer."
+    )
+    scores: dict[str, float | None] | None = Field(
+        default=None,
+        description="Judge scores: faithfulness, answer_relevance, context_precision, "
+        "context_recall, answer_correctness (null without a reference answer)",
+    )
+    reasoning: dict[str, str] = Field(default_factory=dict, description="Judge reasoning")
+    retrieval: dict[str, float] | None = Field(
+        default=None, description="Ranked retrieval metrics: mrr, recall@K, ndcg@K, ..."
+    )
+    retrieved_docs: list[str] = Field(
+        default_factory=list, description="Documents behind the context, best first"
+    )
+    relevant_docs: list[str] | None = Field(
+        default=None, description="Documents the reference labels relevant"
+    )
+    has_reference_answer: bool = False
+    correct_refusal: float | None = Field(
+        default=None, description="1 if the strategy declined an unanswerable example"
+    )
+    judge_model: str | None = None
+    rubric_version: str | None = None
+    judge_attempts: int = 0
+    judge_input_tokens: int = 0
+    judge_output_tokens: int = 0
+    error_type: str | None = None
+    error: str | None = None
+
+
+StrategyComparison.model_rebuild()
