@@ -1,8 +1,17 @@
 """Per-model prices and request cost estimates.
 
 Prices live in a checked-in TOML file, ``config/model_pricing.toml`` at the
-repository root, in US dollars per million input and output tokens. A
-deployment can point ``MODEL_PRICING_PATH`` at its own copy.
+repository root, in US dollars per million input and output tokens. That file
+is the one source of truth; ``app/data/model_pricing.toml`` is a byte-for-byte
+copy shipped inside the package so an image built from ``backend/`` alone (or
+an installed wheel) still has prices. tests/test_pricing.py fails when the two
+differ.
+
+The file is looked up in this order (see :func:`pricing_path`):
+
+1. ``MODEL_PRICING_PATH``, when set (a deployment's own table);
+2. ``config/model_pricing.toml`` at the repository root, when it exists;
+3. the copy packaged in ``app/data/``.
 
 An estimate is only ever made from a listed price: a model without a row (an
 OpenAI or Ollama model, a newly released Claude model) gets ``None``, never a
@@ -25,12 +34,10 @@ logger = logging.getLogger(__name__)
 
 TOKENS_PER_UNIT = 1_000_000
 PRICING_FILENAME = "model_pricing.toml"
-# The repository checkout (backend/app/pricing.py -> repo) and, in a container
-# where app/ sits at /app/app, the directory above the package.
-_DEFAULT_LOCATIONS = (
-    Path(__file__).resolve().parents[2] / "config" / PRICING_FILENAME,
-    Path(__file__).resolve().parents[1] / "config" / PRICING_FILENAME,
-)
+# The source of truth in a repository checkout (backend/app/pricing.py -> repo).
+REPO_PRICING_PATH = Path(__file__).resolve().parents[2] / "config" / PRICING_FILENAME
+# The copy shipped as package data, used when there is no checkout around.
+PACKAGED_PRICING_PATH = Path(__file__).resolve().parent / "data" / PRICING_FILENAME
 
 
 @dataclass(frozen=True)
@@ -64,10 +71,18 @@ class PriceTable:
 
 
 def pricing_path() -> Path | None:
-    """The price file to load: MODEL_PRICING_PATH, else the checked-in one."""
+    """The price file to load.
+
+    ``MODEL_PRICING_PATH`` when set (even if the file is missing, so a typo is
+    logged rather than silently replaced by list prices), else the repository's
+    ``config/model_pricing.toml`` when it exists, else the packaged copy.
+    """
     if settings.model_pricing_path:
         return Path(settings.model_pricing_path)
-    return next((p for p in _DEFAULT_LOCATIONS if p.is_file()), None)
+    for candidate in (REPO_PRICING_PATH, PACKAGED_PRICING_PATH):
+        if candidate.is_file():
+            return candidate
+    return None
 
 
 def _price(value: Any) -> float | None:

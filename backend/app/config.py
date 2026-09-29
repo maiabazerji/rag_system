@@ -353,7 +353,8 @@ class Settings(BaseSettings):
         default="",
         description=(
             "TOML file of per-model prices (USD per million input/output tokens). "
-            "Defaults to config/model_pricing.toml at the repository root."
+            "Defaults to config/model_pricing.toml at the repository root, else "
+            "the copy packaged in app/data/."
         ),
     )
 
