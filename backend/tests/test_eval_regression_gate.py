@@ -390,3 +390,33 @@ class TestGroupingKey:
                 encoding="utf-8",
             )
         assert regression.load_regressions() == []
+
+
+class TestRegressionRoute:
+    @staticmethod
+    def _save(run):
+        regression.RUNS_DIR.mkdir(parents=True, exist_ok=True)
+        body = {k: v for k, v in run.items() if k != "id"}
+        (regression.RUNS_DIR / f"{run['id']}.json").write_text(json.dumps(body), encoding="utf-8")
+
+    def test_reports_against_the_previous_run(self, client, monkeypatch):
+        monkeypatch.delenv("REGRESSION_THRESHOLDS_PATH", raising=False)
+        self._save(_run(run_id="20260101T000000Z-a"))
+        self._save(_run(run_id="20260102T000000Z-b", faith=0.5))
+
+        r = client.get("/eval/runs/20260102T000000Z-b/regression")
+        assert r.status_code == 200
+        body = r.json()
+        assert body["status"] == FAIL
+        assert body["baseline"]["id"] == "20260101T000000Z-a"
+        assert "| faithfulness |" in body["markdown"]
+
+    def test_unknown_run_is_404(self, client):
+        assert client.get("/eval/runs/nope/regression").status_code == 404
+
+    def test_bad_thresholds_file_is_a_500(self, client, tmp_path, monkeypatch):
+        self._save(_run(run_id="20260101T000000Z-a"))
+        bad = tmp_path / "bad.toml"
+        bad.write_text("[metrics\n", encoding="utf-8")
+        monkeypatch.setenv("REGRESSION_THRESHOLDS_PATH", str(bad))
+        assert client.get("/eval/runs/20260101T000000Z-a/regression").status_code == 500
