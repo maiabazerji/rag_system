@@ -106,7 +106,7 @@ export const en = {
   "ask.title": "Ask",
   "ask.subtitle": "Question indexed documents, in English or French. Sources let you verify accuracy.",
   "ask.strategy": "Strategy",
-  "ask.hint.classic": "vector search → rerank → answer",
+  "ask.hint.classic": "dense + BM25 → RRF → rerank → cited answer",
   "ask.hint.graph": "entity walk on knowledge graph",
   "ask.hint.agentic": "model loops over search/fetch tools",
   "ask.strategyAria": "{label} strategy: {hint}",
@@ -162,8 +162,8 @@ export const en = {
     'Building the graph needs the backend\'s admin key (ADMIN_KEY). Enter it in the "Admin key" field below and try again.{detail}',
   "compare.buildUnavailable":
     "Graph build is unavailable: the backend has no ADMIN_KEY configured, or a backing service is down. Set ADMIN_KEY in .env and restart the backend.{detail}",
-  "compare.tagline.classic": "embed → vector search → rerank → answer",
-  "compare.tagline.graph": "extract entities → walk knowledge graph → answer",
+  "compare.tagline.classic": "dense + BM25 → RRF fusion → rerank → cited answer",
+  "compare.tagline.graph": "entities → graph walk + hybrid search → rerank → cited answer",
   "compare.tagline.agentic": "model loops over search & fetch tools",
   "compare.sample1":
     "How does entity extraction in Graph RAG reduce hallucination compared to dense-only retrieval?",
@@ -475,7 +475,7 @@ export const en = {
   "dash.loading": "Loading evaluation runs…",
   "dash.loadFailed": "Failed to load evaluation runs: {error}",
   "dash.empty": "No evaluation runs yet",
-  "dash.emptyHelp": "Record a run for each strategy from the backend directory, then come back here:",
+  "dash.emptyHelp": "Record a run for each strategy from the repository root, then come back here:",
   "dash.emptyDataset": "No runs for this dataset.",
   "dash.chartTitle": "{metric} against {axis}",
   "dash.chartAria": "Scatter plot of {metric} against {axis}, one point per configuration. The table below lists every value.",
