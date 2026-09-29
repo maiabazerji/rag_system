@@ -61,6 +61,18 @@ def public_provider_error(exc: ProviderError, question: str | None = None) -> st
     return PROVIDER_UNAVAILABLE_MESSAGE
 
 
+def grounding_fields(result: StrategyResult) -> dict:
+    """The grounding/citation fields shared by Answer and StrategyComparison."""
+    return {
+        "grounded": result.grounded,
+        "status": result.status,
+        "claims": result.claims,
+        "invalid_citations": result.invalid_citations,
+        "citation_count": result.citation_count,
+        "unsupported_notes": result.unsupported_notes,
+    }
+
+
 def _refusal(
     question: str,
     message: str,
@@ -391,6 +403,7 @@ async def answer_question_detailed(
             input_tokens=result.input_tokens,
             output_tokens=result.output_tokens,
             trace_id=trace.id,
+            **grounding_fields(result),
         )
         return trace.finish(answer), result
 

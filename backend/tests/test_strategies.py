@@ -17,11 +17,23 @@ class TestClassicRAG:
 
         with patch("app.rag.strategies.classic.dense_search", new_callable=AsyncMock) as mock_search:
             with patch("app.rag.strategies.classic.rerank_async") as mock_rerank:
-                with patch("app.rag.strategies.classic.generate_with_usage", new_callable=AsyncMock) as mock_gen:
+                with patch("app.rag.strategies.classic.generate_structured", new_callable=AsyncMock) as mock_gen:
                     mock_search.return_value = chunks
                     mock_rerank.return_value = chunks[:2]
                     mock_gen.return_value = {
-                        "text": "Test answer based on the context.",
+                        "structured": {
+                            "answer": "Test answer based on the context [S2].",
+                            "claims": [
+                                {
+                                    "text": "Test answer based on the context.",
+                                    "citations": ["S2"],
+                                    "supported": True,
+                                }
+                            ],
+                            "status": "answered",
+                            "unsupported_notes": "",
+                        },
+                        "text": "",
                         "input_tokens": 150,
                         "output_tokens": 50,
                     }
@@ -33,9 +45,20 @@ class TestClassicRAG:
                         prompt_version="default",
                     )
 
-                    assert result.answer == "Test answer based on the context."
+                    assert result.answer == "Test answer based on the context [S2]."
                     assert result.refusal is False
-                    assert len(result.sources) == 2
+                    assert result.grounded is True
+                    assert result.status == "answered"
+                    # Only the cited chunk is a source; the full context stays in extra.
+                    assert [src.chunk_id for src in result.sources] == ["chunk_1"]
+                    assert result.sources[0].handle == "S2"
+                    assert result.sources[0].page == 1
+                    assert result.sources[0].section == "section_1"
+                    assert [c["handle"] for c in result.extra["context_sources"]] == ["S1", "S2"]
+                    assert result.claims[0].chunk_ids == ["chunk_1"]
+                    assert 0 < result.confidence <= 1
+                    prompt = mock_gen.await_args.kwargs["prompt"]
+                    assert "[S1]" in prompt and "chunk_0" not in prompt
                     assert result.input_tokens == 150
                     assert result.output_tokens == 50
                     assert result.iterations == 1
@@ -71,7 +94,7 @@ class TestClassicRAG:
 
         with patch("app.rag.strategies.classic.dense_search", new_callable=AsyncMock) as mock_search:
             with patch("app.rag.strategies.classic.rerank_async") as mock_rerank:
-                with patch("app.rag.strategies.classic.generate_with_usage", new_callable=AsyncMock) as mock_gen:
+                with patch("app.rag.strategies.classic.generate_structured", new_callable=AsyncMock) as mock_gen:
                     mock_search.return_value = chunks
                     mock_rerank.return_value = chunks
                     mock_gen.side_effect = RuntimeError("API timeout")
@@ -91,7 +114,7 @@ class TestClassicRAG:
 
         with patch("app.rag.strategies.classic.dense_search", new_callable=AsyncMock) as mock_search:
             with patch("app.rag.strategies.classic.rerank_async") as mock_rerank:
-                with patch("app.rag.strategies.classic.generate_with_usage", new_callable=AsyncMock) as mock_gen:
+                with patch("app.rag.strategies.classic.generate_structured", new_callable=AsyncMock) as mock_gen:
                     mock_search.return_value = chunks
                     mock_rerank.return_value = chunks
                     mock_gen.return_value = {
@@ -107,7 +130,9 @@ class TestClassicRAG:
                         prompt_version="default",
                     )
 
-                    assert result.answer == "(empty response)"
+                    assert result.refusal is True
+                    assert result.status == "insufficient_context"
+                    assert result.answer.startswith("I cannot answer this from the retrieved documents")
 
 
 @pytest.mark.asyncio
@@ -144,7 +169,7 @@ class TestGraphRAG:
                         with patch("app.rag.strategies.graph._fetch_chunks_by_id", new_callable=AsyncMock) as mock_fetch:
                             with patch("app.rag.strategies.graph.rerank_async") as mock_rerank:
                                 with patch("app.rag.strategies.graph.describe_subgraph") as mock_describe:
-                                    with patch("app.rag.strategies.graph.generate_with_usage", new_callable=AsyncMock) as mock_gen:
+                                    with patch("app.rag.strategies.graph.generate_structured", new_callable=AsyncMock) as mock_gen:
                                         mock_graph = MagicMock()
                                         mock_graph.triples = [("entity1", "relation", "entity2")]
                                         mock_load.return_value = mock_graph
@@ -156,7 +181,7 @@ class TestGraphRAG:
                                         mock_rerank.return_value = chunks[:3]
                                         mock_describe.return_value = "Entity1 -> relation -> Entity2"
                                         mock_gen.return_value = {
-                                            "text": "Graph-based answer.",
+                                            "text": "Graph-based answer [S3].",
                                             "input_tokens": 200,
                                             "output_tokens": 75,
                                         }
@@ -168,8 +193,10 @@ class TestGraphRAG:
                                             prompt_version="default",
                                         )
 
-                                        assert result.answer == "Graph-based answer."
+                                        assert result.answer == "Graph-based answer [S3]."
                                         assert result.refusal is False
+                                        assert [src.chunk_id for src in result.sources] == ["chunk_2"]
+                                        assert result.extra["grounding"]["mode"] == "text"
                                         assert "entity1" in result.extra["entities"]
                                         assert "subgraph" in result.extra
                                         assert result.input_tokens == 200
@@ -207,22 +234,42 @@ class TestGraphRAG:
 
 @pytest.mark.asyncio
 class TestAgenticRAG:
-    async def test_agentic_rag_success_with_finish(self, fake_chunks):
-        """Test agentic RAG that calls finish tool."""
+    async def test_agentic_rag_success_with_finish(self):
+        """The finish tool's citations are validated against what the agent saw."""
         strategy = AgenticRAG()
+        hits = [
+            MagicMock(payload={"chunk_id": f"c{i}", "doc_id": "d", "text": f"text {i}", "filename": "f.md"})
+            for i in range(2)
+        ]
 
-        with patch("app.rag.strategies.agentic.tool_use_loop", new_callable=AsyncMock) as mock_loop:
-            mock_loop.return_value = {
-                "text": "Final answer.",
+        async def fake_loop(**kwargs):
+            tools = kwargs["tool_handlers"]
+            await tools["search"]({"query": "x"})
+            await tools["finish"](
+                {
+                    "answer": "Final answer [S2].",
+                    "claims": [{"text": "Final answer.", "citations": ["S2"], "supported": True}],
+                    "status": "answered",
+                    "unsupported_notes": "",
+                }
+            )
+            return {
+                "text": "",
                 "input_tokens": 300,
                 "output_tokens": 100,
                 "iterations": 2,
+                "stop_reason": "terminal_tool",
                 "trace": [
                     {"step": 0, "tool_calls": [{"name": "search"}]},
                     {"step": 1, "tool_calls": [{"name": "finish"}]},
                 ],
             }
 
+        with (
+            patch("app.rag.strategies.agentic.tool_use_loop", new=fake_loop),
+            patch("app.rag.strategies.agentic.embed_query_async", new=AsyncMock(return_value=[0.0])),
+            patch("app.rag.strategies.agentic.vector_search", new=AsyncMock(return_value=hits)),
+        ):
             result = await strategy.run(
                 "Search for information?",
                 top_k=8,
@@ -230,13 +277,48 @@ class TestAgenticRAG:
                 prompt_version="default",
             )
 
-            assert result.answer == "Final answer."
-            assert result.iterations == 2
-            assert result.input_tokens == 300
-            assert mock_loop.called
+        assert result.answer == "Final answer [S2]."
+        assert result.grounded is True
+        assert [src.chunk_id for src in result.sources] == ["c1"]
+        assert result.iterations == 2
+        assert result.input_tokens == 300
+        assert result.trace[-1]["step"] == "validate_citations"
+
+    async def test_agentic_rag_cannot_cite_unseen_chunks(self):
+        """Handles the agent was never given, and raw chunk ids, are rejected."""
+        strategy = AgenticRAG()
+        hit = MagicMock(payload={"chunk_id": "c0", "doc_id": "d", "text": "seen", "filename": "f.md"})
+
+        async def fake_loop(**kwargs):
+            tools = kwargs["tool_handlers"]
+            await tools["search"]({"query": "x"})
+            await tools["finish"](
+                {
+                    "answer": "Invented [S7] and [secret:0].",
+                    "claims": [
+                        {"text": "Invented.", "citations": ["S7", "secret:0"], "supported": True}
+                    ],
+                    "status": "answered",
+                    "unsupported_notes": "",
+                }
+            )
+            return {"text": "", "input_tokens": 1, "output_tokens": 1, "iterations": 2, "trace": []}
+
+        with (
+            patch("app.rag.strategies.agentic.tool_use_loop", new=fake_loop),
+            patch("app.rag.strategies.agentic.embed_query_async", new=AsyncMock(return_value=[0.0])),
+            patch("app.rag.strategies.agentic.vector_search", new=AsyncMock(return_value=[hit])),
+        ):
+            result = await strategy.run("q", top_k=8, model="claude-sonnet-5", prompt_version="default")
+
+        assert result.refusal is True
+        assert result.grounded is False
+        assert set(result.invalid_citations) == {"S7", "secret:0"}
+        assert result.sources[0].chunk_id == "none"
+        assert result.confidence == 0.0
 
     async def test_agentic_rag_no_finish_call(self):
-        """Test agentic RAG when agent doesn't call finish."""
+        """Uncited prose instead of finish is not accepted as an answer."""
         strategy = AgenticRAG()
 
         with patch("app.rag.strategies.agentic.tool_use_loop", new_callable=AsyncMock) as mock_loop:
@@ -255,7 +337,8 @@ class TestAgenticRAG:
                 prompt_version="default",
             )
 
-            assert "Long response without finishing" in result.answer
+            assert result.refusal is True
+            assert result.extra["grounding"]["refusal_reason"] == "no_valid_citations"
             assert result.iterations == 3
 
     async def test_agentic_rag_tool_handlers(self):

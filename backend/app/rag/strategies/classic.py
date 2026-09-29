@@ -6,10 +6,13 @@
                           cross-encoder rerank (top-8)
                                 │
                                 ▼
-                  prompt = system + chunks + question
+          prompt = system + [S1..Sn] chunks + question
                                 │
                                 ▼
-                            Claude → answer
+              Claude → submit_answer(answer, claims, status)
+                                │
+                                ▼
+            validate citations → cited sources, grounded, evidence score
 
 Strengths:
     - Simple, predictable, low-cost pipeline
@@ -35,7 +38,15 @@ from app.config import settings
 from app.i18n import localized
 from app.logging_config import get_structured_logger
 from app.prompts import render_prompt
-from app.rag.providers.base import generate_with_usage
+from app.rag.grounding import (
+    SUBMIT_ANSWER_TOOL,
+    cite_chunks,
+    format_context,
+    ground,
+    grounded_system,
+    grounding_extra,
+)
+from app.rag.providers.base import generate_structured
 from app.rag.rerank import rerank_async
 from app.rag.retrieve import dense_search
 from app.rag.strategies.base import Strategy, StrategyResult
@@ -138,7 +149,8 @@ class ClassicRAG(Strategy):
                 trace=[{"step": "retrieve", "result": "empty"}],
             )
 
-        ctx_block = "\n\n".join(f"[{c.id}]\n{c.text}" for c in context)
+        cited = cite_chunks(context)
+        ctx_block = format_context(cited)
         logger.debug(
             "Context block created",
             extra_fields={
@@ -160,9 +172,15 @@ class ClassicRAG(Strategy):
 
         # Classic is the one strategy that runs on any provider, so generation
         # goes through the dispatcher rather than straight to Anthropic.
-        out = await generate_with_usage(
-            self.provider, model=model, prompt=user_msg, max_tokens=settings.max_answer_tokens
+        out = await generate_structured(
+            self.provider,
+            model=model,
+            prompt=user_msg,
+            tool=SUBMIT_ANSWER_TOOL,
+            system=grounded_system(self.provider),
+            max_tokens=settings.max_answer_tokens,
         )
+        grounded, raw = ground(question, out, cited)
 
         logger.info(
             "Classic RAG strategy completed",
@@ -172,21 +190,16 @@ class ClassicRAG(Strategy):
                 "model": model,
                 "input_tokens": out["input_tokens"],
                 "output_tokens": out["output_tokens"],
-                "answer_len": len(out["text"]),
-                "sources_count": len(context[:5]),
+                "answer_len": len(grounded.answer),
+                "sources_count": grounded.citation_count,
+                "grounded": grounded.grounded,
+                "status": grounded.status,
+                "invalid_citations": len(grounded.invalid_citations),
             },
         )
 
         return StrategyResult(
-            answer=out["text"] or "(empty response)",
-            sources=[
-                Source(
-                    chunk_id=c.id,
-                    quote=c.text[:280],
-                    document=c.metadata.get("filename"),
-                )
-                for c in context[:5]
-            ],
+            **grounded.result_fields(),
             input_tokens=out["input_tokens"],
             output_tokens=out["output_tokens"],
             trace=[
@@ -195,7 +208,15 @@ class ClassicRAG(Strategy):
                     "step": "generate",
                     "provider": self.provider,
                     "model": model,
-                    "chars": len(out["text"]),
+                    "mode": grounded.mode,
+                    "chars": len(out.get("text") or ""),
+                },
+                {
+                    "step": "validate_citations",
+                    "status": grounded.status,
+                    "grounded": grounded.grounded,
+                    "cited": [c.handle for c in grounded.cited],
+                    "invalid": grounded.invalid_citations,
                 },
             ],
             extra={
@@ -203,5 +224,6 @@ class ClassicRAG(Strategy):
                 "retrieved_ids": [c.id for c in context],
                 "retrieved_docs": [c.metadata.get("filename") for c in context],
                 "context_text": ctx_block,
+                **grounding_extra(grounded, raw, cited),
             },
         )
