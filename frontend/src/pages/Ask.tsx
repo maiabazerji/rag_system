@@ -1,18 +1,26 @@
-import { useRef, useState } from "react";
+import { useId, useRef, useState } from "react";
 import { errorMessage, post } from "../api/client";
 import { SendIcon } from "../components/Icons";
 import LoadingSpinner from "../components/LoadingSpinner";
 import ErrorAlert from "../components/ErrorAlert";
 import Tooltip from "../components/Tooltip";
 import MetadataRow from "../components/MetadataRow";
+import {
+  CitedText,
+  GroundingBadge,
+  InvalidCitationsWarning,
+  SourceLocation,
+  type CitedSource,
+  type Grounding,
+} from "../components/Citations";
+import { handleNumber, sourceAnchor } from "../utils/citations";
 import { cleanAnswer, formatConfidence } from "../utils/formatting";
 import { useI18n, type MessageKey } from "../i18n";
 
-type Source = { chunk_id: string; quote: string };
-type Answer = {
+type Answer = Grounding & {
   question: string;
   answer: string;
-  sources: Source[];
+  sources: CitedSource[];
   confidence: number;
   refusal: boolean;
   provider?: string | null;
@@ -222,6 +230,7 @@ function TurnView({ turn, onDismiss }: { turn: Turn; onDismiss: () => void }) {
 
 function AnswerView({ a }: { a: Answer }) {
   const { t, locale } = useI18n();
+  const anchorPrefix = useId().replace(/:/g, "");
   const pct = Math.round(a.confidence * 100);
   return (
     <div className="space-y-3">
@@ -229,6 +238,7 @@ function AnswerView({ a }: { a: Answer }) {
         <span className={`chip ${a.refusal ? "!text-amber-300 !border-amber-500/40 !bg-amber-500/10" : "!text-emerald-300 !border-emerald-500/40 !bg-emerald-500/10"}`}>
           {a.refusal ? `⚠ ${t("common.refused")}` : `✓ ${t("common.answered")}`}
         </span>
+        <GroundingBadge g={a} />
         {a.provider && <span className="chip">{a.provider}</span>}
         <span className="chip" title={t("ask.confidenceTitle")}>{formatConfidence(a.confidence, locale)}</span>
         <Tooltip label={t("ask.confidenceTip")}>
@@ -236,9 +246,17 @@ function AnswerView({ a }: { a: Answer }) {
         </Tooltip>
       </div>
 
-      <p className="text-zinc-200 leading-relaxed whitespace-pre-wrap">{cleanAnswer(a.answer)}</p>
+      <p className="text-zinc-200 leading-relaxed whitespace-pre-wrap">
+        <CitedText text={cleanAnswer(a.answer)} anchorPrefix={anchorPrefix} sources={a.sources} />
+      </p>
 
-      <SourcesList sources={a.sources} />
+      {a.unsupported_notes && (
+        <p className="text-xs text-zinc-400">{t("grounding.notCovered", { notes: a.unsupported_notes })}</p>
+      )}
+
+      <InvalidCitationsWarning invalid={a.invalid_citations} />
+
+      <SourcesList sources={a.sources} anchorPrefix={anchorPrefix} />
 
       <MetadataRow
         compact
@@ -268,22 +286,31 @@ function AnswerView({ a }: { a: Answer }) {
   );
 }
 
-function SourcesList({ sources }: { sources: Source[] }) {
+function SourcesList({ sources, anchorPrefix }: { sources: CitedSource[]; anchorPrefix: string }) {
   const { t } = useI18n();
   // The backend uses a single chunk_id "none" source to mean "nothing cited".
   const real = sources.filter((s) => s.chunk_id && s.chunk_id !== "none");
   if (real.length === 0) return null;
   return (
-    <details className="text-xs border-t border-bg-border pt-3">
+    <details open className="text-xs border-t border-bg-border pt-3">
       <summary className="cursor-pointer text-zinc-400 hover:text-zinc-200 select-none">
         {t("common.sources", { count: real.length })}
       </summary>
       <ol className="mt-2 space-y-2">
         {real.map((s, i) => (
-          <li key={`${s.chunk_id}-${i}`} className="flex gap-2">
-            <span className="text-zinc-600 font-mono shrink-0">[{i + 1}]</span>
+          <li
+            key={`${s.chunk_id}-${i}`}
+            id={s.handle ? sourceAnchor(anchorPrefix, s.handle) : undefined}
+            className="flex gap-2 scroll-mt-24 target:bg-accent/10 rounded"
+          >
+            <span className="text-zinc-600 font-mono shrink-0">
+              [{s.handle ? handleNumber(s.handle) : i + 1}]
+            </span>
             <div className="min-w-0">
-              <div className="font-mono text-[11px] text-accent break-all">{s.chunk_id}</div>
+              <div className="text-[11px] break-all">
+                <SourceLocation s={s} />
+                <span className="font-mono text-accent ml-2">{s.chunk_id}</span>
+              </div>
               {s.quote && (
                 <blockquote className="text-zinc-300 whitespace-pre-wrap border-l-2 border-bg-border pl-2 mt-1">
                   {s.quote}
