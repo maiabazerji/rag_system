@@ -11,14 +11,24 @@ import pytest
 
 from app.eval.metrics import GOLDEN_DIR, load_dataset
 
-DOCS_DIR = Path(__file__).resolve().parents[2] / "data" / "docs"
+DATA_DIR = Path(__file__).resolve().parents[2] / "data"
+DOCS_DIR = DATA_DIR / "docs"
 DATASETS = [p.stem for p in sorted(GOLDEN_DIR.glob("*.jsonl"))]
+# Datasets labelled against a corpus other than data/docs.
+CORPUS_DIRS = {"golden_fr_business_v1": DATA_DIR / "demo_fr_business" / "docs"}
+
+
+def corpus_for(name: str) -> set[str]:
+    """Filenames in the corpus a dataset is labelled against."""
+    root = CORPUS_DIRS.get(name, DOCS_DIR)
+    pattern = "*.md" if root == DOCS_DIR else "*"
+    return {p.name for p in root.glob(pattern) if p.is_file()}
 
 
 @pytest.fixture(scope="module")
 def corpus() -> set[str]:
-    """Filenames present in the document corpus."""
-    return {p.name for p in DOCS_DIR.glob("*.md")}
+    """Filenames present in the default document corpus."""
+    return corpus_for("golden_v1")
 
 
 def test_at_least_one_dataset_ships():
@@ -46,8 +56,9 @@ class TestDatasetIntegrity:
             assert isinstance(sources, list), f"{name} #{i}: expected_sources not a list"
             assert all(isinstance(s, str) for s in sources), f"{name} #{i}: non-string"
 
-    def test_every_expected_source_exists_in_the_corpus(self, name, corpus):
+    def test_every_expected_source_exists_in_the_corpus(self, name):
         """A label naming a file that does not exist can never be satisfied."""
+        corpus = corpus_for(name)
         broken = [
             (ex["question"][:60], s)
             for ex in load_dataset(name)
@@ -65,7 +76,9 @@ class TestDatasetIntegrity:
         unexplained = [
             ex["question"][:60]
             for ex in load_dataset(name)
-            if not ex.get("expected_sources") and not ex.get("note")
+            if not ex.get("expected_sources")
+            and not (ex.get("note") or ex.get("notes"))
+            and ex.get("expected_behavior") != "refuse"
         ]
         assert not unexplained, (
             f"{name}: examples with no expected_sources and no note explaining why: "
