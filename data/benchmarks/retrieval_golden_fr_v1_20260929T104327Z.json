@@ -1,0 +1,74 @@
+{
+  "generated_at": "2026-09-29T10:43:27+00:00",
+  "config": {
+    "dataset": "golden_fr_v1",
+    "examples_total": 16,
+    "examples_scored": 16,
+    "documents": 41,
+    "chunks": 467,
+    "chunk_size_tokens": 300,
+    "dense_top_k": 50,
+    "bm25_top_k": 50,
+    "rrf_k": 60,
+    "k": [
+      1,
+      3,
+      5,
+      10
+    ],
+    "rerank": false,
+    "embedding_model": "intfloat/multilingual-e5-small (not loaded)"
+  },
+  "missing_expected_sources": [],
+  "modes": {
+    "sparse": {
+      "status": "ok",
+      "reranker": [
+        "none"
+      ],
+      "degraded_queries": 0,
+      "latency_ms": {
+        "mean": 5.89,
+        "p95": 3.16
+      },
+      "at_k": {
+        "1": {
+          "recall": 0.3281,
+          "precision": 0.625,
+          "hit_rate": 0.625,
+          "mrr": 0.625,
+          "ndcg": 0.625
+        },
+        "3": {
+          "recall": 0.6615,
+          "precision": 0.5208,
+          "hit_rate": 0.875,
+          "mrr": 0.75,
+          "ndcg": 0.6566
+        },
+        "5": {
+          "recall": 0.7604,
+          "precision": 0.4188,
+          "hit_rate": 0.875,
+          "mrr": 0.75,
+          "ndcg": 0.6996
+        },
+        "10": {
+          "recall": 0.8438,
+          "precision": 0.311,
+          "hit_rate": 0.875,
+          "mrr": 0.75,
+          "ndcg": 0.7453
+        }
+      }
+    },
+    "dense": {
+      "status": "skipped",
+      "reason": "embedding model unavailable: RuntimeError: Failed to get embedding dimension: Failed to initialize embedding model 'intfloat/multilingual-e5-small'. Ensure the model name is correct and you have internet access to download it."
+    },
+    "hybrid": {
+      "status": "skipped",
+      "reason": "embedding model unavailable: RuntimeError: Failed to get embedding dimension: Failed to initialize embedding model 'intfloat/multilingual-e5-small'. Ensure the model name is correct and you have internet access to download it."
+    }
+  }
+}
