@@ -11,6 +11,7 @@ from app.rag.parsers.base import (
     ParseError,
     clean_str,
     iso_date,
+    join_pages,
     markdown_table,
 )
 
@@ -44,7 +45,9 @@ def parse(filename: str, content: bytes, depth: int = 0) -> ParsedDocument:
         page_count=len(slides),
         language=clean_str(props.language),
     )
-    return ParsedDocument(text="\n\n".join(slides), metadata=metadata)
+    # Each slide counts as a page, so a citation can name the slide.
+    text, pages = join_pages(slides)
+    return ParsedDocument(text=text, metadata=metadata, pages=pages)
 
 
 def _slide(number: int, slide: Any) -> str:

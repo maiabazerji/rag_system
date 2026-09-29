@@ -137,3 +137,41 @@ def zip_bytes(members: dict[str, bytes]) -> bytes:
         for name, data in members.items():
             archive.writestr(name, data)
     return buffer.getvalue()
+
+
+def make_text_pdf(pages: list[list[str]], title: str | None = None) -> bytes:
+    """A PDF whose pages carry a real text layer: one list of lines per page.
+
+    Lines must be Latin-1; an empty list makes a page with no text.
+    """
+    from pypdf import PdfWriter
+    from pypdf.generic import DecodedStreamObject, DictionaryObject, NameObject
+
+    writer = PdfWriter()
+    font = writer._add_object(
+        DictionaryObject(
+            {
+                NameObject("/Type"): NameObject("/Font"),
+                NameObject("/Subtype"): NameObject("/Type1"),
+                NameObject("/BaseFont"): NameObject("/Helvetica"),
+            }
+        )
+    )
+    for lines in pages:
+        page = writer.add_blank_page(612, 792)
+        ops = ["BT", "/F1 11 Tf", "14 TL", "40 750 Td"]
+        for line in lines:
+            escaped = line.replace("\\", "\\\\").replace("(", "\\(").replace(")", "\\)")
+            ops.append(f"({escaped}) Tj T*")
+        ops.append("ET")
+        stream = DecodedStreamObject()
+        stream.set_data("\n".join(ops).encode("latin-1"))
+        page[NameObject("/Contents")] = writer._add_object(stream)
+        page[NameObject("/Resources")] = DictionaryObject(
+            {NameObject("/Font"): DictionaryObject({NameObject("/F1"): font})}
+        )
+    if title:
+        writer.add_metadata({"/Title": title})
+    buffer = io.BytesIO()
+    writer.write(buffer)
+    return buffer.getvalue()
