@@ -9,6 +9,7 @@ from fastapi.testclient import TestClient
 from prometheus_client.parser import text_string_to_metric_families
 
 from app import monitoring
+from app.rag.rerank import RerankOutcome
 from app.resilience import CircuitBreaker
 
 
@@ -82,8 +83,11 @@ class TestContent:
         chunks = fake_chunks(2)
         with (
             patch("app.rag.generate.store_count", new=AsyncMock(return_value=10)),
-            patch("app.rag.strategies.classic.dense_search", new=AsyncMock(return_value=chunks)),
-            patch("app.rag.strategies.classic.rerank_async", new=AsyncMock(return_value=chunks)),
+            patch("app.rag.retrieve.dense_search", new=AsyncMock(return_value=chunks)),
+            patch(
+                "app.rag.retrieve.rerank_scored_async",
+                new=AsyncMock(return_value=RerankOutcome.unscored(chunks)),
+            ),
             patch(
                 "app.rag.strategies.classic.generate_with_usage",
                 new=AsyncMock(

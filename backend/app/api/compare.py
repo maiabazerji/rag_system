@@ -206,6 +206,7 @@ async def _run_strategies(
                 trace=result.trace,
                 extra=result.extra,
                 trace_id=result.trace_id,
+                retrieval=result.extra.get("retrieval"),
             )
         )
     return results, total_in, total_out

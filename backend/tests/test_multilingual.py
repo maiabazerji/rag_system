@@ -22,7 +22,7 @@ from app.rag.embed import (
     embedding_profile,
     is_multilingual_model,
 )
-from app.rag.rerank import _rerank_with_bm25, bm25_tokenize
+from app.rag.rerank import RerankOutcome, _rerank_with_bm25, bm25_tokenize
 from app.schemas import Chunk
 
 E5 = "intfloat/multilingual-e5-small"
@@ -302,8 +302,11 @@ class TestLocalizedRefusals:
         from app.rag.strategies.classic import ClassicRAG
 
         with patch(
-            "app.rag.strategies.classic.dense_search", new=AsyncMock(return_value=[])
-        ), patch("app.rag.strategies.classic.rerank_async", new=AsyncMock(return_value=[])):
+            "app.rag.retrieve.dense_search", new=AsyncMock(return_value=[])
+        ), patch(
+            "app.rag.retrieve.rerank_scored_async",
+            new=AsyncMock(return_value=RerankOutcome.unscored([])),
+        ):
             result = await ClassicRAG().run(
                 "Pourquoi utiliser un reranker ?",
                 top_k=4,

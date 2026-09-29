@@ -14,6 +14,7 @@ from app.eval.retrieval import (
     retrieved_documents,
     score_retrieval,
 )
+from app.rag.rerank import RerankOutcome
 from app.schemas import Answer, Source
 
 
@@ -299,8 +300,11 @@ def test_sources_carry_their_document(fake_chunks):
 
     strategy = ClassicRAG()
     with (
-        patch("app.rag.strategies.classic.dense_search", new=AsyncMock(return_value=chunks)),
-        patch("app.rag.strategies.classic.rerank_async", new=AsyncMock(return_value=chunks)),
+        patch("app.rag.retrieve.dense_search", new=AsyncMock(return_value=chunks)),
+        patch(
+                "app.rag.retrieve.rerank_scored_async",
+                new=AsyncMock(return_value=RerankOutcome.unscored(chunks)),
+            ),
         patch(
             "app.rag.strategies.classic.generate_with_usage",
             new=AsyncMock(
