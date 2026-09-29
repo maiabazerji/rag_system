@@ -15,6 +15,7 @@ import {
   parseQuestions,
   validateStrategies,
 } from "../api/advisor";
+import { errorMessage } from "../api/client";
 import ErrorAlert from "../components/ErrorAlert";
 import LoadingSpinner from "../components/LoadingSpinner";
 import { formatLatency, formatScore, formatTokens } from "../utils/formatting";
@@ -109,10 +110,6 @@ function toOverrides(f: OverrideForm): AdviseOverrides {
     compliance: splitList(f.compliance),
     question_examples: splitList(f.question_examples, /\r?\n/),
   };
-}
-
-function errorText(e: unknown): string {
-  return e instanceof Error ? e.message : String(e);
 }
 
 export default function Advisor() {
@@ -261,7 +258,7 @@ export default function Advisor() {
         </div>
         {adviseMut.isError && (
           <ErrorAlert
-            error={errorText(adviseMut.error)}
+            error={errorMessage(adviseMut.error)}
             onRetry={() => adviseMut.mutate()}
             onDismiss={() => adviseMut.reset()}
           />
@@ -553,7 +550,7 @@ function ValidateSection({ advice }: { advice: AdviseResponse }) {
       </div>
       {mut.isError && (
         <ErrorAlert
-          error={errorText(mut.error)}
+          error={errorMessage(mut.error)}
           onRetry={() => mut.mutate()}
           onDismiss={() => mut.reset()}
         />
