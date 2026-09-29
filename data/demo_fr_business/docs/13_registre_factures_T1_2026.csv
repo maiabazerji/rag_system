@@ -1,0 +1,5 @@
+numero_facture;date_emission;client;montant_ht;tva_20;montant_ttc;date_echeance;statut
+FA-2026-0287;16/02/2026;Cabinet Démo & Associés SELARL;2319.60;463.92;2783.52;31/03/2026;payée le 02/04/2026 (retard)
+FA-2026-0298;27/02/2026;Société Exemple SARL;1250.00;250.00;1500.00;31/03/2026;payée le 30/03/2026
+FA-2026-0311;12/03/2026;Société Exemple SARL;7981.14;1596.23;9577.37;30/04/2026;en attente (note de pénalités NP-2026-004 reçue)
+FA-2026-0324;25/03/2026;Boulangerie Témoin SARL;3120.00;624.00;3744.00;30/04/2026;en attente
