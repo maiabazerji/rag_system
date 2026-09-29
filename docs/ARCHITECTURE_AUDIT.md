@@ -1,5 +1,7 @@
 # EvalRAG architecture audit (Phase 1)
 
+> Pre-upgrade audit (commit 054a182); see the [README](../README.md) for the current state.
+
 - **Scope:** `backend/app/`, `frontend/src/`, `data/golden/`, `scripts/`, `infra/`, `README.md`, `EvalRAG.md`, `LEARN.md`, `docs/`.
 - **Audited revision:** `054a182`.
 - **Method:** every claim below was checked against the source. Citations are `path:line` relative to the repository root, with `backend/app/` shortened to `app/`.
