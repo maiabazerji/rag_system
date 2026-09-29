@@ -111,6 +111,8 @@ _RETRIEVAL_SETTING_PREFIXES = (
     "bm25_",
     "fusion_",
     "rrf_",
+    "dense_",  # dense_top_k
+    "final_context",  # final_context_k
     "chunk",  # chunk_size_tokens, chunk_overlap_tokens, chunking_* ...
     "embedding_model",
     "reranker_model",

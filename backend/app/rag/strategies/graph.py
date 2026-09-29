@@ -116,7 +116,7 @@ class GraphRAG(Strategy):
     that might be missed by pure semantic similarity. The graph encodes entity
     relationships extracted during corpus ingestion, enabling multi-hop reasoning.
 
-    Graph construction is offline (happens during ingest via extract_entities),
+    Graph construction is offline (an explicit POST /graph/build extracts entities),
     while query-time execution walks the graph from extracted question entities
     to find related passages.
 

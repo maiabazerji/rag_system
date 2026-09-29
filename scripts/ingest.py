@@ -1,7 +1,9 @@
 """Ingest the project's documents into the vector store.
 
-Picks up everything under data/docs/, plus the top-level README and EvalRAG.md
-so the system can answer questions about itself.
+Picks up everything under data/docs/. The top-level README, EvalRAG.md and
+LEARN.md are added only with --with-meta: the golden datasets are labelled
+against data/docs alone, so documentation edits must not change the corpus
+they are evaluated on.
 
 Usage:
     python scripts/ingest.py
@@ -81,8 +83,16 @@ async def main() -> int:
     parser.add_argument(
         "--concurrency", type=int, default=4, help="Files embedded in parallel"
     )
-    parser.add_argument(
-        "--no-meta", action="store_true", help="Skip the top-level README/LEARN docs"
+    meta = parser.add_mutually_exclusive_group()
+    meta.add_argument(
+        "--with-meta",
+        action="store_true",
+        help="Also ingest the top-level README, EvalRAG.md and LEARN.md",
+    )
+    meta.add_argument(
+        "--no-meta",
+        action="store_true",
+        help="Skip the top-level docs (the default; kept for existing scripts)",
     )
     parser.add_argument("--tenant", default=None, help="Tenant (default: DEFAULT_TENANT)")
     parser.add_argument(
@@ -97,7 +107,7 @@ async def main() -> int:
         print(f"No such directory: {args.path}")
         return 1
 
-    paths = _collect(args.path, include_meta=not args.no_meta)
+    paths = _collect(args.path, include_meta=args.with_meta)
     if not paths:
         print(f"Nothing to ingest under {args.path}")
         print(f"Supported types: {', '.join(sorted(SUPPORTED_EXTENSIONS))}")

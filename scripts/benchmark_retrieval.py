@@ -3,14 +3,17 @@
 Indexes ``data/docs`` into an in-process Qdrant (``QdrantClient(":memory:")``,
 no Docker, no server), runs every question of a golden dataset through
 :func:`app.rag.retrieve.hybrid_search` in each requested mode, and scores the
-documents behind the top-K chunks against the example's ``expected_sources``.
+retrieved documents against the example's ``expected_sources``.
 
-Metrics per mode and per K (document level, binary relevance):
-    Recall@K     share of expected documents found in the top K
-    Precision@K  share of distinct retrieved documents that were expected
-    HitRate@K    share of questions with at least one expected document
+Documents are ranked by their best-ranked chunk and K counts documents. The
+metrics come from :func:`app.eval.retrieval.ranked_retrieval_metrics`, the
+function the eval harness uses, so benchmark and eval numbers share one
+definition (document level, binary relevance):
+    Recall@K     share of expected documents found in the top K documents
+    Precision@K  share of the top K documents that were expected
+    HitRate@K    share of questions with at least one expected document in the top K
     MRR          mean reciprocal rank of the first expected document
-    nDCG@K       normalised discounted cumulative gain
+    nDCG@K       normalised discounted cumulative gain at K
 
 Dense and hybrid need the embedding model. When it cannot be loaded (no
 network and no local copy) those modes are reported as skipped, with the
@@ -28,7 +31,6 @@ from __future__ import annotations
 import argparse
 import asyncio
 import json
-import math
 import statistics
 import sys
 import time
@@ -44,7 +46,7 @@ from qdrant_client.http import models as qm  # noqa: E402
 
 from app.config import settings  # noqa: E402
 from app.eval.metrics import load_dataset  # noqa: E402
-from app.eval.retrieval import score_retrieval_documents  # noqa: E402
+from app.eval.retrieval import ranked_retrieval_metrics  # noqa: E402
 from app.rag import parsers, store  # noqa: E402
 from app.rag.chunking import chunk_structured  # noqa: E402
 from app.rag.retrieve import hybrid_search  # noqa: E402
@@ -53,27 +55,12 @@ from app.schemas import Chunk  # noqa: E402
 DOCS_DIR = ROOT / "data" / "docs"
 OUT_DIR = ROOT / "data" / "benchmarks"
 MODES = ("dense", "sparse", "hybrid")
+# Chunks retrieved per document cutoff: several chunks often share a document.
+CHUNKS_PER_DOC_CUTOFF = 5
 
 
 def _norm(name: str) -> str:
     return name.strip().replace("\\", "/").rsplit("/", 1)[-1].lower()
-
-
-def ndcg_at_k(expected: list[str], retrieved: list[str], k: int) -> float:
-    """Binary-relevance nDCG@k over a deduplicated ranked document list.
-
-    TODO: switch to the shared implementation once app.eval.retrieval has one.
-    """
-    wanted = {_norm(e) for e in expected}
-    if not wanted:
-        return 0.0
-    dcg = sum(
-        1.0 / math.log2(rank + 1)
-        for rank, doc in enumerate(retrieved[:k], start=1)
-        if _norm(doc) in wanted
-    )
-    ideal = sum(1.0 / math.log2(rank + 1) for rank in range(1, min(len(wanted), k) + 1))
-    return dcg / ideal if ideal else 0.0
 
 
 def load_corpus(docs_dir: Path) -> list[Chunk]:
@@ -137,7 +124,12 @@ async def run_mode(
     mode: str, examples: list[dict], ks: list[int], rerank: bool
 ) -> dict[str, Any]:
     """Retrieve for every example in one mode and aggregate the metrics."""
-    depth = max(ks)
+    # Documents are ranked by their best chunk and K counts documents, exactly
+    # as in the eval harness (app.eval.retrieval.ranked_retrieval_metrics).
+    # Enough chunks are retrieved to fill the deepest cutoff with distinct
+    # documents in the common case.
+    depth = max(ks) * CHUNKS_PER_DOC_CUTOFF
+    names = {"recall": "recall@{k}", "precision": "precision@{k}", "hit_rate": "hit_rate@{k}", "ndcg": "ndcg@{k}"}
     per_k: dict[int, dict[str, list[float]]] = {
         k: {"recall": [], "precision": [], "hit_rate": [], "mrr": [], "ndcg": []} for k in ks
     }
@@ -150,19 +142,14 @@ async def run_mode(
         latencies.append((time.perf_counter() - started) * 1000)
         rerankers.add(result.diagnostics.reranker)
         degraded += bool(result.diagnostics.degraded)
+        ranked_docs = [c.metadata.get("filename") or c.doc_id for c in result.chunks]
+        scores = ranked_retrieval_metrics(ex["expected_sources"], ranked_docs, ks)
+        assert scores is not None  # examples without labels are filtered out earlier
         for k in ks:
-            docs: dict[str, None] = {}
-            for c in result.chunks[:k]:
-                docs.setdefault(c.metadata.get("filename") or c.doc_id, None)
-            ranked = list(docs)
-            score = score_retrieval_documents(ex["expected_sources"], ranked)
-            assert score is not None
             m = per_k[k]
-            m["recall"].append(score.recall)
-            m["precision"].append(score.precision)
-            m["hit_rate"].append(1.0 if score.hit else 0.0)
-            m["mrr"].append(score.mrr)
-            m["ndcg"].append(ndcg_at_k(ex["expected_sources"], ranked, k))
+            for metric, template in names.items():
+                m[metric].append(scores[template.format(k=k)])
+            m["mrr"].append(scores["mrr"])
     return {
         "status": "ok",
         "reranker": sorted(rerankers),
