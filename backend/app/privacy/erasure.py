@@ -257,7 +257,7 @@ def _scrub_row(row: dict, doc_ids: Collection[str], filenames: Collection[str]) 
     # The judge's reasoning may quote the erased context; scores are kept.
     judge = row.get("judge")
     if isinstance(judge, dict) and judge.get("reasoning"):
-        judge["reasoning"] = {dim: ERASED for dim in judge["reasoning"]}
+        judge["reasoning"] = dict.fromkeys(judge["reasoning"], ERASED)
     row["doc_ids"] = sorted(cited_docs - set(doc_ids))
     for key in ("retrieved", "expected"):
         if isinstance(retrieval.get(key), list):
