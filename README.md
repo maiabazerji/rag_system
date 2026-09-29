@@ -274,7 +274,7 @@ python scripts/run_eval.py --dataset golden_v3 --all --fail-on-regression
 ```bash
 cd backend && python -m pytest -q --cov=app          # 1,495 tests, 95% line coverage
 ruff check app tests ../scripts && mypy app
-cd frontend && npm ci && npm run lint && npm run typecheck && npm test && npm run build   # 102 Vitest tests
+cd ../frontend && npm ci && npm run lint && npm run typecheck && npm test && npm run build   # 102 Vitest tests
 ```
 
 CI ([`.github/workflows/ci.yml`](.github/workflows/ci.yml)) runs ruff, mypy (app and scripts), pytest with `--cov-fail-under=90`, the frontend lint, typecheck, tests and build, `docker compose config`, image builds, and dependency audits. Qdrant, the embedding model and the cross-encoder are mocked or run in process in the tests. CI does **not** run any evaluation against a model.
