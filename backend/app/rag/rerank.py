@@ -20,14 +20,14 @@ from __future__ import annotations
 import asyncio
 import time
 from concurrent.futures import ThreadPoolExecutor
-from typing import TYPE_CHECKING, Any
+from dataclasses import dataclass, field
+from typing import TYPE_CHECKING, Any, Literal
 
 from rank_bm25 import BM25Okapi
 
 from app.config import settings
-from app.i18n import STOPWORDS
-from app.i18n import tokenize as _unicode_tokens
 from app.logging_config import get_structured_logger
+from app.rag.query import BM25_STOPWORDS, bm25_tokenize
 from app.schemas import Chunk
 from app.tracing import instrument
 
@@ -36,21 +36,32 @@ if TYPE_CHECKING:  # pragma: no cover
 
 logger = get_structured_logger(__name__)
 
-# English and French function words carry no topical signal for BM25; dropping
-# them keeps "le", "de", "the" from dominating short queries.
-BM25_STOPWORDS: frozenset[str] = STOPWORDS["en"] | STOPWORDS["fr"]
+# The tokenizer moved to app.rag.query so the sparse retriever shares it; both
+# names stay importable from here.
+__all__ = ["BM25_STOPWORDS", "RerankOutcome", "bm25_tokenize", "rerank", "rerank_async",
+           "rerank_scored", "rerank_scored_async"]
+
+Reranker = Literal["cross-encoder", "bm25-fallback", "none"]
 
 
-def bm25_tokenize(text: str) -> list[str]:
-    """Tokenize for BM25: Unicode words, lowercased, accents folded, stopwords dropped.
+@dataclass(frozen=True)
+class RerankOutcome:
+    """Reranked chunks with their scores and the scorer that produced them.
 
-    Folding makes "requête", "requete" and "REQUÊTE" the same term, and ``\\w+``
-    keeps accented letters inside words instead of splitting on them. If a text
-    is nothing but stopwords, they are kept so it still has something to match.
+    Attributes:
+        chunks: The kept chunks, best first.
+        scores: One score per kept chunk (``None`` when nothing scored it).
+        reranker: ``cross-encoder``, ``bm25-fallback``, or ``none`` when the
+            input was passed through unscored.
     """
-    tokens = _unicode_tokens(text)
-    content = [t for t in tokens if t not in BM25_STOPWORDS]
-    return content or tokens
+
+    chunks: list[Chunk]
+    scores: list[float | None] = field(default_factory=list)
+    reranker: Reranker = "none"
+
+    @classmethod
+    def unscored(cls, chunks: list[Chunk]) -> RerankOutcome:
+        return cls(chunks=list(chunks), scores=[None] * len(chunks), reranker="none")
 
 
 _executor = ThreadPoolExecutor(max_workers=2, thread_name_prefix="rerank")
@@ -111,59 +122,50 @@ def _load_cross_encoder() -> CrossEncoder | None:
         return None
 
 
-def _rerank_with_cross_encoder(
-    query: str,
-    chunks: list[Chunk],
-    top_k: int
-) -> list[Chunk]:
-    """Rerank chunks using cross-encoder semantic scoring.
+def _score_with_cross_encoder(query: str, chunks: list[Chunk], top_k: int) -> RerankOutcome:
+    """Rerank chunks with the cross-encoder, keeping the scores.
 
-    Creates (query, chunk_text) pairs and scores them with a fine-tuned cross-encoder
-    model. Chunks are sorted by score and top-k returned.
-
-    If cross-encoder fails, falls back to BM25 ranking.
+    Creates (query, chunk_text) pairs and scores them with a fine-tuned
+    cross-encoder model. Chunks are sorted by score and the top-k returned.
+    If the model is unavailable or fails, falls back to BM25 scoring.
 
     Args:
         query: The query string to score pairs against.
-        chunks: List of Chunk objects to rerank.
+        chunks: Chunks to rerank.
         top_k: Number of top results to return.
 
     Returns:
-        List of top-k chunks sorted by cross-encoder score (highest first).
-            Length is min(top_k, len(chunks)).
-
-    Raises:
-        No explicit exceptions. Failures fall back to _rerank_with_bm25.
+        The top ``min(top_k, len(chunks))`` chunks with their scores.
     """
     cross_encoder = _load_cross_encoder()
     if cross_encoder is None:
-        return _rerank_with_bm25(query, chunks, top_k)
+        return _score_with_bm25(query, chunks, top_k)
 
     try:
-        # Prepare pairs for cross-encoder. `predict` is typed against a wide
-        # multimodal union and list is invariant, so a concrete list[list[str]]
-        # is rejected even though it is exactly what the method expects.
+        # `predict` is typed against a wide multimodal union and list is
+        # invariant, so a concrete list[list[str]] is rejected even though it
+        # is exactly what the method expects.
         pairs: list[Any] = [[query, chunk.text] for chunk in chunks]
-
-        # Score all pairs
         scores = cross_encoder.predict(pairs)
 
-        # Sort chunks by score (descending)
+        # Stable sort: equal scores keep their retrieval order.
         scored_chunks = list(zip(chunks, scores, strict=True))
         scored_chunks.sort(key=lambda x: x[1], reverse=True)
-
-        # Return top-k
-        result = [chunk for chunk, _score in scored_chunks[:top_k]]
+        kept = scored_chunks[:top_k]
         logger.info(
             "Cross-encoder reranking completed",
             extra_fields={
                 "input_count": len(chunks),
-                "output_count": len(result),
+                "output_count": len(kept),
                 "requested_top_k": top_k,
                 "reranker": "cross-encoder",
             },
         )
-        return result
+        return RerankOutcome(
+            chunks=[c for c, _ in kept],
+            scores=[float(sc) for _, sc in kept],
+            reranker="cross-encoder",
+        )
     except Exception as e:
         logger.warning(
             f"Cross-encoder reranking failed, falling back to BM25: {e}",
@@ -174,61 +176,48 @@ def _rerank_with_cross_encoder(
                 "fallback": "bm25",
             },
         )
-        return _rerank_with_bm25(query, chunks, top_k)
+        return _score_with_bm25(query, chunks, top_k)
 
 
-def _rerank_with_bm25(query: str, chunks: list[Chunk], top_k: int) -> list[Chunk]:
-    """Rerank chunks using BM25 lexical scoring.
+def _rerank_with_cross_encoder(query: str, chunks: list[Chunk], top_k: int) -> list[Chunk]:
+    """Rerank chunks with the cross-encoder (BM25 fallback); chunks only."""
+    return _score_with_cross_encoder(query, chunks, top_k).chunks
 
-    Tokenizes query and chunk texts, then applies BM25 algorithm to score
-    relevance. Fallback when cross-encoder is unavailable.
 
-    BM25 is fast and reliable but may miss semantic relationships
-    compared to neural models.
+def _score_with_bm25(query: str, chunks: list[Chunk], top_k: int) -> RerankOutcome:
+    """Rerank chunks by BM25 lexical score, keeping the scores.
 
-    Args:
-        query: The query string to score against.
-        chunks: List of Chunk objects to rerank.
-        top_k: Number of top results to return.
-
-    Returns:
-        List of top-k chunks sorted by BM25 score (highest first).
-            If BM25 fails, returns first top_k chunks in input order.
-
-    Raises:
-        No explicit exceptions. On critical error, returns truncated input.
+    The fallback when the cross-encoder is unavailable: fast and reliable, but
+    blind to paraphrase. If BM25 itself fails, the first ``top_k`` chunks are
+    returned unscored, in input order.
     """
     if not chunks:
-        return []
+        return RerankOutcome(chunks=[], scores=[], reranker="bm25-fallback")
 
     try:
-        # Tokenize texts for BM25
         tokenized_chunks = [bm25_tokenize(chunk.text) for chunk in chunks]
-
-        # Create BM25 model
         bm25 = BM25Okapi(tokenized_chunks)
-
-        # Score query
         query_tokens = bm25_tokenize(query)
         scores = bm25.get_scores(query_tokens)
 
-        # Sort chunks by score (descending)
         scored_chunks = list(zip(chunks, scores, strict=True))
         scored_chunks.sort(key=lambda x: x[1], reverse=True)
-
-        # Return top-k
-        result = [chunk for chunk, _score in scored_chunks[:top_k]]
+        kept = scored_chunks[:top_k]
         logger.info(
             "BM25 reranking completed",
             extra_fields={
                 "input_count": len(chunks),
-                "output_count": len(result),
+                "output_count": len(kept),
                 "requested_top_k": top_k,
                 "reranker": "bm25",
                 "query_tokens": len(query_tokens),
             },
         )
-        return result
+        return RerankOutcome(
+            chunks=[c for c, _ in kept],
+            scores=[float(sc) for _, sc in kept],
+            reranker="bm25-fallback",
+        )
     except Exception as e:
         logger.error(
             f"BM25 reranking failed: {e}",
@@ -239,8 +228,45 @@ def _rerank_with_bm25(query: str, chunks: list[Chunk], top_k: int) -> list[Chunk
                 "fallback": "truncation",
             },
         )
-        # Fallback to just returning top-k by order
-        return chunks[:top_k]
+        return RerankOutcome.unscored(chunks[:top_k])
+
+
+def _rerank_with_bm25(query: str, chunks: list[Chunk], top_k: int) -> list[Chunk]:
+    """Rerank chunks by BM25 lexical score; chunks only."""
+    return _score_with_bm25(query, chunks, top_k).chunks
+
+
+def rerank_scored(query: str, chunks: list[Chunk], top_k: int = 8) -> RerankOutcome:
+    """Rerank chunks by relevance to ``query``, reporting scores and scorer.
+
+    Attempts the cross-encoder first and falls back to BM25, then to plain
+    truncation: it always returns a result and never raises.
+
+    Args:
+        query: The query to rerank by.
+        chunks: Candidate chunks (typically from retrieval).
+        top_k: Number of chunks to keep. Fewer come back if fewer went in.
+
+    Returns:
+        A :class:`RerankOutcome`, best chunk first.
+    """
+    if not chunks:
+        return RerankOutcome(chunks=[], scores=[], reranker="none")
+
+    # Score even a set smaller than top_k, so it comes back in relevance order.
+    keep = min(top_k, len(chunks))
+    try:
+        return _score_with_cross_encoder(query, chunks, keep)
+    except Exception as e:
+        logger.debug(
+            f"Reranking failed: {e}",
+            extra_fields={
+                "error_type": type(e).__name__,
+                "input_count": len(chunks),
+                "requested_top_k": top_k,
+            },
+        )
+        return RerankOutcome.unscored(chunks[:keep])
 
 
 def rerank(query: str, chunks: list[Chunk], top_k: int = 8) -> list[Chunk]:
@@ -264,44 +290,12 @@ def rerank(query: str, chunks: list[Chunk], top_k: int = 8) -> list[Chunk]:
             Length is min(top_k, len(chunks)).
             Returns empty list if input is empty.
 
-    Raises:
-        No exceptions. Graceful fallback at each layer ensures a result.
-
     Example:
         >>> chunks = [Chunk(id="1", text="..."), Chunk(id="2", text="...")]
         >>> reranked = rerank("What is AI?", chunks, top_k=2)
         >>> print(len(reranked))  # 2 or fewer
     """
-    if not chunks:
-        return []
-
-    if len(chunks) <= top_k:
-        # If we have fewer chunks than top_k, try to rerank anyway for scoring
-        # but return all of them
-        try:
-            result = _rerank_with_cross_encoder(query, chunks, len(chunks))
-            logger.debug(
-                "Reranking small result set",
-                extra_fields={
-                    "input_count": len(chunks),
-                    "output_count": len(result),
-                    "requested_top_k": top_k,
-                },
-            )
-            return result
-        except Exception as e:
-            logger.debug(
-                f"Reranking failed for small result set: {e}",
-                extra_fields={
-                    "error_type": type(e).__name__,
-                    "input_count": len(chunks),
-                    "requested_top_k": top_k,
-                },
-            )
-            return chunks
-
-    # Normal case: rerank and truncate to top_k
-    return _rerank_with_cross_encoder(query, chunks, top_k)
+    return rerank_scored(query, chunks, top_k).chunks
 
 
 @instrument.rerank
@@ -323,3 +317,12 @@ async def rerank_async(query: str, chunks: list[Chunk], top_k: int = 8) -> list[
         return []
     loop = asyncio.get_running_loop()
     return await loop.run_in_executor(_executor, rerank, query, chunks, top_k)
+
+
+@instrument.rerank_scored
+async def rerank_scored_async(query: str, chunks: list[Chunk], top_k: int = 8) -> RerankOutcome:
+    """Async wrapper around :func:`rerank_scored`, off the event loop."""
+    if not chunks:
+        return RerankOutcome(chunks=[], scores=[], reranker="none")
+    loop = asyncio.get_running_loop()
+    return await loop.run_in_executor(_executor, rerank_scored, query, chunks, top_k)

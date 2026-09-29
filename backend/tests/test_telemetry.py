@@ -12,6 +12,7 @@ from unittest.mock import AsyncMock, patch
 import httpx
 import pytest
 
+from app.rag.rerank import RerankOutcome
 from app.tracing import langfuse_exporter as lf
 from app.tracing import policy, start_trace
 from app.tracing.spans import span, traced
@@ -388,7 +389,7 @@ class TestEndToEnd:
             patch("app.rag.generate.store_count", new=AsyncMock(return_value=10)),
             patch("app.rag.retrieve.embed_query_async", new=AsyncMock(return_value=[0.0])),
             patch("app.rag.retrieve.search", new=AsyncMock(return_value=hits)),
-            patch("app.rag.rerank.rerank", side_effect=lambda q, c, k: c[:k]),
+            patch("app.rag.rerank.rerank_scored", side_effect=lambda q, c, k: RerankOutcome.unscored(c[:k])),
             patch.object(ap, "get_client", return_value=fake_client),
         ):
             r = client.post("/ask", json={"question": "Who is alice@example.com?"})
