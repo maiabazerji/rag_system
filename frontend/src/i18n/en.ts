@@ -27,6 +27,24 @@ export const en = {
   "common.sources": "Sources ({count})",
   "common.step": "step",
 
+  // Grounding and citations
+  "grounding.grounded": "Grounded",
+  "grounding.groundedTip": "Every claim in this answer cites a retrieved source.",
+  "grounding.partial": "Partial",
+  "grounding.partialTip":
+    "The retrieved sources answer only part of the question, or some claims are not supported by them.",
+  "grounding.weak": "Weakly grounded",
+  "grounding.weakTip": "Answered, but not every claim cites a retrieved source.",
+  "grounding.insufficient": "Insufficient context",
+  "grounding.insufficientTip": "The retrieved documents do not contain the answer.",
+  "grounding.invalidCitations_one":
+    "{count} citation pointed outside the retrieved documents and was removed: {handles}",
+  "grounding.invalidCitations_other":
+    "{count} citations pointed outside the retrieved documents and were removed: {handles}",
+  "grounding.citeLink": "Go to source {handle}",
+  "grounding.page": "p. {page}",
+  "grounding.notCovered": "Not covered: {notes}",
+
   // Strategy names
   "strategy.classic": "Classic RAG",
   "strategy.graph": "Graph RAG",
@@ -123,11 +141,11 @@ export const en = {
     "Why does Agentic RAG use more tokens than Classic on the same corpus, and when is that justified?",
   "ask.samples.g3.q4": "How do you detect and prevent retrieval drift as your corpus grows over time?",
   "ask.loading": "Retrieving and generating answer...",
-  "ask.confidenceTitle": "Model confidence in this answer",
+  "ask.confidenceTitle": "Evidence score for this answer",
   "ask.confidenceTip":
-    "How much the model trusts its answer (0-1 scale). Higher = more confident it's grounded in sources.",
-  "ask.confidenceAria": "Confidence score",
-  "ask.confidencePercentAria": "{pct} percent confidence",
+    "Evidence score (0-1), not a probability: the share of claims backed by a valid citation, whether the answer is complete, and how relevant the cited sources are.",
+  "ask.confidenceAria": "Evidence score",
+  "ask.confidencePercentAria": "{pct} percent evidence score",
   "ask.trace": "trace",
   "ask.traceTitle": "GET /traces/{id}: the retrieval, rerank and generation steps for this answer",
   "ask.rated": "Rated {rating}/5, thanks. Your rating was saved.",
@@ -180,7 +198,6 @@ export const en = {
   "compare.buildGraph": "Build graph",
   "compare.showLess": "Show less",
   "compare.readMore": "Read more →",
-  "compare.more": "+{count} more",
   "compare.kgDetails": "Knowledge graph details",
   "compare.extractedEntities": "Extracted Entities",
   "compare.relatedEntities": "Related Entities (1 hop)",

@@ -67,10 +67,10 @@ def test_ask_returns_token_telemetry(client, fake_chunks):
             new=AsyncMock(return_value=RerankOutcome.unscored(chunks)),
         ),
         patch(
-            "app.rag.strategies.classic.generate_with_usage",
+            "app.rag.strategies.classic.generate_structured",
             new=AsyncMock(
                 return_value={
-                    "text": "An answer.",
+                    "text": "An answer [S1].",
                     "input_tokens": 321,
                     "output_tokens": 45,
                 }

@@ -271,12 +271,34 @@ results = await asyncio.gather(*[_one(s) for s in ["classic", "graph", "agentic"
 
 So all three strategies run in parallel. The response contains, for each strategy:
 - `answer`, `sources`, `refusal`, `confidence`- what the user asked for
+- `grounded`, `status`, `claims`, `invalid_citations`, `citation_count`- how well the
+  answer is backed by the retrieved chunks (see "Grounded answers" below)
 - `latency_ms`, `input_tokens`, `output_tokens`, `iterations`- telemetry
 - `trace`- the per-strategy reasoning steps
 - `extra`- strategy-specific debug info (entities + subgraph for Graph; explored chunks for Agentic)
 
 The frontend (`frontend/src/pages/Compare.tsx`) renders these as three side-by-side cards
 with a "Winners" bar at the bottom that tags the fastest and cheapest result.
+
+### Grounded answers
+
+All three strategies end in `app/rag/grounding.py`. Each context chunk is shown to the
+model under a handle (`[S1]`, `[S2]`...; the agent gets handles from its `search` tool),
+and the model answers through a `submit_answer` tool (the agent's `finish`): `answer`
+with inline `[S#]` markers, `claims` (each with citations and `supported`), `status`
+(`answered` | `partial` | `insufficient_context`) and `unsupported_notes`. The server then
+validates every citation against the chunks the model was actually given: unknown handles
+are dropped from the text and listed in `invalid_citations`, `sources` becomes the cited
+chunks only (the full context stays in `extra.context_sources`), and an answer with no
+surviving citation, or with status `insufficient_context`, becomes the localized "cannot
+answer from the retrieved documents" refusal.
+
+`confidence` is an **evidence score**, not a calibrated probability:
+`0.5 * coverage + 0.2 * status + 0.3 * relevance`, where coverage is the share of supported
+claims citing a valid source, status is 1 for `answered` and 0.5 for `partial`, and
+relevance is the mean cited-chunk retrieval score mapped into [0, 1] (the first two terms
+are rescaled to fill [0, 1] when no score is available). Invalid citations scale it down by
+up to half; a refusal scores 0.
 
 ---
 

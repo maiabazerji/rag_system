@@ -306,9 +306,9 @@ def test_sources_carry_their_document(fake_chunks):
                 new=AsyncMock(return_value=RerankOutcome.unscored(chunks)),
             ),
         patch(
-            "app.rag.strategies.classic.generate_with_usage",
+            "app.rag.strategies.classic.generate_structured",
             new=AsyncMock(
-                return_value={"text": "answer", "input_tokens": 10, "output_tokens": 5}
+                return_value={"text": "answer [S1] [S2]", "input_tokens": 10, "output_tokens": 5}
             ),
         ),
     ):
