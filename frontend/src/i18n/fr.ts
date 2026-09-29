@@ -243,6 +243,7 @@ export const fr: Dictionary = {
   "eval.count.unscored": "Non notées",
   "eval.count.generationFailed": "Échecs de génération",
   "eval.noScores": "Cette exécution n'a enregistré aucun score.",
+  "eval.regTip": "Statut de régression de cette exécution par rapport à la référence de sa configuration.",
   "eval.showReport": "Afficher le rapport de régression",
   "eval.hideReport": "Masquer le rapport de régression",
   "eval.reportLoading": "Chargement du rapport de régression…",
