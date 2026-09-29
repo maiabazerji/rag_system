@@ -8,6 +8,7 @@ from unittest.mock import AsyncMock, patch
 
 import pytest
 
+from app.eval.judge import JudgeOutcome
 from app.eval.metrics import run_evaluation
 from app.eval.retrieval import (
     aggregate_retrieval,
@@ -16,6 +17,9 @@ from app.eval.retrieval import (
 )
 from app.rag.rerank import RerankOutcome
 from app.schemas import Answer, Source
+
+# A judge that could not score anything (the provider is down).
+JUDGE_DOWN = JudgeOutcome.failed("ProviderError", "judge unavailable")
 
 
 def _sources(*docs: str) -> list[Source]:
@@ -151,7 +155,7 @@ class TestStrategyAwareEvaluation:
         answer = AsyncMock(return_value=(_answer(), None))
         with (
             patch("app.eval.metrics.answer_question_detailed", new=answer),
-            patch("app.eval.metrics.judge", new=AsyncMock(return_value=None)),
+            patch("app.eval.metrics.judge_detailed", new=AsyncMock(return_value=JUDGE_DOWN)),
         ):
             result = await run_evaluation(dataset="d", strategy="agentic")
 
@@ -162,7 +166,7 @@ class TestStrategyAwareEvaluation:
         answer = AsyncMock(return_value=(_answer(), None))
         with (
             patch("app.eval.metrics.answer_question_detailed", new=answer),
-            patch("app.eval.metrics.judge", new=AsyncMock(return_value=None)),
+            patch("app.eval.metrics.judge_detailed", new=AsyncMock(return_value=JUDGE_DOWN)),
         ):
             result = await run_evaluation(dataset="d")
 
@@ -173,7 +177,7 @@ class TestStrategyAwareEvaluation:
         answer = AsyncMock(return_value=(_answer(("a.md",)), None))
         with (
             patch("app.eval.metrics.answer_question_detailed", new=answer),
-            patch("app.eval.metrics.judge", new=AsyncMock(return_value=None)),
+            patch("app.eval.metrics.judge_detailed", new=AsyncMock(return_value=JUDGE_DOWN)),
         ):
             result = await run_evaluation(dataset="d", strategy="graph")
 
@@ -187,7 +191,7 @@ class TestStrategyAwareEvaluation:
     async def test_per_example_carries_both_scores(self, golden):
         with (
             patch("app.eval.metrics.answer_question_detailed", new=AsyncMock(return_value=(_answer(), None))),
-            patch("app.eval.metrics.judge", new=AsyncMock(return_value=None)),
+            patch("app.eval.metrics.judge_detailed", new=AsyncMock(return_value=JUDGE_DOWN)),
         ):
             result = await run_evaluation(dataset="d")
 
@@ -199,7 +203,7 @@ class TestStrategyAwareEvaluation:
     async def test_cost_block_is_reported(self, golden):
         with (
             patch("app.eval.metrics.answer_question_detailed", new=AsyncMock(return_value=(_answer(), None))),
-            patch("app.eval.metrics.judge", new=AsyncMock(return_value=None)),
+            patch("app.eval.metrics.judge_detailed", new=AsyncMock(return_value=JUDGE_DOWN)),
         ):
             result = await run_evaluation(dataset="d")
 
@@ -213,7 +217,7 @@ class TestStrategyAwareEvaluation:
                 "app.eval.metrics.answer_question_detailed",
                 new=AsyncMock(return_value=(_answer(refusal=True), None)),
             ),
-            patch("app.eval.metrics.judge", new=AsyncMock(return_value=None)),
+            patch("app.eval.metrics.judge_detailed", new=AsyncMock(return_value=JUDGE_DOWN)),
         ):
             result = await run_evaluation(dataset="d")
 
@@ -223,7 +227,7 @@ class TestStrategyAwareEvaluation:
         """Two strategies must not overwrite each other's run."""
         with (
             patch("app.eval.metrics.answer_question_detailed", new=AsyncMock(return_value=(_answer(), None))),
-            patch("app.eval.metrics.judge", new=AsyncMock(return_value=None)),
+            patch("app.eval.metrics.judge_detailed", new=AsyncMock(return_value=JUDGE_DOWN)),
         ):
             await run_evaluation(dataset="d", strategy="classic")
             await run_evaluation(dataset="d", strategy="agentic")

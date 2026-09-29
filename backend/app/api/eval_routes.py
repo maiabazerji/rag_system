@@ -7,7 +7,13 @@ from app.auth import charge, record_tokens, require_principal, strategy_units
 from app.eval.human_ratings import load_all as load_ratings
 from app.eval.human_ratings import save as save_rating
 from app.eval.metrics import load_dataset, run_evaluation
-from app.eval.regression import get_run, list_run_summaries, load_regressions
+from app.eval.regression import (
+    get_run,
+    list_run_summaries,
+    load_regressions,
+    regression_report_for,
+    render_markdown,
+)
 from app.schemas import EvalRunRequest, HumanRating, HumanRatingRequest
 
 router = APIRouter(dependencies=[Depends(require_principal)])
@@ -34,8 +40,13 @@ async def run(req: EvalRunRequest, principal: Principal = Depends(require_princi
             may read, so scores reflect what this caller would get.
 
     Returns:
-        Run summary with judge scores, deterministic retrieval scores, cost,
-        per-example detail, and the count of examples that could not be scored.
+        The saved run record: configuration (incl. ``judge_model``,
+        ``rubric_version``, ``config_hash``), accounting (``n_examples``,
+        ``n_scored``, ``n_unscored``, ``n_judge_failed``,
+        ``n_generation_failed``, ``failures``), ``aggregates`` (mean/std/n per
+        metric over the examples that measured it), ``by_question_type`` and
+        ``by_difficulty`` breakdowns, ``cost``, ``per_example`` rows and a
+        ``regression`` summary against the configuration's baseline.
 
     Raises:
         HTTPException: 429 if the run would exceed the key's rate limit.
@@ -86,6 +97,32 @@ def run_detail(run_id: str) -> dict:
     if result is None:
         raise HTTPException(status_code=404, detail=f"No evaluation run '{run_id}'")
     return result
+
+
+@router.get("/runs/{run_id}/regression", summary="Regression report for one run")
+def run_regression(run_id: str) -> dict:
+    """Compare a run against its baseline under the configured thresholds.
+
+    The baseline is the pinned baseline for the run's configuration if one
+    exists, else the previous run of the same configuration. Thresholds come
+    from ``eval/regression_thresholds.toml`` (or ``REGRESSION_THRESHOLDS_PATH``).
+
+    Returns:
+        The structured report (``status``, per-metric ``checks``, both run
+        references) plus its ``markdown`` rendering.
+
+    Raises:
+        HTTPException: 404 if no run has that id; 500 if the thresholds file
+            is invalid.
+    """
+    result = get_run(run_id)
+    if result is None:
+        raise HTTPException(status_code=404, detail=f"No evaluation run '{run_id}'")
+    try:
+        report = regression_report_for(result)
+    except (OSError, ValueError) as e:
+        raise HTTPException(status_code=500, detail=f"Invalid regression thresholds: {e}") from e
+    return {**report, "markdown": render_markdown(report)}
 
 
 @router.get("/regressions", summary="List detected regressions")

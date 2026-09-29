@@ -1,0 +1,42 @@
+# Regression gate thresholds for eval runs.
+#
+# Read by app/eval/regression.py (load_thresholds). Resolution order, highest
+# first: CLI flags (--threshold METRIC=VALUE, --min-examples N), --thresholds
+# PATH, the REGRESSION_THRESHOLDS_PATH environment variable, this file, then
+# built-in defaults identical to this file.
+#
+# Each [metrics.<name>] table sets one or more bounds on the change from the
+# baseline run to the current run:
+#   min_delta         FAIL if (current - baseline) < min_delta       (scores: higher is better)
+#   max_delta         FAIL if (current - baseline) > max_delta
+#   max_increase_pct  FAIL if the change exceeds +N% of the baseline  (cost: lower is better)
+#   max_decrease_pct  FAIL if the change is below -N% of the baseline
+#
+# Metric names: judge dimensions (faithfulness, answer_relevance,
+# context_precision, context_recall, answer_correctness), retrieval metrics
+# (mrr, recall@K, precision@K, hit_rate@K, ndcg@K for the run's K values),
+# behaviour metrics (correct_refusal, false_refusal) and the derived cost
+# metrics latency_p50_ms and tokens_per_question.
+#
+# A check is SKIPPED (insufficient data) when either run did not measure the
+# metric or measured it on fewer than min_examples examples.
+
+min_examples = 5
+
+[metrics.faithfulness]
+min_delta = -0.03
+
+[metrics.answer_relevance]
+min_delta = -0.03
+
+[metrics."recall@5"]
+min_delta = -0.03
+
+[metrics.mrr]
+min_delta = -0.03
+
+[metrics.latency_p50_ms]
+max_increase_pct = 20.0
+
+[metrics.tokens_per_question]
+max_increase_pct = 15.0
