@@ -698,16 +698,7 @@ def _regression_on_save(result: dict, path: Path) -> dict[str, Any]:
     except (OSError, ValueError) as e:
         logger.warning("Regression check for run %s failed: %s", path.stem, e)
         return {"status": "ERROR", "error": f"{type(e).__name__}: {e}"}
-    return {
-        "status": report["status"],
-        "n_pass": report["n_pass"],
-        "n_fail": report["n_fail"],
-        "n_skipped": report["n_skipped"],
-        "baseline_id": (report.get("baseline") or {}).get("id"),
-        "baseline_source": report.get("baseline_source"),
-        "report_json": json_path.name,
-        "report_markdown": md_path.name,
-    }
+    return regression.report_summary(report, json_path, md_path)
 
 
 def _log_to_wandb(

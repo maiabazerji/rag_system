@@ -738,6 +738,21 @@ def save_report(
     return json_path, md_path
 
 
+def report_summary(report: dict[str, Any], json_path: Path, md_path: Path) -> dict[str, Any]:
+    """The compact form of a report stored in the run record itself."""
+    return {
+        "status": report["status"],
+        "n_pass": report["n_pass"],
+        "n_fail": report["n_fail"],
+        "n_skipped": report["n_skipped"],
+        "baseline_id": (report.get("baseline") or {}).get("id"),
+        "baseline_source": report.get("baseline_source"),
+        "thresholds_source": report["thresholds"]["source"],
+        "report_json": json_path.name,
+        "report_markdown": md_path.name,
+    }
+
+
 def regression_report_for(run: dict, config: ThresholdConfig | None = None) -> dict[str, Any]:
     """Compare a run against its baseline (pinned, else previous comparable run)."""
     baseline, source = find_baseline(run)
