@@ -85,9 +85,9 @@ class TestContent:
             patch("app.rag.strategies.classic.dense_search", new=AsyncMock(return_value=chunks)),
             patch("app.rag.strategies.classic.rerank_async", new=AsyncMock(return_value=chunks)),
             patch(
-                "app.rag.strategies.classic.generate_with_usage",
+                "app.rag.strategies.classic.generate_structured",
                 new=AsyncMock(
-                    return_value={"text": "An answer.", "input_tokens": 3, "output_tokens": 2}
+                    return_value={"text": "An answer [S1].", "input_tokens": 3, "output_tokens": 2}
                 ),
             ),
         ):

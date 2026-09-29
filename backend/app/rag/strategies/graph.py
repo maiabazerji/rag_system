@@ -37,7 +37,15 @@ from app.prompts import render_prompt
 from app.rag.graph_extract import extract_question_entities
 from app.rag.graph_store import describe_subgraph, neighbors
 from app.rag.graph_store import load as load_graph
-from app.rag.providers.anthropic_provider import generate_with_usage
+from app.rag.grounding import (
+    SUBMIT_ANSWER_TOOL,
+    cite_chunks,
+    format_context,
+    ground,
+    grounded_system,
+    grounding_extra,
+)
+from app.rag.providers.anthropic_provider import generate_structured
 from app.rag.rerank import rerank_async
 from app.rag.retrieve import dense_search
 from app.rag.store import fetch_chunks, readable_doc_ids
@@ -312,7 +320,8 @@ class GraphRAG(Strategy):
         subgraph_text = describe_subgraph(
             entities + sorted(related_entities)[:5], doc_ids=visible_docs
         )
-        ctx_block = "\n\n".join(f"[{c.id}]\n{c.text}" for c in ranked)
+        cited = cite_chunks(ranked)
+        ctx_block = format_context(cited)
         augmented_ctx = (
             f"# Knowledge graph (extracted from your documents)\n{subgraph_text}\n\n"
             f"# Relevant passages\n{ctx_block}"
@@ -337,8 +346,26 @@ class GraphRAG(Strategy):
             },
         )
 
-        out = await generate_with_usage(model=model, prompt=user_msg, max_tokens=settings.max_answer_tokens)
-        trace.append({"step": "generate", "chars": len(out["text"])})
+        out = await generate_structured(
+            model=model,
+            prompt=user_msg,
+            tool=SUBMIT_ANSWER_TOOL,
+            system=grounded_system("anthropic"),
+            max_tokens=settings.max_answer_tokens,
+        )
+        grounded, raw = ground(question, out, cited)
+        trace.append(
+            {"step": "generate", "mode": grounded.mode, "chars": len(out.get("text") or "")}
+        )
+        trace.append(
+            {
+                "step": "validate_citations",
+                "status": grounded.status,
+                "grounded": grounded.grounded,
+                "cited": [c.handle for c in grounded.cited],
+                "invalid": grounded.invalid_citations,
+            }
+        )
 
         logger.info(
             "Graph RAG strategy completed",
@@ -347,22 +374,16 @@ class GraphRAG(Strategy):
                 "model": model,
                 "input_tokens": out["input_tokens"],
                 "output_tokens": out["output_tokens"],
-                "answer_len": len(out["text"]),
-                "sources_count": len(ranked[:5]),
+                "answer_len": len(grounded.answer),
+                "sources_count": grounded.citation_count,
+                "grounded": grounded.grounded,
+                "status": grounded.status,
                 "entities_found": len(entities),
             },
         )
 
         return StrategyResult(
-            answer=out["text"] or "(empty response)",
-            sources=[
-                Source(
-                    chunk_id=c.id,
-                    quote=c.text[:280],
-                    document=c.metadata.get("filename"),
-                )
-                for c in ranked[:5]
-            ],
+            **grounded.result_fields(),
             input_tokens=out["input_tokens"] + extract_in,
             output_tokens=out["output_tokens"] + extract_out,
             trace=trace,
@@ -373,5 +394,6 @@ class GraphRAG(Strategy):
                 "retrieved_ids": [c.id for c in ranked],
                 "retrieved_docs": [c.metadata.get("filename") for c in ranked],
                 "context_text": augmented_ctx,
+                **grounding_extra(grounded, raw, cited),
             },
         )
