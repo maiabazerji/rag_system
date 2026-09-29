@@ -1,6 +1,17 @@
-import { useEffect, useId, useRef, useState, ReactNode } from "react";
+import { useEffect, useId, useMemo, useRef, useState, type ReactNode } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { ApiError, errorMessage, get, getAdminKey, post, setAdminKey } from "../api/client";
+import {
+  STRATEGY_NAMES,
+  compareStrategies,
+  listGoldenDatasets,
+  listGoldenQuestions,
+  type CompareStrategiesRequest,
+  type CompareStrategiesResponse,
+  type StrategyComparison,
+  type StrategyName,
+  type TraceStep,
+} from "../api/eval";
 import LoadingSpinner from "../components/LoadingSpinner";
 import ErrorAlert from "../components/ErrorAlert";
 import Tooltip from "../components/Tooltip";
@@ -10,27 +21,23 @@ import {
   InvalidCitationsWarning,
   SourceLocation,
   type CitedSource,
-  type Grounding,
 } from "../components/Citations";
 import { handleNumber, sourceAnchor } from "../utils/citations";
-import { formatLatency, formatTokens } from "../utils/formatting";
+import { formatLatency, formatScore, formatTokens, formatUsd } from "../utils/formatting";
+import {
+  COMPARE_METRICS,
+  bestValues,
+  isFailedRow,
+  latencyStages,
+  totalLatency,
+  whyThisResult,
+  type CompareMetric,
+  type Fact,
+} from "../utils/compareInsights";
+import { STAGE_COLORS } from "../utils/chartColors";
 import { useI18n, type I18n, type MessageKey } from "../i18n";
 
-type TraceStep = { step?: string; [k: string]: unknown };
-type StrategyOut = Grounding & {
-  strategy: "classic" | "graph" | "agentic";
-  answer: string;
-  sources: CitedSource[];
-  refusal: boolean;
-  confidence: number;
-  latency_ms: number;
-  input_tokens: number;
-  output_tokens: number;
-  iterations: number;
-  trace: TraceStep[];
-  extra: Record<string, unknown>;
-};
-type CompareOut = { question: string; results: StrategyOut[] };
+type StrategyOut = StrategyComparison;
 type GraphStats = { triples: number; entities: number };
 type JobStatus = "queued" | "running" | "completed" | "failed";
 /** POST /graph/build answers 202 with a job; GET /graph/build/{id} reports on it. */
@@ -43,8 +50,11 @@ type BuildJob = {
   failures?: string[];
   error?: string;
 };
+type QuestionSource = "own" | "golden";
+type Best = Record<string, Set<StrategyName>>;
 
 const POLL_INTERVAL_MS = 2000;
+const ALL_TYPES = "";
 
 /** Graph build and reset need the admin key on top of any API key. */
 function graphBuildError(e: unknown, t: I18n["t"]): string {
@@ -59,32 +69,29 @@ function graphBuildError(e: unknown, t: I18n["t"]): string {
 }
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
-const STRATEGIES: StrategyOut["strategy"][] = ["classic", "graph", "agentic"];
+const STRATEGIES: StrategyName[] = [...STRATEGY_NAMES];
 
 const META: Record<
-  StrategyOut["strategy"],
-  { title: MessageKey; short: MessageKey; tagline: MessageKey; accent: string; color: string }
+  StrategyName,
+  { title: MessageKey; short: MessageKey; tagline: MessageKey; accent: string }
 > = {
   classic: {
     title: "strategy.classic",
     short: "strategy.classic.short",
     tagline: "compare.tagline.classic",
-    accent: "from-sky-500/30 to-sky-500/0",
-    color: "text-sky-300",
+    accent: "from-sky-500/20 to-sky-500/0",
   },
   graph: {
     title: "strategy.graph",
     short: "strategy.graph.short",
     tagline: "compare.tagline.graph",
-    accent: "from-violet-500/30 to-violet-500/0",
-    color: "text-violet-300",
+    accent: "from-violet-500/20 to-violet-500/0",
   },
   agentic: {
     title: "strategy.agentic",
     short: "strategy.agentic.short",
     tagline: "compare.tagline.agentic",
-    accent: "from-emerald-500/30 to-emerald-500/0",
-    color: "text-emerald-300",
+    accent: "from-emerald-500/20 to-emerald-500/0",
   },
 };
 
@@ -97,15 +104,31 @@ const JOB_STATUS: Record<JobStatus, MessageKey> = {
   failed: "compare.status.failed",
 };
 
+/** Split "a.md, b.md" into ["a.md", "b.md"]. */
+function parseDocList(value: string): string[] {
+  return value
+    .split(/[,\n]/)
+    .map((s) => s.trim())
+    .filter(Boolean);
+}
+
 export default function Compare() {
   const { t, tp } = useI18n();
   const [q, setQ] = useState("");
-  const [res, setRes] = useState<CompareOut | null>(null);
+  const [source, setSource] = useState<QuestionSource>("own");
+  const [dataset, setDataset] = useState("");
+  const [typeFilter, setTypeFilter] = useState(ALL_TYPES);
+  const [goldenId, setGoldenId] = useState("");
+  const [evaluate, setEvaluate] = useState(false);
+  const [idealAnswer, setIdealAnswer] = useState("");
+  const [relevantDocs, setRelevantDocs] = useState("");
+  const [res, setRes] = useState<CompareStrategiesResponse | null>(null);
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
   const [buildingGraph, setBuildingGraph] = useState(false);
   const [buildProgress, setBuildProgress] = useState<string | null>(null);
   const [showAdminKey, setShowAdminKey] = useState(false);
+  const evaluateHelpId = useId();
   const { data: graphStats = null, refetch: refetchStats } = useQuery({
     queryKey: ["graph-stats"],
     queryFn: () => get<GraphStats>("/graph/stats"),
@@ -120,17 +143,34 @@ export default function Compare() {
     };
   }, []);
 
+  const golden = source === "golden";
+  const canRun = !busy && !!q.trim() && (!golden || !!goldenId);
+
+  function buildRequest(): CompareStrategiesRequest {
+    const req: CompareStrategiesRequest = { question: q, strategies: STRATEGIES };
+    if (!evaluate) return req;
+    req.evaluate = true;
+    if (golden) {
+      req.golden = { dataset, id: goldenId };
+    } else {
+      const docs = parseDocList(relevantDocs);
+      if (idealAnswer.trim() || docs.length > 0) {
+        req.reference = {
+          ...(idealAnswer.trim() ? { ideal_answer: idealAnswer.trim() } : {}),
+          ...(docs.length > 0 ? { relevant_doc_ids: docs } : {}),
+        };
+      }
+    }
+    return req;
+  }
+
   async function run() {
-    if (busy) return;
+    if (!canRun) return;
     setErr(null);
     setBusy(true);
     setRes(null);
     try {
-      const r = await post<CompareOut>("/compare/strategies", {
-        question: q,
-        strategies: STRATEGIES,
-      });
-      setRes(r);
+      setRes(await compareStrategies(buildRequest()));
     } catch (e) {
       setErr(errorMessage(e));
     } finally {
@@ -178,70 +218,151 @@ export default function Compare() {
     }
   }
 
-  const byName = (n: StrategyOut["strategy"]) => res?.results.find((r) => r.strategy === n);
+  const results = useMemo(() => res?.results ?? [], [res]);
+  const best = useMemo(() => bestValues(results), [results]);
+  const byName = (n: StrategyName) => results.find((r) => r.strategy === n);
+
+  function switchSource(next: QuestionSource) {
+    setSource(next);
+    setQ("");
+    setGoldenId("");
+  }
 
   return (
     <div className="flex flex-col gap-6">
       <header className="space-y-2">
         <h1 className="display text-4xl font-semibold text-white">{t("compare.title")}</h1>
-        <p className="text-sm text-zinc-400">
-          <span className="text-sky-300">{t("strategy.classic.short")}</span> •{" "}
-          <span className="text-violet-300">{t("strategy.graph.short")}</span> •{" "}
-          <span className="text-emerald-300">{t("strategy.agentic.short")}</span>
-        </p>
+        <p className="text-sm text-zinc-400">{t("compare.subtitle")}</p>
       </header>
 
-      <div className="card flex flex-col gap-1.5 p-2">
-        <textarea
-          value={q}
-          onChange={(e) => setQ(e.target.value)}
-          onKeyDown={(e) => {
-            if (e.key === "Enter" && !e.shiftKey) {
-              e.preventDefault();
-              if (q.trim() && !busy) run();
-            }
-          }}
-          rows={2}
-          placeholder={t("compare.placeholder")}
-          className="input resize-none text-sm"
-        />
-        <div className="flex items-center justify-between gap-2 flex-wrap sm:flex-nowrap">
-          <div className="flex flex-wrap gap-1 w-full sm:w-auto">
+      <div className="card flex flex-col gap-3 p-3 sm:p-4">
+        <fieldset className="flex flex-wrap items-center gap-2">
+          <legend className="sr-only">{t("compare.sourceLabel")}</legend>
+          {(["own", "golden"] as const).map((s) => (
+            <label
+              key={s}
+              className={`chip cursor-pointer min-h-[36px] focus-within:ring-2 focus-within:ring-accent/50 ${
+                source === s ? "!border-accent/60 !text-white" : "hover:text-white"
+              }`}
+            >
+              <input
+                type="radio"
+                name="compare-source"
+                value={s}
+                checked={source === s}
+                onChange={() => switchSource(s)}
+                className="sr-only"
+              />
+              {t(s === "own" ? "compare.source.own" : "compare.source.golden")}
+            </label>
+          ))}
+        </fieldset>
+
+        {golden && (
+          <GoldenPicker
+            dataset={dataset}
+            onDataset={(d) => {
+              setDataset(d);
+              setGoldenId("");
+              setQ("");
+              setTypeFilter(ALL_TYPES);
+            }}
+            typeFilter={typeFilter}
+            onTypeFilter={setTypeFilter}
+            selectedId={goldenId}
+            onSelect={(id, question) => {
+              setGoldenId(id);
+              setQ(question);
+            }}
+          />
+        )}
+
+        <label className="flex flex-col gap-1">
+          <span className="sr-only">{t("compare.question")}</span>
+          <textarea
+            value={q}
+            readOnly={golden}
+            onChange={(e) => setQ(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter" && !e.shiftKey) {
+                e.preventDefault();
+                run();
+              }
+            }}
+            rows={2}
+            placeholder={golden ? t("compare.goldenPick") : t("compare.placeholder")}
+            className={`input resize-none text-sm ${golden ? "opacity-80" : ""}`}
+          />
+        </label>
+
+        {!golden && (
+          <div className="flex flex-wrap gap-1">
             {SAMPLES.map((key) => {
               const s = t(key);
               return (
                 <button
                   key={key}
+                  type="button"
                   onClick={() => setQ(s)}
-                  className="chip text-xs hover:text-white hover:border-accent/40 min-h-[44px] sm:min-h-auto"
+                  className="chip text-xs text-left hover:text-white hover:border-accent/40 min-h-[36px]"
                 >
                   {s}
                 </button>
               );
             })}
           </div>
-          <div className="flex items-center gap-1.5 w-full sm:w-auto flex-wrap sm:flex-nowrap">
-            <GraphStatus
-              stats={graphStats}
-              busy={buildingGraph}
-              progress={buildProgress}
-              onBuild={buildGraph}
+        )}
+
+        <div className="flex flex-col gap-2">
+          <label className="inline-flex items-center gap-2 text-sm text-zinc-200 cursor-pointer self-start min-h-[36px]">
+            <input
+              type="checkbox"
+              role="switch"
+              checked={evaluate}
+              onChange={(e) => setEvaluate(e.target.checked)}
+              aria-describedby={evaluateHelpId}
+              className="h-4 w-4 accent-[#e8a93c]"
             />
-            <button
-              onClick={run}
-              disabled={!q.trim() || busy}
-              className="btn-primary text-sm px-3 py-2 min-h-[48px] sm:min-h-auto"
-            >
-              {busy ? t("common.running") : t("compare.run")}
-            </button>
-          </div>
+            {t("compare.evaluate")}
+          </label>
+          <p id={evaluateHelpId} className="text-xs text-zinc-500 max-w-2xl">
+            {t("compare.evaluateHelp")}
+          </p>
+          {evaluate && golden && (
+            <p className="text-xs text-zinc-400">{t("compare.goldenReference")}</p>
+          )}
+          {evaluate && !golden && (
+            <ReferenceFields
+              idealAnswer={idealAnswer}
+              onIdealAnswer={setIdealAnswer}
+              relevantDocs={relevantDocs}
+              onRelevantDocs={setRelevantDocs}
+            />
+          )}
+        </div>
+
+        <div className="flex items-center justify-between gap-2 flex-wrap">
+          <GraphStatus
+            stats={graphStats}
+            busy={buildingGraph}
+            progress={buildProgress}
+            onBuild={buildGraph}
+          />
+          <button
+            type="button"
+            onClick={run}
+            disabled={!canRun}
+            className="btn-primary text-sm px-4 py-2 min-h-[44px] w-full sm:w-auto"
+          >
+            {busy ? t("common.running") : t("compare.run")}
+          </button>
         </div>
         {err && (
           <ErrorAlert
             error={err}
             onRetry={() => {
               setErr(null);
-              if (q.trim() && !busy) run();
+              run();
             }}
             onDismiss={() => setErr(null)}
           />
@@ -249,14 +370,515 @@ export default function Compare() {
         <AdminKeyField open={showAdminKey} onToggle={setShowAdminKey} />
       </div>
 
-      {res && <WinnersBar results={res.results} />}
+      {busy && evaluate && <p className="text-xs text-zinc-400" role="status">{t("compare.evaluating")}</p>}
 
-      <div className="grid md:grid-cols-2 lg:grid-cols-3 gap-2">
+      {results.length > 1 && <SummaryTable results={results} best={best} />}
+
+      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
         {STRATEGIES.map((s) => (
-          <StrategyCard key={s} name={s} result={byName(s)} loading={busy} />
+          <StrategyCard key={s} name={s} result={byName(s)} loading={busy} best={best} />
         ))}
       </div>
     </div>
+  );
+}
+
+function GoldenPicker({
+  dataset,
+  onDataset,
+  typeFilter,
+  onTypeFilter,
+  selectedId,
+  onSelect,
+}: {
+  dataset: string;
+  onDataset: (d: string) => void;
+  typeFilter: string;
+  onTypeFilter: (t: string) => void;
+  selectedId: string;
+  onSelect: (id: string, question: string) => void;
+}) {
+  const { t } = useI18n();
+  const ids = { dataset: useId(), type: useId(), list: useId() };
+  const datasets = useQuery({ queryKey: ["golden-datasets"], queryFn: listGoldenDatasets });
+  const active = dataset || datasets.data?.[0] || "";
+  const questions = useQuery({
+    queryKey: ["golden-questions", active],
+    queryFn: () => listGoldenQuestions(active),
+    enabled: !!active,
+  });
+
+  // Adopt the first dataset once the list arrives, so the parent sends it.
+  useEffect(() => {
+    if (!dataset && active) onDataset(active);
+  }, [dataset, active, onDataset]);
+
+  const types = useMemo(
+    () => [...new Set((questions.data ?? []).map((q) => q.question_type))].sort(),
+    [questions.data],
+  );
+  const shown = (questions.data ?? []).filter((q) => !typeFilter || q.question_type === typeFilter);
+  const error = datasets.error ?? questions.error;
+
+  return (
+    <div className="grid gap-2 sm:grid-cols-2">
+      <label htmlFor={ids.dataset} className="flex flex-col gap-1 text-xs text-zinc-400">
+        {t("compare.dataset")}
+        <select
+          id={ids.dataset}
+          value={active}
+          onChange={(e) => onDataset(e.target.value)}
+          className="input !py-2 text-sm"
+        >
+          {(datasets.data ?? []).map((d) => (
+            <option key={d} value={d}>
+              {d}
+            </option>
+          ))}
+        </select>
+      </label>
+      <label htmlFor={ids.type} className="flex flex-col gap-1 text-xs text-zinc-400">
+        {t("compare.questionType")}
+        <select
+          id={ids.type}
+          value={typeFilter}
+          onChange={(e) => onTypeFilter(e.target.value)}
+          className="input !py-2 text-sm"
+        >
+          <option value={ALL_TYPES}>{t("compare.allTypes")}</option>
+          {types.map((ty) => (
+            <option key={ty} value={ty}>
+              {ty}
+            </option>
+          ))}
+        </select>
+      </label>
+      <label htmlFor={ids.list} className="flex flex-col gap-1 text-xs text-zinc-400 sm:col-span-2">
+        {t("compare.question")}
+        {(datasets.isLoading || questions.isLoading) && (
+          <span className="text-zinc-500">{t("compare.goldenLoading")}</span>
+        )}
+        {error ? (
+          <span className="text-rose-300">{t("compare.goldenFailed", { error: errorMessage(error) })}</span>
+        ) : shown.length === 0 && questions.isSuccess ? (
+          <span className="text-zinc-500">{t("compare.goldenEmpty")}</span>
+        ) : (
+          <select
+            id={ids.list}
+            size={Math.min(6, Math.max(2, shown.length))}
+            value={selectedId}
+            onChange={(e) => {
+              const picked = shown.find((q) => q.id === e.target.value);
+              if (picked) onSelect(picked.id, picked.question);
+            }}
+            className="input !py-1 text-sm"
+          >
+            {shown.map((q) => (
+              <option key={q.id} value={q.id} className="py-1 whitespace-normal">
+                {q.id} · {q.question_type}
+                {q.difficulty ? ` · ${q.difficulty}` : ""} — {q.question}
+              </option>
+            ))}
+          </select>
+        )}
+      </label>
+    </div>
+  );
+}
+
+function ReferenceFields({
+  idealAnswer,
+  onIdealAnswer,
+  relevantDocs,
+  onRelevantDocs,
+}: {
+  idealAnswer: string;
+  onIdealAnswer: (v: string) => void;
+  relevantDocs: string;
+  onRelevantDocs: (v: string) => void;
+}) {
+  const { t } = useI18n();
+  const ids = { answer: useId(), docs: useId(), answerHelp: useId(), docsHelp: useId() };
+  return (
+    <details className="text-xs text-zinc-400">
+      <summary className="cursor-pointer select-none hover:text-zinc-200">{t("compare.reference")}</summary>
+      <div className="mt-2 grid gap-2 sm:grid-cols-2">
+        <div className="flex flex-col gap-1">
+          <label htmlFor={ids.answer}>{t("compare.idealAnswer")}</label>
+          <textarea
+            id={ids.answer}
+            rows={2}
+            value={idealAnswer}
+            onChange={(e) => onIdealAnswer(e.target.value)}
+            aria-describedby={ids.answerHelp}
+            className="input resize-y !py-2 text-sm"
+          />
+          <span id={ids.answerHelp} className="text-zinc-500">{t("compare.idealAnswerHelp")}</span>
+        </div>
+        <div className="flex flex-col gap-1">
+          <label htmlFor={ids.docs}>{t("compare.relevantDocs")}</label>
+          <input
+            id={ids.docs}
+            value={relevantDocs}
+            onChange={(e) => onRelevantDocs(e.target.value)}
+            aria-describedby={ids.docsHelp}
+            spellCheck={false}
+            className="input !py-2 text-sm font-mono"
+          />
+          <span id={ids.docsHelp} className="text-zinc-500">{t("compare.relevantDocsHelp")}</span>
+        </div>
+      </div>
+    </details>
+  );
+}
+
+/** Format one comparison metric value for display. */
+function useMetricText() {
+  const { t, locale, formatNumber } = useI18n();
+  return (m: CompareMetric, v: number | null | undefined): string => {
+    if (v == null || !Number.isFinite(v)) return t("compare.notMeasured");
+    switch (m.kind) {
+      case "score":
+        return formatScore(v, 2, locale);
+      case "latency":
+        return formatLatency(v, locale);
+      case "tokens":
+        return formatTokens(v, locale);
+      case "usd":
+        return formatUsd(v, locale);
+      default:
+        return formatNumber(v);
+    }
+  };
+}
+
+function BestMark() {
+  const { t } = useI18n();
+  return (
+    <span className="ml-1 inline-flex items-center gap-0.5 rounded-full border border-accent/50 bg-accent/10 px-1.5 text-[10px] font-semibold text-accent">
+      <span aria-hidden="true">★</span>
+      <span aria-hidden="true">{t("compare.best")}</span>
+      <span className="sr-only">{t("compare.bestAria")}</span>
+    </span>
+  );
+}
+
+/** Metrics as rows, strategies as columns; best measured value per metric marked. */
+function SummaryTable({ results, best }: { results: StrategyOut[]; best: Best }) {
+  const { t } = useI18n();
+  const text = useMetricText();
+  const shown = COMPARE_METRICS.filter((m) => results.some((r) => m.value(r) != null && !isFailedRow(r)));
+  if (shown.length === 0) return null;
+  const cols = STRATEGIES.filter((s) => results.some((r) => r.strategy === s));
+  return (
+    <section className="card !p-3 sm:!p-4 flex flex-col gap-2" aria-labelledby="compare-summary">
+      <h2 id="compare-summary" className="text-sm font-semibold text-white">{t("compare.summary")}</h2>
+      <p className="text-xs text-zinc-500">{t("compare.summaryNote")}</p>
+      <div className="overflow-x-auto">
+        <table className="w-full text-xs">
+          <thead>
+            <tr className="text-left text-zinc-500">
+              <th scope="col" className="py-1.5 pr-3 font-medium">{t("compare.metric")}</th>
+              {cols.map((s) => (
+                <th key={s} scope="col" className="py-1.5 pr-3 font-medium text-zinc-300">
+                  {t(META[s].short)}
+                </th>
+              ))}
+            </tr>
+          </thead>
+          <tbody>
+            {shown.map((m) => (
+              <tr key={m.id} className="border-t border-bg-border">
+                <th scope="row" className="py-1.5 pr-3 text-left font-normal text-zinc-400">{t(m.label)}</th>
+                {cols.map((s) => {
+                  const row = results.find((r) => r.strategy === s)!;
+                  const isBest = best[m.id]?.has(s);
+                  return (
+                    <td key={s} className={`py-1.5 pr-3 font-mono tabular-nums ${isBest ? "text-white font-semibold" : "text-zinc-300"}`}>
+                      {isFailedRow(row) ? "–" : text(m, m.value(row))}
+                      {isBest && <BestMark />}
+                    </td>
+                  );
+                })}
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </section>
+  );
+}
+
+function StrategyCard({
+  name,
+  result,
+  loading,
+  best,
+}: {
+  name: StrategyName;
+  result?: StrategyOut;
+  loading: boolean;
+  best: Best;
+}) {
+  const { t, locale } = useI18n();
+  const m = META[name];
+  const [expanded, setExpanded] = useState(false);
+  const anchorPrefix = useId().replace(/:/g, "");
+  const failed = result ? isFailedRow(result) : false;
+
+  return (
+    <article
+      className="card relative overflow-hidden flex flex-col gap-3 min-h-[280px] !p-3 sm:!p-4"
+      aria-labelledby={`${anchorPrefix}-title`}
+    >
+      <div className={`absolute inset-x-0 top-0 h-12 bg-gradient-to-b ${m.accent} pointer-events-none`} />
+
+      <header className="relative flex flex-col gap-0.5">
+        <h2 id={`${anchorPrefix}-title`} className="text-sm font-bold text-white">{t(m.title)}</h2>
+        <div className="text-[11px] text-zinc-500 font-mono">{t(m.tagline)}</div>
+      </header>
+
+      {loading && !result && <LoadingSpinner />}
+
+      {result && (
+        <>
+          <div className="flex items-center gap-1.5 flex-wrap text-xs">
+            <span
+              className={`chip ${result.refusal ? "!text-amber-300 !border-amber-500/40 !bg-amber-500/10" : ""}`}
+            >
+              <span aria-hidden="true">{result.refusal ? "⚠" : "✓"}</span>
+              {result.refusal ? t("common.refused") : t("common.answered")}
+            </span>
+            <GroundingBadge g={result} />
+          </div>
+
+          {result.refusal || failed ? (
+            <div className="text-amber-200 text-xs p-2 bg-amber-500/10 rounded border border-amber-500/30">
+              {result.answer}
+            </div>
+          ) : (
+            <div className="flex flex-col gap-1">
+              <div className={`text-zinc-200 text-sm leading-relaxed answer-content ${!expanded ? "line-clamp-6" : ""}`}>
+                <FormattedAnswer text={result.answer} cite={{ anchorPrefix, sources: result.sources }} />
+              </div>
+              <button
+                type="button"
+                onClick={() => setExpanded(!expanded)}
+                aria-expanded={expanded}
+                className="text-xs text-accent hover:text-accent-hover font-semibold self-start"
+              >
+                {expanded ? t("compare.showLess") : t("compare.readMore")}
+              </button>
+            </div>
+          )}
+
+          <InvalidCitationsWarning invalid={result.invalid_citations} />
+
+          {!failed && <EvaluationBlock result={result} best={best} />}
+          {!failed && <CostBlock result={result} best={best} />}
+
+          {!failed && result.sources.length > 0 && result.sources[0].chunk_id !== "none" && (
+            <details className="text-xs text-zinc-400">
+              <summary className="cursor-pointer font-semibold hover:text-zinc-200">
+                {t("common.sources", { count: result.sources.length })}
+              </summary>
+              <ol className="mt-1.5 space-y-1">
+                {result.sources.map((s, i) => (
+                  <li
+                    key={`${s.chunk_id}-${i}`}
+                    id={s.handle ? sourceAnchor(anchorPrefix, s.handle) : undefined}
+                    className="text-[11px] text-zinc-400 target:bg-accent/10 rounded break-words"
+                    title={s.quote}
+                  >
+                    <span className="font-mono">[{s.handle ? handleNumber(s.handle) : i + 1}]</span>{" "}
+                    <SourceLocation s={s} />
+                    {s.relevance_score != null && (
+                      <span className="text-zinc-500">
+                        {" "}· {t("compare.relevanceScore", { score: formatScore(s.relevance_score, 2, locale) })}
+                      </span>
+                    )}
+                  </li>
+                ))}
+              </ol>
+            </details>
+          )}
+
+          <WhyPanel result={result} />
+
+          {result.extra && Object.keys(result.extra).length > 0 && (
+            <ExtraDetails name={name} extra={result.extra} />
+          )}
+          {result.trace && result.trace.length > 0 && <TraceDetails trace={result.trace} />}
+        </>
+      )}
+    </article>
+  );
+}
+
+function MetricTile({
+  label,
+  value,
+  isBest,
+  note,
+}: {
+  label: string;
+  value: string;
+  isBest?: boolean;
+  note?: string;
+}) {
+  return (
+    <div className="rounded-md border border-bg-border bg-bg-elevated px-2 py-1.5" title={note}>
+      <div className="text-[11px] text-zinc-500">{label}</div>
+      <div className={`font-mono text-sm tabular-nums ${isBest ? "text-white font-semibold" : "text-zinc-200"}`}>
+        {value}
+        {isBest && <BestMark />}
+      </div>
+    </div>
+  );
+}
+
+const byId = (id: string) => COMPARE_METRICS.find((m) => m.id === id)!;
+
+function EvaluationBlock({ result, best }: { result: StrategyOut; best: Best }) {
+  const { t } = useI18n();
+  const text = useMetricText();
+  const ev = result.evaluation;
+  if (!ev) return null;
+
+  if (ev.status === "refusal_checked") {
+    return (
+      <p className="text-xs text-zinc-300">
+        {ev.correct_refusal === 1 ? t("compare.refusalCorrect") : t("compare.refusalWrong")}
+      </p>
+    );
+  }
+
+  const tiles: { id: string; note?: string }[] = [
+    { id: "faithfulness" },
+    { id: "answer_relevance" },
+    { id: "answer_correctness", note: ev.has_reference_answer ? undefined : t("compare.noReference") },
+    { id: "recall@5", note: ev.retrieval ? undefined : t("compare.noRelevantDocs") },
+    { id: "mrr", note: ev.retrieval ? undefined : t("compare.noRelevantDocs") },
+  ];
+  return (
+    <section className="flex flex-col gap-1.5" aria-label={t("compare.scores")}>
+      {ev.status === "judge_failed" && (
+        <p role="status" className="text-[11px] text-amber-300 bg-amber-500/10 border border-amber-500/30 rounded px-2 py-1">
+          {t("compare.judgeFailed", { error: ev.error ?? ev.error_type ?? t("compare.unknownError") })}
+        </p>
+      )}
+      <div className="grid grid-cols-2 sm:grid-cols-3 gap-1.5">
+        {tiles.map(({ id, note }) => {
+          const m = byId(id);
+          return (
+            <MetricTile
+              key={id}
+              label={t(m.label)}
+              value={text(m, m.value(result))}
+              isBest={best[id]?.has(result.strategy)}
+              note={note}
+            />
+          );
+        })}
+      </div>
+      {!ev.retrieval && <p className="text-[11px] text-zinc-500">{t("compare.noRelevantDocs")}</p>}
+    </section>
+  );
+}
+
+function CostBlock({ result, best }: { result: StrategyOut; best: Best }) {
+  const { t, locale } = useI18n();
+  const text = useMetricText();
+  const metrics = result.metrics;
+  const inTok = metrics?.input_tokens ?? result.input_tokens;
+  const outTok = metrics?.output_tokens ?? result.output_tokens;
+  const latency = byId("latency");
+  const cost = byId("cost");
+  const calls = byId("llm_calls");
+  return (
+    <section className="flex flex-col gap-1.5" aria-label={t("compare.cost")}>
+      <div className="grid grid-cols-2 gap-1.5">
+        <MetricTile
+          label={t("meta.latency")}
+          value={text(latency, totalLatency(result))}
+          isBest={best.latency?.has(result.strategy)}
+        />
+        <MetricTile
+          label={t("meta.tokens")}
+          value={t("compare.tokensInOut", { input: formatTokens(inTok, locale), output: formatTokens(outTok, locale) })}
+          isBest={best.tokens?.has(result.strategy)}
+        />
+        {metrics && (
+          <MetricTile
+            label={t(cost.label)}
+            value={text(cost, cost.value(result))}
+            isBest={best.cost?.has(result.strategy)}
+          />
+        )}
+        {metrics && (
+          <MetricTile
+            label={t(calls.label)}
+            value={text(calls, calls.value(result))}
+            isBest={best.llm_calls?.has(result.strategy)}
+          />
+        )}
+      </div>
+      <LatencyBar result={result} />
+    </section>
+  );
+}
+
+/**
+ * Stacked bar of the per-request latency stages. The legend beneath lists every
+ * value, so nothing depends on hovering or on colour alone.
+ */
+function LatencyBar({ result }: { result: StrategyOut }) {
+  const { t, locale } = useI18n();
+  const stages = latencyStages(result);
+  if (!stages || stages.length === 0) return null;
+  const total = stages.reduce((s, x) => s + x.ms, 0);
+  const label = (stage: string) => t(`compare.stage.${stage}` as MessageKey);
+  return (
+    <figure className="flex flex-col gap-1.5">
+      <figcaption className="text-[11px] text-zinc-500">{t("compare.latencyBreakdown")}</figcaption>
+      <div className="flex h-2.5 w-full gap-[2px]" aria-hidden="true">
+        {stages.map(({ stage, ms }, i) => (
+          <div
+            key={stage}
+            title={`${label(stage)}: ${formatLatency(ms, locale)}`}
+            className={`h-full ${i === 0 ? "rounded-l-[4px]" : ""} ${i === stages.length - 1 ? "rounded-r-[4px]" : ""}`}
+            style={{ width: `${(ms / total) * 100}%`, minWidth: 2, backgroundColor: STAGE_COLORS[stage] }}
+          />
+        ))}
+      </div>
+      <ul className="flex flex-wrap gap-x-3 gap-y-0.5 text-[11px] text-zinc-400">
+        {stages.map(({ stage, ms }) => (
+          <li key={stage} className="inline-flex items-center gap-1">
+            <span aria-hidden="true" className="inline-block h-2 w-2 rounded-sm" style={{ backgroundColor: STAGE_COLORS[stage] }} />
+            {label(stage)} <span className="font-mono tabular-nums text-zinc-300">{formatLatency(ms, locale)}</span>
+          </li>
+        ))}
+      </ul>
+    </figure>
+  );
+}
+
+function WhyPanel({ result }: { result: StrategyOut }) {
+  const { t, tp } = useI18n();
+  const facts = whyThisResult(result);
+  const render = (f: Fact) => ("plural" in f ? tp(f.plural, f.count, f.vars) : t(f.key, f.vars));
+  return (
+    <details className="text-xs rounded-md border border-bg-border bg-bg-elevated/60 px-2.5 py-2">
+      <summary className="cursor-pointer select-none font-semibold text-zinc-300 hover:text-white">
+        {t("why.title")}
+      </summary>
+      <p className="mt-1.5 text-[11px] text-zinc-500">{t("why.intro")}</p>
+      <ul className="mt-1.5 space-y-1 list-disc pl-4 text-zinc-300">
+        {facts.map((f, i) => (
+          <li key={i}>{render(f)}</li>
+        ))}
+      </ul>
+    </details>
   );
 }
 
@@ -374,139 +996,6 @@ function GraphStatus({
     </div>
   );
 }
-
-function StrategyCard({
-  name,
-  result,
-  loading,
-}: {
-  name: StrategyOut["strategy"];
-  result?: StrategyOut;
-  loading: boolean;
-}) {
-  const { t, locale } = useI18n();
-  const m = META[name];
-  const [expanded, setExpanded] = useState(false);
-  const anchorPrefix = useId().replace(/:/g, "");
-
-  const truncatedAnswer = (text: string, sentences = 2) => {
-    const sents = text.split(/(?<=[.!?])\s+/);
-    const truncated = sents.slice(0, sentences).join(" ");
-    return { text: truncated, isTruncated: sents.length > sentences };
-  };
-
-  const answerPreview = result && !result.refusal ? truncatedAnswer(result.answer, 2) : null;
-
-  return (
-    <div className="card relative overflow-hidden flex flex-col gap-1.5 min-h-[280px] p-2">
-      <div className={`absolute inset-x-0 top-0 h-12 bg-gradient-to-b ${m.accent} pointer-events-none`} />
-
-      <div className="relative flex flex-col gap-0.5">
-        <div className="text-sm font-bold text-white">{t(m.title)}</div>
-        <div className="text-[8px] text-zinc-500 font-mono">{t(m.tagline)}</div>
-      </div>
-
-      {loading && !result && <LoadingSpinner />}
-
-      {result && (
-        <>
-          {/* Compact metrics badges */}
-          <div className="grid grid-cols-2 gap-2">
-            <Tooltip label={t("meta.latencyTip")} side="top">
-              <div className="bg-sky-500/20 border border-sky-500/40 rounded p-2 cursor-help">
-                <div className="text-[8px] text-sky-300 font-bold uppercase">⏱ {t("meta.latency")}</div>
-                <div className="text-lg font-mono font-bold text-sky-100 mt-0.5">
-                  {formatLatency(result.latency_ms, locale)}
-                </div>
-              </div>
-            </Tooltip>
-            <Tooltip label={t("meta.tokensCostTip")} side="top">
-              <div className="bg-emerald-500/20 border border-emerald-500/40 rounded p-2 cursor-help">
-                <div className="text-[8px] text-emerald-300 font-bold uppercase">💰 {t("meta.tokens")}</div>
-                <div className="text-lg font-mono font-bold text-emerald-100 mt-0.5">
-                  {formatTokens(result.input_tokens + result.output_tokens, locale)}
-                </div>
-              </div>
-            </Tooltip>
-          </div>
-
-          {/* Status badge */}
-          <div className={`flex items-center gap-1.5 rounded px-2 py-1.5 text-xs font-semibold min-h-[44px] flex-wrap sm:min-h-auto ${result.refusal ? "bg-amber-500/15 border border-amber-500/40 text-amber-300" : "bg-emerald-500/15 border border-emerald-500/40 text-emerald-300"}`}>
-            <span aria-hidden="true">{result.refusal ? "⚠" : "✓"}</span>
-            <span>{result.refusal ? t("common.refused") : t("common.answered")}</span>
-            <GroundingBadge g={result} className="!text-[10px]" />
-            {result.iterations > 1 && (
-              <Tooltip label={t("meta.iterationsLoopsTip")} side="top">
-                <span className="text-[10px] text-zinc-400 ml-auto cursor-help">🔄 {result.iterations}x</span>
-              </Tooltip>
-            )}
-          </div>
-
-          {/* Answer preview or full text */}
-          {result.refusal ? (
-            <div className="text-amber-200 text-xs p-2 bg-amber-500/10 rounded border border-amber-500/30">
-              {result.answer}
-            </div>
-          ) : (
-            <div className="flex-1 flex flex-col gap-1">
-              <div className={`text-zinc-200 text-xs leading-relaxed answer-content ${!expanded ? "line-clamp-4" : ""}`}>
-                <FormattedAnswer
-                  text={expanded ? result.answer : answerPreview?.text || result.answer}
-                  cite={{ anchorPrefix, sources: result.sources }}
-                />
-              </div>
-              {answerPreview?.isTruncated && (
-                <button
-                  onClick={() => setExpanded(!expanded)}
-                  className="text-[10px] text-accent hover:text-accent/80 font-semibold self-start"
-                >
-                  {expanded ? t("compare.showLess") : t("compare.readMore")}
-                </button>
-              )}
-            </div>
-          )}
-
-          <InvalidCitationsWarning invalid={result.invalid_citations} />
-
-          {/* Cited sources (collapsed by default; a citation link opens them) */}
-          {!result.refusal && result.sources.length > 0 && result.sources[0].chunk_id !== "none" && (
-            <div className="text-[9px] text-zinc-500">
-              <details>
-                <summary className="cursor-pointer font-semibold hover:text-zinc-300">
-                  {t("common.sources", { count: result.sources.length })}
-                </summary>
-                <ol className="mt-1 space-y-1">
-                  {result.sources.map((s, i) => (
-                    <li
-                      key={`${s.chunk_id}-${i}`}
-                      id={s.handle ? sourceAnchor(anchorPrefix, s.handle) : undefined}
-                      className="text-[8px] text-zinc-400 truncate target:bg-accent/10 rounded"
-                      title={s.quote}
-                    >
-                      <span className="font-mono">[{s.handle ? handleNumber(s.handle) : i + 1}]</span>{" "}
-                      <SourceLocation s={s} /> <span className="font-mono">{s.chunk_id}</span>
-                    </li>
-                  ))}
-                </ol>
-              </details>
-            </div>
-          )}
-
-          {/* Reasoning trace and strategy-specific detail */}
-          {result.extra && Object.keys(result.extra).length > 0 && (
-            <ExtraDetails name={name} extra={result.extra} />
-          )}
-          {result.trace && result.trace.length > 0 && (
-            <TraceDetails trace={result.trace} />
-          )}
-        </>
-      )}
-    </div>
-  );
-}
-
-
-
 
 function FormattedAnswer({
   text,
@@ -756,58 +1245,4 @@ function rest(t: TraceStep) {
   const r: Record<string, unknown> = {};
   for (const k of Object.keys(t)) if (k !== "step") r[k] = (t as Record<string, unknown>)[k];
   return r;
-}
-
-
-function WinnersBar({ results }: { results: StrategyOut[] }) {
-  const { t, locale, formatNumber } = useI18n();
-  const ok = results.filter((r) => !r.refusal);
-  if (ok.length < 2) return null;
-  const fastest = ok.reduce((a, b) => (a.latency_ms <= b.latency_ms ? a : b));
-  const cheapest = ok.reduce((a, b) =>
-    a.input_tokens + a.output_tokens <= b.input_tokens + b.output_tokens ? a : b
-  );
-  const secondFastest = ok.filter(r => r.strategy !== fastest.strategy).reduce((a, b) => (a.latency_ms <= b.latency_ms ? a : b), ok[0]);
-  const secondCheapest = ok.filter(r => r.strategy !== cheapest.strategy).reduce((a, b) =>
-    a.input_tokens + a.output_tokens <= b.input_tokens + b.output_tokens ? a : b, ok[0]);
-
-  const strategyColor = (s: StrategyOut["strategy"]) => META[s]?.color ?? "text-zinc-300";
-  const pct = (v: number) => formatNumber(v / 100, { style: "percent" });
-
-  const speedup = Math.round((secondFastest.latency_ms / fastest.latency_ms - 1) * 100);
-  const savings = Math.round((1 - (cheapest.input_tokens + cheapest.output_tokens) / (secondCheapest.input_tokens + secondCheapest.output_tokens)) * 100);
-
-  return (
-    <div className="card flex flex-col gap-2 border-accent/30 p-3">
-      <h3 className="text-sm font-bold text-white">⚡ {t("compare.winners")}</h3>
-      <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
-        <div className="p-2 rounded bg-sky-500/15 border border-sky-500/40 min-h-[100px]">
-          <div className="text-[8px] uppercase tracking-wide text-sky-300 font-bold">{t("compare.fastest")}</div>
-          <div className={`text-lg font-bold mt-1 ${strategyColor(fastest.strategy)}`}>
-            {t(META[fastest.strategy].short)}
-          </div>
-          <div className="text-sm font-mono text-sky-100 mt-0.5">{formatLatency(fastest.latency_ms, locale)}</div>
-          {speedup > 0 && (
-            <div className="text-[9px] font-semibold text-sky-200 mt-1">
-              {t("compare.faster", { pct: pct(speedup) })}
-            </div>
-          )}
-        </div>
-        <div className="p-2 rounded bg-emerald-500/15 border border-emerald-500/40 min-h-[100px]">
-          <div className="text-[8px] uppercase tracking-wide text-emerald-300 font-bold">{t("compare.cheapest")}</div>
-          <div className={`text-lg font-bold mt-1 ${strategyColor(cheapest.strategy)}`}>
-            {t(META[cheapest.strategy].short)}
-          </div>
-          <div className="text-sm font-mono text-emerald-100 mt-0.5">
-            {formatTokens(cheapest.input_tokens + cheapest.output_tokens, locale)}
-          </div>
-          {savings > 0 && (
-            <div className="text-[9px] font-semibold text-emerald-200 mt-1">
-              {t("compare.cheaper", { pct: pct(savings) })}
-            </div>
-          )}
-        </div>
-      </div>
-    </div>
-  );
 }
