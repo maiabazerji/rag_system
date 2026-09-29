@@ -207,6 +207,22 @@ def _retrieved_docs(result: StrategyResult | None, sources) -> list[str]:
     return list(ordered)
 
 
+def _retrieval_mode(extra: dict[str, Any]) -> str | None:
+    """The retrieval mode a strategy reported.
+
+    Strategies report it inside their retrieval diagnostics
+    (``extra["retrieval"]["mode"]``); a top-level ``retrieval_mode`` key is
+    honoured too.
+    """
+    mode = extra.get("retrieval_mode")
+    if mode:
+        return str(mode)
+    diagnostics = extra.get("retrieval")
+    if isinstance(diagnostics, dict) and diagnostics.get("mode"):
+        return str(diagnostics["mode"])
+    return None
+
+
 def _grounding_fields(ans: Any) -> dict[str, Any]:
     """Grounding annotations, when the Answer model carries them.
 
@@ -315,7 +331,7 @@ async def _run_example(
                 "provider": ans.provider,
                 "model": ans.model,
                 "retrieved_ids": list(extra.get("retrieved_ids") or []),
-                "retrieval_mode": extra.get("retrieval_mode"),
+                "retrieval_mode": _retrieval_mode(extra),
                 "refusal": ans.refusal,
                 "latency_ms": ans.latency_ms,
                 "input_tokens": ans.input_tokens,
