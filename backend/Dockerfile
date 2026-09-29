@@ -26,15 +26,19 @@ RUN apt-get update \
     && rm -rf /var/lib/apt/lists/*
 
 # Install CPU-only torch first so sentence-transformers does not pull ~2GB of
-# CUDA wheels through its default torch dependency.
+# CUDA wheels through its default torch dependency. Override the index where
+# download.pytorch.org is unreachable, e.g. a mirror, or PyPI at the cost of a
+# much larger image:
+#   docker build --build-arg TORCH_INDEX_URL=https://pypi.org/simple backend
 #
 # app/ is only an empty placeholder at this point: installing the project's
 # dependencies before copying the source keeps that (slow) layer cached across
 # code changes. Each stage below deals with the placeholder explicitly.
+ARG TORCH_INDEX_URL=https://download.pytorch.org/whl/cpu
 COPY pyproject.toml ./
 RUN mkdir -p app && touch app/__init__.py \
     && pip install --upgrade pip \
-    && pip install --index-url https://download.pytorch.org/whl/cpu torch
+    && pip install --index-url "$TORCH_INDEX_URL" torch
 
 
 # --- development image: dev dependencies, hot reload, bind-mounted source ----
