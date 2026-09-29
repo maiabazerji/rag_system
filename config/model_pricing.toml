@@ -1,0 +1,75 @@
+# Model list prices used to estimate the cost of each request.
+#
+# Units: US dollars per million tokens (MTok), standard (non-batch, non-fast)
+# first-party Anthropic API rates for input and output tokens.
+#
+# Source: Anthropic's published Claude API list prices, as carried in the
+#         claude-api reference ("Current Models", cached 2026-09-25).
+# Checked: 2026-09-29.
+#
+# What these estimates leave out, on purpose:
+#   - prompt-cache writes/reads, Batch API discounts and fast-mode premiums;
+#   - Amazon Bedrock / Google Vertex AI pricing, which is set by those partners;
+#   - OpenAI and local (Ollama) models, which have no entry: a model without a
+#     row here is reported with a cost of null, never a guessed one.
+#
+# Update this file when list prices change, and bump `as_of`. A deployment can
+# point MODEL_PRICING_PATH at its own copy (for example with negotiated rates).
+
+[meta]
+source = "Anthropic Claude API list prices (claude-api reference, Current Models table)"
+as_of = "2026-09-25"
+currency = "USD"
+unit = "per_million_tokens"
+
+[models."claude-fable-5-1"]
+input = 10.00
+output = 50.00
+
+[models."claude-fable-5"]
+input = 10.00
+output = 50.00
+
+[models."claude-mythos-5-1"]
+input = 10.00
+output = 50.00
+
+[models."claude-opus-5-5"]
+input = 4.00
+output = 20.00
+
+[models."claude-opus-5"]
+input = 5.00
+output = 25.00
+
+[models."claude-opus-4-8"]
+input = 5.00
+output = 25.00
+
+[models."claude-opus-4-7"]
+input = 5.00
+output = 25.00
+
+[models."claude-opus-4-6"]
+input = 5.00
+output = 25.00
+
+[models."claude-sonnet-5-5"]
+input = 2.00
+output = 10.00
+
+[models."claude-sonnet-5"]
+input = 2.00
+output = 10.00
+
+[models."claude-sonnet-4-6"]
+input = 3.00
+output = 15.00
+
+[models."claude-haiku-4-5"]
+input = 1.00
+output = 5.00
+
+# Dated snapshot IDs that bill exactly like the alias they point to.
+[aliases]
+"claude-haiku-4-5-20251001" = "claude-haiku-4-5"

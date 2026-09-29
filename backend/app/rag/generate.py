@@ -20,13 +20,16 @@ from app.config import settings
 from app.i18n import localized
 from app.logging_config import get_structured_logger
 from app.prompts.loader import UnknownPromptVersionError
+from app.rag import timing
 from app.rag.providers import MissingKeyError, ProviderError
+from app.rag.request_metrics import build_request_metrics, response_attributes
 from app.rag.response_clean import clean_response
 from app.rag.store import count as store_count
 from app.rag.strategies import get_strategy
 from app.rag.strategies.base import StrategyResult
-from app.schemas import Answer, Source
+from app.schemas import Answer, RequestMetrics, Source
 from app.tracing import start_trace
+from app.tracing.spans import Trace
 
 logger = get_structured_logger(__name__)
 
@@ -107,6 +110,47 @@ def _refusal(
         model=model,
         trace_id=trace_id,
     )
+
+
+def _finish_metrics(
+    result: StrategyResult,
+    *,
+    strategy: str,
+    model: str,
+    provider: str,
+    total_ms: float,
+    timer: timing.StageTimer,
+    trace: Trace,
+) -> RequestMetrics:
+    """Compute, record and log the cost/latency summary of a finished run."""
+    metrics = build_request_metrics(
+        result,
+        strategy=strategy,
+        model=model,
+        provider=provider,
+        total_ms=total_ms,
+        timer=timer,
+        trace=trace,
+    )
+    result.metrics = metrics
+    monitoring.observe_request_metrics(metrics)
+    logger.info(
+        "Request metrics",
+        extra_fields={
+            "strategy": strategy,
+            "provider": provider,
+            "model": model,
+            "trace_id": trace.id,
+            "input_tokens": metrics.input_tokens,
+            "output_tokens": metrics.output_tokens,
+            "estimated_cost_usd": metrics.estimated_cost_usd,
+            "llm_calls": metrics.llm_calls,
+            "retrieved_chunks": metrics.retrieved_chunks,
+            "context_chunks": metrics.context_chunks,
+            "latency_ms": metrics.latency_ms.model_dump(),
+        },
+    )
+    return metrics
 
 
 def _default_model(provider: str, strategy: str) -> str:
@@ -275,7 +319,7 @@ async def answer_question_detailed(
         name=f"ask:{strategy}",
         inputs={"question": question, "strategy": strategy, "provider": effective_provider, "model": model},
         principal_id=access.principal_id if access else None,
-    ) as trace:
+    ) as trace, timing.activate() as timer:
         try:
             strat = get_strategy(strategy)
         except ValueError as e:
@@ -358,9 +402,19 @@ async def answer_question_detailed(
                 ),
                 reason="error",
             ), None
-        latency_ms = int((time.perf_counter() - t0) * 1000)
+        total_ms = (time.perf_counter() - t0) * 1000
+        latency_ms = int(total_ms)
         result.latency_ms = latency_ms
         result.trace_id = trace.id
+        metrics = _finish_metrics(
+            result,
+            strategy=strategy,
+            model=model,
+            provider=effective_provider,
+            total_ms=total_ms,
+            timer=timer,
+            trace=trace,
+        )
 
         logger.info(
             "Strategy completed",
@@ -388,24 +442,29 @@ async def answer_question_detailed(
                 "input_tokens": result.input_tokens,
                 "output_tokens": result.output_tokens,
                 "iterations": result.iterations,
+                "estimated_cost_usd": metrics.estimated_cost_usd,
             },
         )
 
-        answer = Answer(
-            question=question,
-            answer=clean_response(result.answer),
-            sources=result.sources,
-            confidence=result.confidence,
-            refusal=result.refusal,
-            provider=effective_provider,
-            model=model,
-            latency_ms=latency_ms,
-            input_tokens=result.input_tokens,
-            output_tokens=result.output_tokens,
-            trace_id=trace.id,
-            retrieval=result.extra.get("retrieval"),
-            **grounding_fields(result),
-        )
+        with timing.stage("response", span_name="response") as s:
+            answer = Answer(
+                question=question,
+                answer=clean_response(result.answer),
+                sources=result.sources,
+                confidence=result.confidence,
+                refusal=result.refusal,
+                provider=effective_provider,
+                model=model,
+                latency_ms=latency_ms,
+                input_tokens=result.input_tokens,
+                output_tokens=result.output_tokens,
+                trace_id=trace.id,
+                retrieval=result.extra.get("retrieval"),
+                metrics=metrics,
+                **grounding_fields(result),
+            )
+            if s is not None:
+                s.metadata.update(response_attributes(result, metrics))
         return trace.finish(answer), result
 
 
@@ -499,7 +558,7 @@ async def run_strategy_raw(
         name=f"compare:{strategy}",
         inputs={"question": question, "strategy": strategy, "provider": "anthropic", "model": model},
         principal_id=access.principal_id if access else None,
-    ) as trace:
+    ) as trace, timing.activate() as timer:
         t0 = time.perf_counter()
         try:
             result = await strat.run(
@@ -537,19 +596,33 @@ async def run_strategy_raw(
             trace.fail(type(e).__name__)
             return None, f"This strategy failed ({type(e).__name__}). See the backend logs."
 
-        result.latency_ms = int((time.perf_counter() - t0) * 1000)
+        total_ms = (time.perf_counter() - t0) * 1000
+        result.latency_ms = int(total_ms)
         result.trace_id = trace.id
-        for event in result.trace:
-            trace.log(event.get("step", "step"), event)
-        trace.log(
-            "result",
-            {
-                "latency_ms": result.latency_ms,
-                "input_tokens": result.input_tokens,
-                "output_tokens": result.output_tokens,
-                "iterations": result.iterations,
-            },
-        )
+        with timing.stage("response", span_name="response") as s:
+            metrics = _finish_metrics(
+                result,
+                strategy=strategy,
+                model=model,
+                provider="anthropic",
+                total_ms=total_ms,
+                timer=timer,
+                trace=trace,
+            )
+            for event in result.trace:
+                trace.log(event.get("step", "step"), event)
+            trace.log(
+                "result",
+                {
+                    "latency_ms": result.latency_ms,
+                    "input_tokens": result.input_tokens,
+                    "output_tokens": result.output_tokens,
+                    "iterations": result.iterations,
+                    "estimated_cost_usd": metrics.estimated_cost_usd,
+                },
+            )
+            if s is not None:
+                s.metadata.update(response_attributes(result, metrics))
         trace.finish(result)
 
     logger.info(

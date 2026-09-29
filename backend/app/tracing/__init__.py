@@ -27,6 +27,7 @@ from typing import Any
 from app.config import settings
 from app.privacy.pii import mask_value
 from app.tracing.spans import Span, Trace, activate, current_trace, span, traced
+from app.tracing.stages import pipeline_stages
 
 logger = logging.getLogger(__name__)
 
@@ -114,14 +115,20 @@ def _store(t: Trace) -> None:
     # Document ids are read before masking, which must not be able to hide them.
     doc_ids = referenced_doc_ids([t.inputs, t.events])
     inputs, events, output = t.inputs, t.events, t.output
+    # The pipeline stages in order, with latencies, for a waterfall view. Span
+    # metadata only: counts, flags, timings, tokens and cost, never content.
+    stages = pipeline_stages(t)
     if settings.pii_redact_traces:
         inputs, events, output = mask_value(inputs), mask_value(events), mask_value(output)
+        stages = mask_value(stages)
     _TRACES[t.id] = {
         "id": t.id,
         "name": t.name,
         "inputs": inputs,
         "events": events,
         "output": output,
+        "stages": stages,
+        "duration_ms": round(t.duration_seconds * 1000, 3),
         "created_at": datetime.now(UTC).isoformat(),
         "principal_id": t.principal_id,
         "doc_ids": sorted(doc_ids),

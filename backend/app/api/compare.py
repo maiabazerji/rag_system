@@ -207,6 +207,7 @@ async def _run_strategies(
                 extra=result.extra,
                 trace_id=result.trace_id,
                 retrieval=result.extra.get("retrieval"),
+                metrics=result.metrics,
                 **grounding_fields(result),
             )
         )

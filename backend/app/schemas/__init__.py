@@ -190,6 +190,53 @@ class RetrievalDiagnostics(BaseModel):
     )
 
 
+class RequestLatency(BaseModel):
+    """Where the time of one request went, in milliseconds.
+
+    Stages are timed exclusively (a stage nested in another counts only
+    toward itself), so ``retrieval + rerank + generation + citation_validation
+    + other == total``. ``other`` is everything not attributed to a named
+    stage: context assembly, prompt rendering, graph walks, tool bookkeeping.
+    """
+
+    total: float = Field(default=0.0, ge=0)
+    retrieval: float = Field(default=0.0, ge=0)
+    rerank: float = Field(default=0.0, ge=0)
+    generation: float = Field(default=0.0, ge=0)
+    citation_validation: float = Field(default=0.0, ge=0)
+    other: float = Field(default=0.0, ge=0)
+
+
+class RequestMetrics(BaseModel):
+    """Cost and latency of one strategy run. Never contains question or chunk text."""
+
+    strategy: str = Field(description="Strategy that ran")
+    model: str | None = Field(default=None, description="Generation model")
+    provider: str | None = Field(default=None, description="Generation provider")
+    input_tokens: int = Field(default=0, ge=0, description="Input tokens over every model call")
+    output_tokens: int = Field(default=0, ge=0, description="Output tokens over every model call")
+    estimated_cost_usd: float | None = Field(
+        default=None,
+        ge=0,
+        description="Estimated USD cost of every model call, each priced with the model "
+        "that served it (see config/model_pricing.toml). Null when any call used a "
+        "model without a listed price.",
+    )
+    unpriced_models: list[str] = Field(
+        default_factory=list, description="Models called that have no listed price"
+    )
+    latency_ms: RequestLatency = Field(default_factory=RequestLatency)
+    retrieved_chunks: int = Field(
+        default=0, ge=0, description="Candidate chunks retrieved before the final cut"
+    )
+    context_chunks: int = Field(
+        default=0, ge=0, description="Chunks in the context the answer was generated from"
+    )
+    llm_calls: int = Field(
+        default=0, ge=0, description="Model calls made, including extraction and agent steps"
+    )
+
+
 GroundingStatus = Literal["answered", "partial", "insufficient_context"]
 
 
@@ -301,6 +348,9 @@ class Answer(_GroundingFields):
     )
     retrieval: RetrievalDiagnostics | None = Field(
         default=None, description="Retrieval pipeline diagnostics, when the strategy has them"
+    )
+    metrics: RequestMetrics | None = Field(
+        default=None, description="Cost and per-stage latency of this request"
     )
 
 
@@ -694,4 +744,7 @@ class StrategyComparison(_GroundingFields):
     )
     retrieval: RetrievalDiagnostics | None = Field(
         default=None, description="Retrieval pipeline diagnostics, when the strategy has them"
+    )
+    metrics: RequestMetrics | None = Field(
+        default=None, description="Cost and per-stage latency of this request"
     )
