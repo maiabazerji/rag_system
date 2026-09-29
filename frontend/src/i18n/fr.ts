@@ -22,6 +22,24 @@ export const fr: Dictionary = {
   "common.sources": "Sources ({count})",
   "common.step": "étape",
 
+  // Grounding and citations
+  "grounding.grounded": "Étayée",
+  "grounding.groundedTip": "Chaque affirmation de cette réponse cite une source récupérée.",
+  "grounding.partial": "Partielle",
+  "grounding.partialTip":
+    "Les sources récupérées ne répondent qu'à une partie de la question, ou certaines affirmations n'y sont pas étayées.",
+  "grounding.weak": "Faiblement étayée",
+  "grounding.weakTip": "Réponse fournie, mais toutes les affirmations ne citent pas une source récupérée.",
+  "grounding.insufficient": "Contexte insuffisant",
+  "grounding.insufficientTip": "Les documents récupérés ne contiennent pas la réponse.",
+  "grounding.invalidCitations_one":
+    "{count} citation renvoyait hors des documents récupérés et a été retirée : {handles}",
+  "grounding.invalidCitations_other":
+    "{count} citations renvoyaient hors des documents récupérés et ont été retirées : {handles}",
+  "grounding.citeLink": "Aller à la source {handle}",
+  "grounding.page": "p. {page}",
+  "grounding.notCovered": "Non couvert : {notes}",
+
   // Strategy names
   "strategy.classic": "RAG classique",
   "strategy.graph": "RAG par graphe",
@@ -122,11 +140,11 @@ export const fr: Dictionary = {
   "ask.samples.g3.q4":
     "Comment détecter et prévenir la dérive de la recherche à mesure que le corpus grandit ?",
   "ask.loading": "Recherche des passages et génération de la réponse...",
-  "ask.confidenceTitle": "Confiance du modèle dans cette réponse",
+  "ask.confidenceTitle": "Score d'étayage de cette réponse",
   "ask.confidenceTip":
-    "Degré de confiance du modèle dans sa réponse (échelle 0-1). Plus il est élevé, plus la réponse est ancrée dans les sources.",
-  "ask.confidenceAria": "Score de confiance",
-  "ask.confidencePercentAria": "{pct} pour cent de confiance",
+    "Score d'étayage (0-1), pas une probabilité : la part des affirmations appuyées par une citation valide, la complétude de la réponse et la pertinence des sources citées.",
+  "ask.confidenceAria": "Score d'étayage",
+  "ask.confidencePercentAria": "Score d'étayage de {pct} pour cent",
   "ask.trace": "trace",
   "ask.traceTitle":
     "GET /traces/{id} : les étapes de recherche, de reclassement et de génération de cette réponse",
@@ -183,7 +201,6 @@ export const fr: Dictionary = {
   "compare.buildGraph": "Construire le graphe",
   "compare.showLess": "Réduire",
   "compare.readMore": "Lire la suite →",
-  "compare.more": "+{count} de plus",
   "compare.kgDetails": "Détails du graphe de connaissances",
   "compare.extractedEntities": "Entités extraites",
   "compare.relatedEntities": "Entités liées (1 saut)",

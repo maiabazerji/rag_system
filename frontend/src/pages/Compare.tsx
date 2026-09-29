@@ -1,18 +1,26 @@
-import { useEffect, useRef, useState, ReactNode } from "react";
+import { useEffect, useId, useRef, useState, ReactNode } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { ApiError, errorMessage, get, getAdminKey, post, setAdminKey } from "../api/client";
 import LoadingSpinner from "../components/LoadingSpinner";
 import ErrorAlert from "../components/ErrorAlert";
 import Tooltip from "../components/Tooltip";
+import {
+  CitedText,
+  GroundingBadge,
+  InvalidCitationsWarning,
+  SourceLocation,
+  type CitedSource,
+  type Grounding,
+} from "../components/Citations";
+import { handleNumber, sourceAnchor } from "../utils/citations";
 import { formatLatency, formatTokens } from "../utils/formatting";
 import { useI18n, type I18n, type MessageKey } from "../i18n";
 
-type Source = { chunk_id: string; quote: string };
 type TraceStep = { step?: string; [k: string]: unknown };
-type StrategyOut = {
+type StrategyOut = Grounding & {
   strategy: "classic" | "graph" | "agentic";
   answer: string;
-  sources: Source[];
+  sources: CitedSource[];
   refusal: boolean;
   confidence: number;
   latency_ms: number;
@@ -379,6 +387,7 @@ function StrategyCard({
   const { t, locale } = useI18n();
   const m = META[name];
   const [expanded, setExpanded] = useState(false);
+  const anchorPrefix = useId().replace(/:/g, "");
 
   const truncatedAnswer = (text: string, sentences = 2) => {
     const sents = text.split(/(?<=[.!?])\s+/);
@@ -425,6 +434,7 @@ function StrategyCard({
           <div className={`flex items-center gap-1.5 rounded px-2 py-1.5 text-xs font-semibold min-h-[44px] flex-wrap sm:min-h-auto ${result.refusal ? "bg-amber-500/15 border border-amber-500/40 text-amber-300" : "bg-emerald-500/15 border border-emerald-500/40 text-emerald-300"}`}>
             <span aria-hidden="true">{result.refusal ? "⚠" : "✓"}</span>
             <span>{result.refusal ? t("common.refused") : t("common.answered")}</span>
+            <GroundingBadge g={result} className="!text-[10px]" />
             {result.iterations > 1 && (
               <Tooltip label={t("meta.iterationsLoopsTip")} side="top">
                 <span className="text-[10px] text-zinc-400 ml-auto cursor-help">🔄 {result.iterations}x</span>
@@ -440,7 +450,10 @@ function StrategyCard({
           ) : (
             <div className="flex-1 flex flex-col gap-1">
               <div className={`text-zinc-200 text-xs leading-relaxed answer-content ${!expanded ? "line-clamp-4" : ""}`}>
-                <FormattedAnswer text={expanded ? result.answer : answerPreview?.text || result.answer} />
+                <FormattedAnswer
+                  text={expanded ? result.answer : answerPreview?.text || result.answer}
+                  cite={{ anchorPrefix, sources: result.sources }}
+                />
               </div>
               {answerPreview?.isTruncated && (
                 <button
@@ -453,25 +466,28 @@ function StrategyCard({
             </div>
           )}
 
-          {/* Sources (collapsed by default) */}
+          <InvalidCitationsWarning invalid={result.invalid_citations} />
+
+          {/* Cited sources (collapsed by default; a citation link opens them) */}
           {!result.refusal && result.sources.length > 0 && result.sources[0].chunk_id !== "none" && (
             <div className="text-[9px] text-zinc-500">
               <details>
                 <summary className="cursor-pointer font-semibold hover:text-zinc-300">
                   {t("common.sources", { count: result.sources.length })}
                 </summary>
-                <div className="mt-1 space-y-1">
-                  {result.sources.slice(0, 3).map((s, i) => (
-                    <div key={i} className="text-[8px] text-zinc-400 font-mono truncate">
-                      [{i + 1}] {s.chunk_id}
-                    </div>
+                <ol className="mt-1 space-y-1">
+                  {result.sources.map((s, i) => (
+                    <li
+                      key={`${s.chunk_id}-${i}`}
+                      id={s.handle ? sourceAnchor(anchorPrefix, s.handle) : undefined}
+                      className="text-[8px] text-zinc-400 truncate target:bg-accent/10 rounded"
+                      title={s.quote}
+                    >
+                      <span className="font-mono">[{s.handle ? handleNumber(s.handle) : i + 1}]</span>{" "}
+                      <SourceLocation s={s} /> <span className="font-mono">{s.chunk_id}</span>
+                    </li>
                   ))}
-                  {result.sources.length > 3 && (
-                    <div className="text-[8px] text-zinc-500">
-                      {t("compare.more", { count: result.sources.length - 3 })}
-                    </div>
-                  )}
-                </div>
+                </ol>
               </details>
             </div>
           )}
@@ -492,7 +508,17 @@ function StrategyCard({
 
 
 
-function FormattedAnswer({ text }: { text: string }) {
+function FormattedAnswer({
+  text,
+  cite,
+}: {
+  text: string;
+  /** When set, `[S#]` markers become superscript links to these sources. */
+  cite?: { anchorPrefix: string; sources: CitedSource[] };
+}) {
+  const plain = (str: string, key: string): ReactNode =>
+    cite ? <CitedText key={key} text={str} anchorPrefix={cite.anchorPrefix} sources={cite.sources} /> : str;
+
   const renderInline = (str: string): ReactNode => {
     const parts: ReactNode[] = [];
     let lastIndex = 0;
@@ -503,7 +529,7 @@ function FormattedAnswer({ text }: { text: string }) {
 
     while ((match = regex.exec(str)) !== null) {
       if (match.index > lastIndex) {
-        parts.push(str.substring(lastIndex, match.index));
+        parts.push(plain(str.substring(lastIndex, match.index), `t-${lastIndex}`));
       }
 
       if (match[1]) {
@@ -533,10 +559,10 @@ function FormattedAnswer({ text }: { text: string }) {
     }
 
     if (lastIndex < str.length) {
-      parts.push(str.substring(lastIndex));
+      parts.push(plain(str.substring(lastIndex), `t-${lastIndex}`));
     }
 
-    return parts.length > 0 ? parts : str;
+    return parts.length > 0 ? parts : plain(str, "t");
   };
 
   const lines = text.split("\n");
