@@ -1,5 +1,5 @@
 import Tooltip from "./Tooltip";
-import { formatTokens, formatLatency, formatCost } from "../utils/formatting";
+import { formatTokens, formatLatency, formatUsd } from "../utils/formatting";
 import { useI18n } from "../i18n";
 
 type Props = {
@@ -9,6 +9,8 @@ type Props = {
   output_tokens?: number;
   latency_ms?: number;
   iterations?: number;
+  /** Server-side estimate from config/model_pricing.toml; null when the model is unpriced. */
+  costUsd?: number | null;
   compact?: boolean;
 };
 
@@ -19,11 +21,13 @@ export default function MetadataRow({
   output_tokens,
   latency_ms,
   iterations,
+  costUsd,
   compact = false,
 }: Props) {
   const { t, locale } = useI18n();
   const total_tokens = input_tokens && output_tokens ? input_tokens + output_tokens : 0;
-  const cost = total_tokens > 0 ? formatCost(total_tokens, locale) : null;
+  // Only the backend's per-model estimate is shown; no price is assumed here.
+  const cost = costUsd != null ? formatUsd(costUsd, locale) : null;
 
   if (compact) {
     return (

@@ -37,21 +37,6 @@ export function formatLatency(ms: number, locale: string = DEFAULT_LOCALE): stri
   });
 }
 
-export function formatCost(tokens: number, locale: string = DEFAULT_LOCALE): string {
-  // Approximate cost: $0.50 per 1M input tokens, $1.50 per 1M output tokens
-  // Rough average: $1 per 1M tokens
-  const costUSD = (tokens / 1000000) * 0.001;
-  const usd = (v: number) =>
-    num(v, locale, {
-      style: "currency",
-      currency: "USD",
-      minimumFractionDigits: 4,
-      maximumFractionDigits: 4,
-    });
-  if (costUSD < 0.0001) return `< ${usd(0.0001)}`;
-  return usd(costUSD);
-}
-
 export function formatConfidence(conf: number, locale: string = DEFAULT_LOCALE): string {
   return num(Math.round(conf * 100) / 100, locale, { style: "percent" });
 }
