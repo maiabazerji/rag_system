@@ -45,10 +45,12 @@ from app.rag.grounding import (
     ground,
     grounded_system,
     grounding_extra,
+    validation_attributes,
 )
 from app.rag.providers.base import generate_structured
 from app.rag.retrieve import hybrid_search
 from app.rag.strategies.base import Strategy, StrategyResult
+from app.rag.timing import stage
 from app.schemas import Source
 
 logger = get_structured_logger(__name__)
@@ -140,10 +142,22 @@ class ClassicRAG(Strategy):
                 confidence=0.0,
                 trace=[{"step": "retrieve", "result": "empty"}],
                 extra={"retrieval": diagnostics},
+                candidate_count=candidates,
             )
 
-        cited = cite_chunks(context)
-        ctx_block = format_context(cited)
+        with stage("context_selection", span_name="context_selection") as s:
+            cited = cite_chunks(context)
+            ctx_block = format_context(cited)
+            user_msg = render_prompt(prompt_version, question=question, context=ctx_block)
+            if s is not None:
+                s.metadata.update(
+                    {
+                        "candidates": candidates,
+                        "selected": len(cited),
+                        "context_chars": len(ctx_block),
+                        "prompt_version": prompt_version,
+                    }
+                )
         logger.debug(
             "Context block created",
             extra_fields={
@@ -152,8 +166,6 @@ class ClassicRAG(Strategy):
                 "num_chunks": len(context),
             },
         )
-
-        user_msg = render_prompt(prompt_version, question=question, context=ctx_block)
         logger.debug(
             "Prompt rendered",
             extra_fields={
@@ -165,15 +177,19 @@ class ClassicRAG(Strategy):
 
         # Classic is the one strategy that runs on any provider, so generation
         # goes through the dispatcher rather than straight to Anthropic.
-        out = await generate_structured(
-            self.provider,
-            model=model,
-            prompt=user_msg,
-            tool=SUBMIT_ANSWER_TOOL,
-            system=grounded_system(self.provider),
-            max_tokens=settings.max_answer_tokens,
-        )
-        grounded, raw = ground(question, out, cited)
+        with stage("generation"):
+            out = await generate_structured(
+                self.provider,
+                model=model,
+                prompt=user_msg,
+                tool=SUBMIT_ANSWER_TOOL,
+                system=grounded_system(self.provider),
+                max_tokens=settings.max_answer_tokens,
+            )
+        with stage("citation_validation", span_name="citation_validation") as s:
+            grounded, raw = ground(question, out, cited)
+            if s is not None:
+                s.metadata.update(validation_attributes(grounded))
 
         logger.info(
             "Classic RAG strategy completed",
@@ -195,6 +211,8 @@ class ClassicRAG(Strategy):
             **grounded.result_fields(),
             input_tokens=out["input_tokens"],
             output_tokens=out["output_tokens"],
+            candidate_count=candidates,
+            context_count=len(context),
             trace=[
                 {"step": "retrieve", "candidates": candidates, "kept": len(context)},
                 {

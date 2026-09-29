@@ -11,7 +11,7 @@ from collections.abc import Awaitable, Callable
 from functools import wraps
 from typing import Any
 
-from app import monitoring
+from app import monitoring, pricing
 from app.tracing.spans import Span, current_strategy, span, traced
 
 
@@ -64,20 +64,48 @@ def _message_text(content: Any) -> Any:
     return str(content)
 
 
+def record_usage(
+    s: Span | None,
+    *,
+    model: str,
+    input_tokens: int,
+    output_tokens: int,
+    provider: str = "anthropic",
+) -> dict[str, float] | None:
+    """Count one model call's tokens and cost, and put them on its span.
+
+    The call is priced with the model that served it, so a judge or entity
+    extraction call made during a request is billed at its own rate. Metrics
+    are recorded even outside a trace (``strategy="none"``).
+
+    Returns:
+        The cost breakdown, or None when the model has no listed price.
+    """
+    strategy = current_strategy()
+    monitoring.observe_tokens(model, strategy, input_tokens, output_tokens)
+    cost = pricing.cost_breakdown(model, input_tokens, output_tokens)
+    monitoring.observe_cost(model, strategy, cost["total"] if cost else None)
+    if s is not None:
+        s.model = model
+        s.usage = {"input": input_tokens, "output": output_tokens}
+        s.cost = cost
+        s.metadata["provider"] = provider
+        s.metadata["cost_usd"] = cost["total"] if cost else None
+    return cost
+
+
 def _record_generation(s: Span | None, kwargs: dict, resp: Any) -> None:
-    model = kwargs.get("model") or "unknown"
+    model = str(kwargs.get("model") or "unknown")
     usage = getattr(resp, "usage", None)
     input_tokens = int(getattr(usage, "input_tokens", 0) or 0)
     output_tokens = int(getattr(usage, "output_tokens", 0) or 0)
-    monitoring.observe_tokens(str(model), current_strategy(), input_tokens, output_tokens)
+    record_usage(s, model=model, input_tokens=input_tokens, output_tokens=output_tokens)
     if s is None:
         return
 
     operation = kwargs.get("_operation", "message")
     messages = kwargs.get("messages") or []
     s.name = "agent_step" if operation == "tool_use_loop" else "generate"
-    s.model = str(model)
-    s.usage = {"input": input_tokens, "output": output_tokens}
     # The latest message only: in an agent loop the full history is re-sent on
     # every step, and exporting it each time would grow quadratically.
     s.input = {
@@ -85,11 +113,13 @@ def _record_generation(s: Span | None, kwargs: dict, resp: Any) -> None:
         "message": _message_text(messages[-1]["content"]) if messages else None,
     }
     s.output = _message_text(getattr(resp, "content", None))
-    s.metadata = {
-        "operation": operation,
-        "stop_reason": getattr(resp, "stop_reason", None),
-        "max_tokens": kwargs.get("max_tokens"),
-    }
+    s.metadata.update(
+        {
+            "operation": operation,
+            "stop_reason": getattr(resp, "stop_reason", None),
+            "max_tokens": kwargs.get("max_tokens"),
+        }
+    )
 
 
 def llm_call(fn: Callable[..., Awaitable[Any]]) -> Callable[..., Awaitable[Any]]:

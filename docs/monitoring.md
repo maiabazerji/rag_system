@@ -146,10 +146,37 @@ mistaken for the client's.
 | `evalrag_strategy_duration_seconds` | `strategy`, `outcome` (`ok`, `refusal`, `error`) |
 | `evalrag_llm_tokens_total` | `model`, `strategy` (`none` for the judge and graph extraction), `direction` |
 | `evalrag_refusals_total` | `strategy`, `reason` (`model`, `no_documents`, `provider_error`, `error`, ...) |
+| `evalrag_llm_cost_usd_total` | `model`, `strategy`: estimated cost, each call priced with its own model |
+| `evalrag_llm_unpriced_calls_total` | `model`, `strategy`: calls to a model with no listed price |
+| `evalrag_request_cost_usd` | `strategy`: histogram of the estimated cost of one run |
+| `evalrag_stage_duration_seconds` | `strategy`, `stage` (`retrieval`, `rerank`, `generation`, `citation_validation`) |
+| `evalrag_context_chunks` | `strategy`: histogram of chunks in the generation context |
 | `evalrag_circuit_breaker_state` / `_failures` | `service` (0 closed, 1 half-open, 2 open) |
 | `evalrag_telemetry_exported_total` / `_dropped_total` | `exporter`, `reason` |
 
 Metrics contain no request content and no identifiers.
+
+### Cost and latency per request
+
+Every `/ask` answer and `/compare/strategies` row carries `metrics`: strategy,
+model, provider, token totals, `estimated_cost_usd`, `llm_calls`,
+`retrieved_chunks` (candidates before the final cut), `context_chunks`, and
+`latency_ms` split into `retrieval`, `rerank`, `generation`,
+`citation_validation` and `other` (the parts add up to `total`; nested stages
+are timed exclusively). Graph entity extraction counts toward `retrieval`.
+
+Costs come from [`config/model_pricing.toml`](../config/model_pricing.toml)
+(list prices, with their source and date; override with `MODEL_PRICING_PATH`).
+Each model call is priced with the model that served it. A call to a model
+without a listed price makes the request's cost `null`, never a guess.
+
+`GET /traces/{id}` returns `stages`: the pipeline in order (`preprocess`,
+`dense`, `sparse`, `fusion`, `rerank`, `context_selection`, `generation`,
+`citation_validation`, `response`; graph adds `entity_extraction` and
+`graph_walk`), each with its start offset, duration and attributes (counts,
+cited handles, grounding status, tokens, cost), never document or question
+text. Langfuse receives the same spans, tagged `evalrag.stage`, and generation
+spans carry `usage_details` and `cost_details`.
 
 ### Eval dashboards: W&B
 

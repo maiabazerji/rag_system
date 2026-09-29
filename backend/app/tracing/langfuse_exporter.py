@@ -41,6 +41,7 @@ import httpx
 from app import monitoring
 from app.tracing import policy
 from app.tracing.spans import Span, Trace
+from app.tracing.stages import stage_of
 
 logger = logging.getLogger(__name__)
 
@@ -135,6 +136,13 @@ def _span_to_otlp(s: Span, trace: Trace, include_content: bool) -> dict:
         pairs["gen_ai.request.model"] = s.model
     if s.usage:
         pairs["langfuse.observation.usage_details"] = s.usage
+    if s.cost:
+        # Langfuse takes the cost as given rather than re-deriving it from its
+        # own model price list, so the UI shows what the app estimated.
+        pairs["langfuse.observation.cost_details"] = s.cost
+    stage = stage_of(s)
+    if stage:
+        pairs["evalrag.stage"] = stage
     if s.error:
         pairs["langfuse.observation.level"] = "ERROR"
         pairs["langfuse.observation.status_message"] = s.error

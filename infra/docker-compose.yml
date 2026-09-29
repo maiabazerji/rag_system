@@ -214,6 +214,8 @@ services:
       GRAPH_DATA_DIR: /data/graph
       DATA_DIR: /data
       LOG_DIR: /app/logs
+      # The checked-in price table (mounted below) used for per-request cost.
+      MODEL_PRICING_PATH: /app/config/model_pricing.toml
       # Offline mode is opt-in. With the default (0) the embedding model and the
       # cross-encoder download into the bind-mounted cache below on first use.
       # Once they are there (or after `python scripts/download_models.py
@@ -237,6 +239,7 @@ services:
       # pass) for reasons that have nothing to do with the current code.
       - ../backend/tests:/app/tests
       - ../scripts:/scripts
+      - ../config:/app/config:ro
       - ../data:/data
       - ./logs:/app/logs
       # Bind-mounted from the host so downloaded models survive a rebuild, and so

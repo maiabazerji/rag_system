@@ -56,6 +56,41 @@ LLM_TOKENS = Counter(
     ["model", "strategy", "direction"],
     registry=REGISTRY,
 )
+LLM_COST = Counter(
+    "evalrag_llm_cost_usd_total",
+    "Estimated USD cost of model calls, by model and strategy. Each call is priced "
+    "with the model that served it; calls to unpriced models are not included.",
+    ["model", "strategy"],
+    registry=REGISTRY,
+)
+LLM_UNPRICED_CALLS = Counter(
+    "evalrag_llm_unpriced_calls_total",
+    "Model calls whose model has no listed price, so no cost was estimated.",
+    ["model", "strategy"],
+    registry=REGISTRY,
+)
+STAGE_LATENCY = Histogram(
+    "evalrag_stage_duration_seconds",
+    "Exclusive wall time of one pipeline stage in a request, by strategy and stage "
+    "(retrieval, rerank, generation, citation_validation).",
+    ["strategy", "stage"],
+    buckets=(0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2, 5, 10, 20, 30, 60, 120),
+    registry=REGISTRY,
+)
+CONTEXT_CHUNKS = Histogram(
+    "evalrag_context_chunks",
+    "Chunks in the context an answer was generated from, by strategy.",
+    ["strategy"],
+    buckets=(0, 1, 2, 4, 6, 8, 10, 12, 16, 24, 32, 50),
+    registry=REGISTRY,
+)
+REQUEST_COST = Histogram(
+    "evalrag_request_cost_usd",
+    "Estimated USD cost of one strategy run, by strategy (priced runs only).",
+    ["strategy"],
+    buckets=(0.0001, 0.0005, 0.001, 0.0025, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1),
+    registry=REGISTRY,
+)
 REFUSALS = Counter(
     "evalrag_refusals_total",
     "Answers returned as refusals, by strategy and reason.",
@@ -111,6 +146,35 @@ def observe_tokens(model: str, strategy: str, input_tokens: int, output_tokens: 
         LLM_TOKENS.labels(model, strategy, "input").inc(input_tokens)
     if output_tokens:
         LLM_TOKENS.labels(model, strategy, "output").inc(output_tokens)
+
+
+def observe_cost(model: str, strategy: str, cost_usd: float | None) -> None:
+    """Count the estimated cost of one model call (None: the model is unpriced)."""
+    if cost_usd is None:
+        LLM_UNPRICED_CALLS.labels(model, strategy).inc()
+    elif cost_usd > 0:
+        LLM_COST.labels(model, strategy).inc(cost_usd)
+
+
+# Stages with their own latency histogram series. "other" is left out: it is
+# the remainder, and its distribution says little on its own.
+OBSERVED_STAGES = ("retrieval", "rerank", "generation", "citation_validation")
+
+
+def observe_request_metrics(metrics: Any) -> None:
+    """Record a finished request's stage latencies, context size and cost.
+
+    Takes a :class:`app.schemas.RequestMetrics`; typed loosely so this module
+    stays free of the schema import.
+    """
+    strategy = metrics.strategy
+    for stage in OBSERVED_STAGES:
+        ms = getattr(metrics.latency_ms, stage, 0.0)
+        if ms:
+            STAGE_LATENCY.labels(strategy, stage).observe(ms / 1000)
+    CONTEXT_CHUNKS.labels(strategy).observe(metrics.context_chunks)
+    if metrics.estimated_cost_usd is not None:
+        REQUEST_COST.labels(strategy).observe(metrics.estimated_cost_usd)
 
 
 def observe_refusal(strategy: str, reason: str) -> None:

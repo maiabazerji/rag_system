@@ -33,6 +33,7 @@ from app.rag.query import preprocess_query
 from app.rag.rerank import RerankOutcome, rerank_scored_async
 from app.rag.sparse import sparse_search
 from app.rag.store import StoreUnavailable, search
+from app.rag.timing import record as record_stage
 from app.schemas import (
     Chunk,
     RetrievalDiagnostics,
@@ -222,6 +223,7 @@ async def hybrid_search(
     latency.preprocess = _ms(started)
 
     if not prepared.text:
+        record_stage("retrieval", latency.preprocess)
         return RetrievalResult(
             chunks=[],
             diagnostics=RetrievalDiagnostics(mode=mode, counts=counts, latency_ms=latency),
@@ -264,6 +266,7 @@ async def hybrid_search(
 
     dense: list[Chunk] = []
     sparse: list[Chunk] = []
+    retrievers_started = time.perf_counter()
     if mode == "hybrid":
         dense, sparse = await asyncio.gather(run_dense(), run_sparse())
     elif mode == "dense":
@@ -271,6 +274,7 @@ async def hybrid_search(
     else:
         sparse = await run_sparse()
     counts.dense, counts.sparse = len(dense), len(sparse)
+    retrievers_ms = _ms(retrievers_started)
 
     t0 = time.perf_counter()
     with span("retrieval.fusion") as s:
@@ -283,6 +287,9 @@ async def hybrid_search(
         _set_meta(s, rrf_k=rrf_k, dense=len(dense), sparse=len(sparse), fused=len(fused))
     latency.fusion = _ms(t0)
     counts.fused = len(fused)
+    # The request's stage timer: dense and sparse overlap, so their wall time
+    # counts once; the reranker is its own stage.
+    record_stage("retrieval", latency.preprocess + retrievers_ms + latency.fusion)
 
     # The reranker sees as many candidates as the deeper retriever returned,
     # so hybrid costs the cross-encoder no more than dense-only did.
@@ -296,6 +303,7 @@ async def hybrid_search(
                       reranker=outcome.reranker)
         latency.rerank = _ms(t0)
         counts.reranked = len(outcome.chunks)
+        record_stage("rerank", latency.rerank)
     else:
         outcome = RerankOutcome.unscored(pool)
 
