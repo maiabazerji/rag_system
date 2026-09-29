@@ -5,14 +5,11 @@ model, provider, prompt version, judge, rubric and retrieval configuration.
 Comparing across configurations would report every deliberate change as a
 regression.
 
-Two layers live here:
-
-* :func:`load_regressions` -- the dashboard view: every drop larger than a
-  single threshold between consecutive comparable runs.
-* :func:`compare_runs` -- the gate: one run against one baseline (a pinned
-  baseline file, or the previous comparable run), checked metric by metric
-  against the thresholds in ``eval/regression_thresholds.toml``, producing a
-  structured report plus a markdown table (:func:`render_markdown`).
+:func:`compare_runs` checks one run against one baseline (a pinned baseline
+file, or the previous comparable run) metric by metric against the thresholds
+in ``eval/regression_thresholds.toml``, producing a structured report plus a
+markdown table (:func:`render_markdown`). GET /eval/runs/{id}/regression and
+``scripts/run_eval.py`` both use it.
 """
 from __future__ import annotations
 
@@ -23,12 +20,10 @@ import os
 import tomllib
 from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime
-from itertools import pairwise
 from pathlib import Path
 from typing import Any
 
 from app.config import settings
-from app.eval.judge import DIMENSIONS
 
 logger = logging.getLogger(__name__)
 
@@ -153,52 +148,6 @@ def _config_key(run: dict) -> tuple:
         run.get("rubric_version"),
         run.get("config_hash"),
     )
-
-
-def load_regressions(threshold: float = 0.05) -> list[dict]:
-    """Find metric drops between consecutive runs of the same configuration.
-
-    Args:
-        threshold: Minimum drop (in absolute score) counted as a regression.
-
-    Returns:
-        One entry per regressed metric, newest first, naming the two runs and
-        the size of the drop. Runs with no aggregate (nothing scored) are
-        skipped rather than treated as zero.
-    """
-    groups: dict[tuple, list[dict]] = {}
-    for run in list_runs():
-        if run.get("aggregate"):
-            groups.setdefault(_config_key(run), []).append(run)
-
-    regressions: list[dict] = []
-    for runs in groups.values():
-        for prev, curr in pairwise(runs):
-            for metric in DIMENSIONS:
-                before = prev["aggregate"].get(metric)
-                after = curr["aggregate"].get(metric)
-                if before is None or after is None:
-                    continue
-                delta = after - before
-                if delta < -threshold:
-                    regressions.append(
-                        {
-                            "metric": metric,
-                            "delta": round(delta, 4),
-                            "before": round(before, 4),
-                            "after": round(after, 4),
-                            "dataset": curr.get("dataset"),
-                            "strategy": curr.get("strategy"),
-                            "model": curr.get("model"),
-                            "prompt_version": curr.get("prompt_version"),
-                            "from_run": prev["id"],
-                            "to_run": curr["id"],
-                            "detected_at": curr.get("created_at"),
-                        }
-                    )
-
-    regressions.sort(key=lambda r: r.get("to_run") or "", reverse=True)
-    return regressions
 
 
 # ---------------------------------------------------------------------------

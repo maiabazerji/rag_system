@@ -11,7 +11,7 @@ import pytest
 
 from app.eval.judge import JudgeOutcome, _extract_json, judge
 from app.eval.metrics import aggregate, load_dataset, run_evaluation, score_example
-from app.eval.regression import load_regressions
+from app.eval.regression import find_baseline, get_run
 from app.schemas import Answer, EvalScore, Source
 
 SCORES = {
@@ -246,7 +246,7 @@ class TestRunEvaluation:
         assert "error" in result
 
 
-class TestRegressions:
+class TestRegressionBaseline:
     """Runs are only comparable when their whole configuration matches."""
 
     @staticmethod
@@ -265,54 +265,50 @@ class TestRegressions:
             encoding="utf-8",
         )
 
-    def test_detects_a_drop_within_one_configuration(self, tmp_path, monkeypatch):
+    def test_previous_run_of_the_same_configuration_is_the_baseline(self, tmp_path, monkeypatch):
         monkeypatch.setattr("app.eval.regression.RUNS_DIR", tmp_path)
         self._write(tmp_path, "20260101T000000Z-a", model="m1", faithfulness=0.9)
         self._write(tmp_path, "20260102T000000Z-b", model="m1", faithfulness=0.5)
 
-        found = load_regressions()
-        assert len(found) == 1
-        assert found[0]["metric"] == "faithfulness"
-        assert found[0]["delta"] == pytest.approx(-0.4)
+        baseline, source = find_baseline(get_run("20260102T000000Z-b"))
+        assert source == "previous"
+        assert baseline["id"] == "20260101T000000Z-a"
 
-    def test_ignores_drops_between_different_models(self, tmp_path, monkeypatch):
-        """The old detector reported this as a regression. It is not one."""
+    def test_different_models_are_not_compared(self, tmp_path, monkeypatch):
         monkeypatch.setattr("app.eval.regression.RUNS_DIR", tmp_path)
         self._write(tmp_path, "20260101T000000Z-a", model="haiku", faithfulness=0.9)
         self._write(tmp_path, "20260102T000000Z-b", model="opus", faithfulness=0.4)
 
-        assert load_regressions() == []
+        assert find_baseline(get_run("20260102T000000Z-b")) == (None, None)
 
-    def test_ignores_drops_between_different_datasets(self, tmp_path, monkeypatch):
+    def test_different_datasets_are_not_compared(self, tmp_path, monkeypatch):
         monkeypatch.setattr("app.eval.regression.RUNS_DIR", tmp_path)
         self._write(tmp_path, "20260101T000000Z-a", model="m1", faithfulness=0.9)
         self._write(
             tmp_path, "20260102T000000Z-b", model="m1", faithfulness=0.4, dataset="v2"
         )
 
-        assert load_regressions() == []
+        assert find_baseline(get_run("20260102T000000Z-b")) == (None, None)
 
-    def test_small_drops_stay_under_the_threshold(self, tmp_path, monkeypatch):
+    def test_runs_without_an_aggregate_are_not_baselines(self, tmp_path, monkeypatch):
         monkeypatch.setattr("app.eval.regression.RUNS_DIR", tmp_path)
-        self._write(tmp_path, "20260101T000000Z-a", model="m1", faithfulness=0.90)
-        self._write(tmp_path, "20260102T000000Z-b", model="m1", faithfulness=0.88)
-
-        assert load_regressions(threshold=0.05) == []
-        assert len(load_regressions(threshold=0.01)) == 1
-
-    def test_runs_without_an_aggregate_are_skipped(self, tmp_path, monkeypatch):
-        monkeypatch.setattr("app.eval.regression.RUNS_DIR", tmp_path)
-        self._write(tmp_path, "20260101T000000Z-a", model="m1", faithfulness=0.9)
-        (tmp_path / "20260102T000000Z-b.json").write_text(
+        (tmp_path / "20260101T000000Z-a.json").write_text(
             json.dumps({"dataset": "golden_v1", "model": "m1", "aggregate": None}),
             encoding="utf-8",
         )
+        (tmp_path / "20260102T000000Z-b.json").write_text(
+            json.dumps({"dataset": "golden_v1", "model": "m1", "aggregate": SCORES}),
+            encoding="utf-8",
+        )
 
-        assert load_regressions() == []
+        assert find_baseline(get_run("20260102T000000Z-b")) == (None, None)
 
-    def test_unreadable_files_do_not_break_the_listing(self, tmp_path, monkeypatch):
+    def test_unreadable_files_do_not_break_the_lookup(self, tmp_path, monkeypatch):
         monkeypatch.setattr("app.eval.regression.RUNS_DIR", tmp_path)
         self._write(tmp_path, "20260101T000000Z-a", model="m1", faithfulness=0.9)
         (tmp_path / "20260102T000000Z-corrupt.json").write_text("{not json", encoding="utf-8")
+        self._write(tmp_path, "20260103T000000Z-c", model="m1", faithfulness=0.8)
 
-        assert load_regressions() == []
+        baseline, _ = find_baseline(get_run("20260103T000000Z-c"))
+        assert baseline["id"] == "20260101T000000Z-a"
+

@@ -264,24 +264,24 @@ class TestRegressionGroupsByStrategy:
         )
 
     def test_different_strategies_are_not_compared(self, tmp_path, monkeypatch):
-        from app.eval.regression import load_regressions
+        from app.eval.regression import find_baseline, get_run
 
         monkeypatch.setattr("app.eval.regression.RUNS_DIR", tmp_path)
         self._write(tmp_path, "20260101T000000Z-a", strategy="agentic", faithfulness=0.9)
         self._write(tmp_path, "20260102T000000Z-b", strategy="classic", faithfulness=0.3)
 
-        assert load_regressions() == []
+        assert find_baseline(get_run("20260102T000000Z-b")) == (None, None)
 
-    def test_same_strategy_still_regresses(self, tmp_path, monkeypatch):
-        from app.eval.regression import load_regressions
+    def test_same_strategy_is_compared(self, tmp_path, monkeypatch):
+        from app.eval.regression import find_baseline, get_run
 
         monkeypatch.setattr("app.eval.regression.RUNS_DIR", tmp_path)
         self._write(tmp_path, "20260101T000000Z-a", strategy="classic", faithfulness=0.9)
         self._write(tmp_path, "20260102T000000Z-b", strategy="classic", faithfulness=0.3)
 
-        found = load_regressions()
-        assert len(found) == 1
-        assert found[0]["strategy"] == "classic"
+        baseline, source = find_baseline(get_run("20260102T000000Z-b"))
+        assert source == "previous"
+        assert baseline["id"] == "20260101T000000Z-a"
 
 
 def test_eval_run_request_accepts_a_strategy():
