@@ -285,3 +285,22 @@ class TestRetrievalConfig:
         for key in ("embedding_model", "reranker_model", "chunk_size_tokens", "retrieval_top_k"):
             assert key in cfg
         assert not any("key" in k or "secret" in k for k in cfg)
+
+
+def test_erasure_scrubs_judge_reasoning(tmp_path, monkeypatch):
+    """Reasoning can quote the erased context, so it goes with the answer."""
+    from app.privacy import erasure
+
+    monkeypatch.setattr(metrics, "RUNS_DIR", tmp_path)
+    row = {
+        "answer": "secret",
+        "doc_ids": ["docA"],
+        "score": {"faithfulness": 1.0},
+        "judge": {"reasoning": {"faithfulness": "quotes the secret"}, "attempts": 1},
+    }
+    (tmp_path / "r.json").write_text(json.dumps({"per_example": [row]}), encoding="utf-8")
+
+    assert erasure.scrub_eval_runs({"docA"}) == 1
+    saved = json.loads((tmp_path / "r.json").read_text())["per_example"][0]
+    assert saved["judge"]["reasoning"] == {"faithfulness": erasure.ERASED}
+    assert saved["score"] == {"faithfulness": 1.0}

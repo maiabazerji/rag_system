@@ -339,6 +339,14 @@ class TestBaselines:
         assert baseline["id"] == "20260101T000000Z-a"
         assert baseline["aggregates"]["faithfulness"]["mean"] == 0.95
 
+    def test_pinned_baseline_keeps_no_answers(self, runs_dir):
+        """A copy outside the runs directory would escape erasure and retention."""
+        src = self._save(runs_dir, _run(per_example=[{"answer": "text"}]))
+        pinned = json.loads(pin_baseline(src).read_text())
+        assert "per_example" not in pinned
+        assert pinned["pinned_id"] == src.stem
+        assert pinned["aggregates"]
+
     def test_pinned_baseline_is_per_configuration(self, runs_dir):
         pin_baseline(self._save(runs_dir, _run(run_id="20260101T000000Z-a", config_hash="x")))
         current = _run(run_id="20260103T000000Z-c")

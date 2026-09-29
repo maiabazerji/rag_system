@@ -658,7 +658,10 @@ def pin_baseline(run_file: Path) -> Path:
     """Pin a run file as the baseline for its configuration.
 
     The run is copied to ``<RUNS_DIR>/baselines/<config>.json`` with
-    ``pinned_id`` (the source run's id) and ``pinned_at`` added.
+    ``pinned_id`` (the source run's id) and ``pinned_at`` added, and without
+    its ``per_example`` rows: comparison needs only the aggregates, and a
+    copy of every answer outside the runs directory would escape erasure and
+    retention.
 
     Returns:
         The baseline file written.
@@ -667,6 +670,7 @@ def pin_baseline(run_file: Path) -> Path:
         ValueError: If the file is not a readable run.
     """
     run = load_run_file(run_file)
+    run.pop("per_example", None)
     run["pinned_id"] = run.pop("id")
     run["pinned_at"] = datetime.now(UTC).isoformat(timespec="seconds")
     target = baseline_path(run)
