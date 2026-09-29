@@ -1,476 +1,352 @@
 # EvalRAG
 
-Run the same question through three different RAG retrieval strategies, **Classic**, **Graph**, and **Agentic**, on your own corpus, and measure which one actually answers it better. Built on the Anthropic API (Claude).
+EvalRAG is a platform for building and **measuring** retrieval-augmented generation (RAG) systems. It runs the same question through three retrieval strategies (classic, graph, agentic) over one corpus. Every answer is grounded in citations that the server validates, and every run is scored with deterministic retrieval metrics and a versioned LLM judge. A regression gate compares each run with a baseline of the same configuration.
 
-It is built to be deployable by European and French organisations: multilingual retrieval and a French/English UI, per-document access control with SSO (Entra ID, ProConnect, Keycloak), GDPR tooling (PII masking, erasure, subject-access export, retention), telemetry that is off by default and self-hostable, and parsers for the formats those organisations actually use (`.docx`, `.odt`, `.eml`, scanned PDFs). See [Built for European deployments](#built-for-european-deployments).
+Stack: FastAPI backend (`backend/`), React + TypeScript frontend (`frontend/`), Qdrant, Postgres, Docker Compose (`infra/`), Anthropic Claude for generation and judging.
 
-## Why
+Further reading: [docs/CASE_STUDY.md](docs/CASE_STUDY.md) (engineering write-up), [LEARN.md](LEARN.md) (file-by-file walkthrough), [docs/ARCHITECTURE_AUDIT.md](docs/ARCHITECTURE_AUDIT.md) (the audit this version was built from).
 
-Most RAG projects pick one retrieval strategy and stop there. But a strategy that nails single-fact lookups can flail on multi-hop questions, and the reverse is also true. EvalRAG exists to answer one question: **which strategy actually works better on my data?**
+---
 
-The **Compare view** (`/compare` in the UI, `POST /compare/strategies` on the API) runs one question through every strategy and shows the answers, sources, latency, token cost, and reasoning trace side by side. Paired with an evaluation harness that scores answers with an LLM judge and a regression detector that flags when a change makes things worse on your golden dataset, you can tell whether a retrieval tweak helped or hurt.
+## Problem
 
-For a file-by-file walkthrough, see [LEARN.md](./LEARN.md).
+A RAG answer can fail at three independent points. Retrieval can miss the right passage. Generation can ignore or embellish what was retrieved. The citation can point at something that does not support the claim. A demo that "looks right" on a handful of questions does not show which of these happened, or whether a change to chunking, retrieval or prompts made things better or worse.
 
-## Three strategies, one corpus
+## Why RAG evaluation matters
 
-| Strategy | Retrieval logic | Implementation | Best at |
-|---|---|---|---|
-| **Classic** | embed → vector search → cross-encoder rerank → answer | [`classic.py`](backend/app/rag/strategies/classic.py) | single-fact lookups |
-| **Graph** | entity walk over a Claude-extracted knowledge graph | [`graph.py`](backend/app/rag/strategies/graph.py) + [`graph_store.py`](backend/app/rag/graph_store.py) + [`graph_extract.py`](backend/app/rag/graph_extract.py) | "how is X related to Y" multi-hop |
-| **Agentic** | Claude drives `search`/`fetch`/`finish` tools in a loop | [`agentic.py`](backend/app/rag/strategies/agentic.py) + [`tool_use_loop`](backend/app/rag/providers/anthropic_provider.py) | ambiguous, multi-step questions |
+- **Retrieval and generation fail differently.** Retrieval is scored here without any model call (Recall@K, nDCG@K...), so a retrieval change can be measured cheaply and separately from the generator.
+- **Configurations drift.** An embedder swap or a silent reranker fallback changes results. Every run records a fingerprint of its retrieval configuration, and runs are only compared with runs that share it.
+- **LLM judges are instruments.** Their scores are only meaningful for a given rubric version, and a judge that fails must not be counted as a low score. Both are enforced here (see [Evaluation methodology](#evaluation-methodology)).
 
-All three return the same `StrategyResult` shape, which is what makes them comparable 1:1.
-
-**Classic** is fast and cheap but struggles when an answer has to be assembled across documents. **Graph** extracts entity relationships up front (with Claude Haiku) and walks them at query time. **Agentic** hands Claude a toolbox and lets it decide the retrieval path step by step, the most capable and the most expensive.
+---
 
 ## Architecture
 
-| Layer | What it does | Where |
-|---|---|---|
-| Frontend | Ask, compare, advise, ingest, evaluate; French/English UI | `frontend/src/` |
-| Backend API | FastAPI routes for ingest, ask, compare, advise, eval, graph, traces, privacy, admin, metrics | `backend/app/api/` |
-| Parsing & chunking | One parser per format, OCR, heading- and table-aware chunking | `backend/app/rag/parsers/`, `backend/app/rag/chunking.py` |
-| RAG pipeline | Embed → retrieve (ACL-filtered) → rerank → generate | `backend/app/rag/` |
-| Access control | Principals, OIDC SSO, tenants and groups, audit log | `backend/app/access.py`, `oidc.py`, `audit.py`, `auth.py` |
-| Privacy | PII detection and masking, erasure, export, retention | `backend/app/privacy/` |
-| Observability | Telemetry policy, Langfuse (OTLP) exporter, Prometheus metrics | `backend/app/tracing/`, `backend/app/monitoring.py` |
-| Eval engine | LLM-as-judge scoring, regression tracking | `backend/app/eval/` |
+Request pipeline, as implemented in [`retrieve.py`](backend/app/rag/retrieve.py), [`grounding.py`](backend/app/rag/grounding.py) and the strategies in [`backend/app/rag/strategies/`](backend/app/rag/strategies/). Stage names match the trace stages in [`tracing/stages.py`](backend/app/tracing/stages.py).
 
-Backing services: **Qdrant** (vectors), **Postgres** (API keys, usage accounting and the audit log), and optionally a self-hosted **Langfuse** (traces), **Prometheus + Grafana** (metrics) and **W&B** (eval dashboards).
+```mermaid
+flowchart LR
+    Q["Question"] --> P["Preprocess<br/>NFKC, strip invisibles,<br/>cap 1000 chars"]
+    P --> D["Dense<br/>multilingual-e5-small + Qdrant<br/>DENSE_TOP_K, ACL filter"]
+    P --> S["Sparse<br/>BM25 per access scope<br/>BM25_TOP_K"]
+    D --> F["RRF fusion<br/>RRF_K"]
+    S --> F
+    F --> R["Cross-encoder rerank<br/>RERANK_TOP_K<br/>(BM25 fallback)"]
+    R --> C["Context selection<br/>FINAL_CONTEXT_K, [S#] handles"]
+    C --> G["Grounded generation<br/>submit_answer tool"]
+    G --> V["Citation validation"]
+    V --> A["Response<br/>answer, cited sources,<br/>grounded, status, confidence"]
 
-Everything in this table is implemented. The embedding model is a real SentenceTransformer, the reranker is a real cross-encoder (with a BM25 fallback), and the judge is a real model call.
+    subgraph side["Side channel (content-free)"]
+        T["Spans → /traces/{id}, Langfuse"]
+        M["Prometheus metrics"]
+        RM["RequestMetrics: tokens, cost, stage latency"]
+    end
+    P -.-> T
+    R -.-> T
+    V -.-> T
+    A -.-> RM
+    A -.-> M
+```
 
-> **Check the reranker is the one you think it is.** If the cross-encoder cannot be downloaded, reranking degrades to BM25 silently and every request still returns 200. `"reranker": "bm25"` in the logs means the cross-encoder is not running and any comparison you draw is really a comparison of BM25. This bit this project for a long time: the configured model id was a repo that did not exist, so the fallback was the only code path ever taken.
-
-### What happens when you ask a question
-
-1. `POST /ask` with `{"question": "...", "strategy": "classic" | "graph" | "agentic"}` → [`ask.py`](backend/app/api/ask.py)
-2. `answer_question` → [`generate.py`](backend/app/rag/generate.py) picks defaults, opens a trace, and calls `get_strategy(strategy).run(...)`
-3. The strategy retrieves in its own way but returns the same `StrategyResult` (answer, sources, latency, tokens, trace)
-4. All three generate through `AsyncAnthropic` ([`anthropic_provider.py`](backend/app/rag/providers/anthropic_provider.py)); the agentic strategy uses `tool_use_loop`
-5. The trace is retrievable from `/traces/{id}` (in memory, so it does not survive a restart), and is exported to Langfuse when `TELEMETRY_MODE` allows it ([docs/monitoring.md](docs/monitoring.md))
-
-Retrieval is **dense-only**: the query is embedded and matched against Qdrant. The lexical BM25 signal enters one step later, in [`rerank.py`](backend/app/rag/rerank.py), as the reranker's fallback when the cross-encoder is unavailable. This is a dense-retrieve-then-rerank pipeline, not hybrid retrieval in the fuse-two-retrievers sense.
-
-### What happens when you run an eval
-
-1. `POST /eval/run` → `run_evaluation` in [`metrics.py`](backend/app/eval/metrics.py)
-2. Loads a golden dataset (question + ideal answer) from `data/golden/`
-3. Answers each question, then scores it with the LLM judge in [`judge.py`](backend/app/eval/judge.py) on faithfulness, answer relevance, context precision, context recall and, when the example has an ideal answer, answer correctness
-4. Saves the run to `data/eval_runs/` and compares it against previous runs of **the same configuration** → [`regression.py`](backend/app/eval/regression.py)
-5. Optionally streams to W&B via [`wandb_tracer.py`](backend/app/tracing/wandb_tracer.py)
-
-**On unscored examples.** If the judge fails (rate limit, timeout, unparseable response), that example is recorded with `score: null` and left out of the aggregate. The run result reports `n_scored` and `n_unscored` so a partially failed run can never be mistaken for a complete one. A fabricated midpoint score would be worse than a missing one.
+| Layer | Where |
+|---|---|
+| API routes (ask, compare, eval, ingest, graph, traces, advise, privacy, admin, metrics) | `backend/app/api/` |
+| Parsing and chunking | `backend/app/rag/parsers/`, `backend/app/rag/chunking.py` |
+| Retrieval (dense, BM25, fusion, rerank) | `backend/app/rag/retrieve.py`, `sparse.py`, `fusion.py`, `rerank.py` |
+| Grounding and citation validation | `backend/app/rag/grounding.py` |
+| Evaluation (metrics, judge, rubric, regression) | `backend/app/eval/` |
+| Tracing, metrics, pricing | `backend/app/tracing/`, `backend/app/monitoring.py`, `backend/app/pricing.py` |
+| Frontend pages: Ask (`/`), Upload (`/ingest`), Compare (`/compare`), Evaluation (`/eval`: Overview and Runs tabs), Advisor (`/advisor`) | `frontend/src/pages/` |
 
 ---
 
-## Baseline on the bundled corpus
+## Three retrieval strategies
 
-41 documents, 107 chunks, `golden_v1` (34 questions), all 34 scored. Reproduce with
-`python scripts/run_eval.py --dataset golden_v1 --all`.
+All three return the same `StrategyResult` ([`base.py`](backend/app/rag/strategies/base.py)) and end with the same citation validation, so they can be compared on identical terms (`POST /compare/strategies`, `/compare` in the UI).
 
-| Metric | Classic | Graph | Agentic |
+| Strategy | What it does | Model calls per question | Cost profile |
 |---|---|---|---|
-| Retrieval precision | 0.185 | 0.185 | **0.250** |
-| Retrieval recall | **0.765** | **0.765** | 0.544 |
-| Retrieval hit rate | **0.765** | **0.765** | 0.559 |
-| Retrieval MRR | **0.554** | **0.554** | 0.356 |
-| Faithfulness | 0.507 | **0.519** | 0.249 |
-| Answer relevance | **0.862** | 0.854 | 0.521 |
-| Context precision | 0.368 | 0.353 | **0.416** |
-| Context recall | **0.328** | 0.318 | 0.275 |
-| Latency (ms/question) | 21,675 | **15,204** | 17,976 |
-| Tokens (total) | **389,251** | 397,431 | 727,101 |
-| Refusals | **0** | **0** | 6 |
+| **Classic** ([`classic.py`](backend/app/rag/strategies/classic.py)) | Hybrid retrieval → rerank → one grounded generation | 1 | Lowest. Can run on Anthropic, OpenAI or Ollama |
+| **Graph** ([`graph.py`](backend/app/rag/strategies/graph.py)) | Extracts entities from the question, walks the knowledge graph 1 hop, merges those chunks with the fused hybrid candidates, reranks the union, and prepends a text subgraph to the context | 2 (entity extraction on `GRAPH_EXTRACTION_MODEL`, then generation) | Adds an offline build step: `POST /graph/build` runs one extraction call per chunk. The graph is **not** built at ingest |
+| **Agentic** ([`agentic.py`](backend/app/rag/strategies/agentic.py)) | Claude drives `search` (fused hybrid results, not reranked, k ≤ 12), `fetch_chunk` and `finish` tools | Up to `AGENTIC_MAX_ITERS` (15) | Highest and variable. Anthropic only |
 
-Three things this says, none of them the marketing answer:
+Entity linking in the graph is exact matching on normalised strings. The call counts above come from the code. No token or latency ratio between the strategies has been measured on the current pipeline (see [Current benchmark](#current-benchmark)).
 
-**Classic and Graph score identically on retrieval.** Not a coincidence and not a
-bug. The graph strategy walks the entity graph *and* runs the same dense search,
-then keeps only the graph hits that dense search missed. With 107 chunks and
-`RETRIEVAL_TOP_K=50`, dense search already returns nearly half the corpus, so
-there is almost nothing left for the walk to add, and the same reranker picks the
-same top-8. Graph RAG needs either a much larger corpus or a much smaller
-`RETRIEVAL_TOP_K` before it can differentiate itself. On this corpus it is Classic
-with extra steps.
-
-**Agentic is the weakest strategy here, at 1.9x the tokens.** It refused 6 of 34
-questions, and a refusal scores near zero on faithfulness and relevance, which is
-what drags those columns down. It does win retrieval precision and context
-precision: it fetches less, and what it fetches is more on-topic. That is a real
-strength, spent badly.
-
-**Faithfulness around 0.5 is the number to attack.** Answer relevance is high, so
-the answers address the question; faithfulness says they assert more than the
-retrieved context supports. That gap is the interesting bug, and it is the kind of
-thing this harness exists to surface.
-
-These are the numbers from one small corpus. The point of the tool is that you run
-it on yours.
+The **Advisor** (`POST /advise`) ranks the strategies from a project description. Its scoring weights ([`advisor/scoring.py`](backend/app/advisor/scoring.py)) are still derived from the historical baseline below, so treat its ranking as a prior. `POST /advise/validate` measures the strategies on your own questions.
 
 ---
 
-## Advisor: which strategy fits my project?
+## Hybrid retrieval
 
-The **Advisor** page (`/advisor`, API `POST /advise`) takes a plain-language
-project description, in English, French or any other language, and ranks the
-three strategies for it.
-
-1. **Profile.** Claude reads the description and fills a structured profile:
-   corpus size, document types, languages, question mix (single-fact /
-   relational / exploratory), latency budget, cost sensitivity, update rate,
-   residency and compliance needs, and how entity-rich the documents are.
-   Anything you pass in `overrides` wins over what was extracted. With no API
-   key, or if the call fails, a keyword heuristic takes over and the response
-   says `profile.source: "heuristic"`.
-2. **Score.** `app/advisor/scoring.py` is deterministic and has no model calls.
-   Each score is a base value plus named contributions, and each contribution
-   comes with a sentence explaining it. The weights come from the baseline
-   above. Classic is the default for single-fact questions, tight latency and
-   cost-sensitive projects. Graph only pulls ahead on large, entity-rich
-   corpora with relational questions, and it gets a smaller `RETRIEVAL_TOP_K`.
-   Agentic, at ~1.9x tokens and with more refusals, is recommended only for
-   ambiguous multi-step research with a generous budget. The response also
-   includes a suggested config for each strategy, a hybrid-routing plan when
-   the question mix is split, and generic hosting notes: EU residency, GDPR,
-   on-prem, and multilingual embeddings such as `BAAI/bge-m3`. These notes are
-   guidance, not legal advice.
-3. **Validate.** The ranking is a prior, not a measurement. Ingest a sample of
-   your documents, then send 10-20 real questions to `POST /advise/validate`.
-   A question can include an `ideal_answer`, entered as `question || ideal
-   answer` in the UI. By default the endpoint runs the top two strategies. It
-   returns refusals, latency, tokens, token-F1 against the ideal answer and a
-   judge score for each strategy, and names the `measured_winner`. The limit
-   is 20 questions and 3 strategies per call.
-
-```bash
-curl -X POST localhost:8011/advise -H 'Content-Type: application/json' -d '{
-  "description": "20 000 contrats PDF en français, questions sur les liens entre fournisseurs et filiales, réponse en moins de 5 s, hébergement UE.",
-  "overrides": {"cost_sensitivity": "medium", "compliance": ["EU only", "GDPR"]}
-}'
-```
-
----
-
-## Built for European deployments
-
-Five features aimed at organisations in France and the EU. Each has its own settings in [`.env.example`](./.env.example); all are on by default except where noted.
-
-### Language: French, English and more
-
-- **Multilingual retrieval.** The default embedder is `intfloat/multilingual-e5-small` (384 dims, CPU-friendly) and the default reranker is the multilingual `cross-encoder/mmarco-mMiniLMv2-L12-H384-v1`, so a French question finds English passages and vice versa. `BAAI/bge-m3` (1024 dims) is the higher-quality option. E5's `query: ` / `passage: ` prefixes are added automatically; override with `EMBEDDING_QUERY_PREFIX` / `EMBEDDING_PASSAGE_PREFIX`.
-- **The model is recorded on the collection.** The embedding model is stamped into the Qdrant collection's metadata. Pointing the backend at a collection built with another model returns a 503 (`embedding_model_mismatch`) with re-ingest instructions instead of silently mixing vectors, even when both models have the same dimension.
-- **Answers in the question's language.** Generation, agentic and graph prompts tell Claude to answer in the language of the question, and refusals are localised. Language is detected from the question, falling back to the request's `Accept-Language`. The BM25 fallback folds accents and drops French and English stopwords.
-- **French UI.** A FR/EN switch in the navigation; the choice is remembered, and the default follows the browser.
-- **French eval set.** `data/golden/golden_fr_v1.jsonl` holds 16 French questions over the bundled (English) corpus, to measure cross-lingual retrieval: `python scripts/run_eval.py --dataset golden_fr_v1`.
-
-> **Upgrading an existing deployment?** The default embedder changed from `BAAI/bge-small-en-v1.5`. Both are 384-dim, so re-ingest: set a new `QDRANT_COLLECTION` and run `scripts/ingest.py`, or wipe with `down -v`. The multilingual reranker is about 2x slower on CPU; `cross-encoder/ms-marco-MiniLM-L-6-v2` remains available for English-only corpora.
-
-### Access control and single sign-on
-
-- **Who can call.** With `REQUIRE_API_KEY=true`, every route needs either an API key or an OIDC bearer token from `OIDC_ISSUER` (Microsoft Entra ID, ProConnect, Keycloak or any OIDC provider). Tokens are verified against the issuer's JWKS (`iss`, `aud`, `exp`, `nbf`). Groups come from `OIDC_GROUPS_CLAIM` (`groups`; dotted paths such as `realm_access.roles` work), admins from `OIDC_ADMIN_GROUP`, the tenant from `OIDC_TENANT_CLAIM` (`tid` on Entra). With auth off, everyone is a local admin in the default tenant, so local use is unchanged.
-- **Who can read what.** Every chunk carries a `tenant` and `acl_groups`. A caller sees a chunk only if the tenant matches and they share at least one group (everyone is implicitly in `public`). The filter is applied inside Qdrant on every read path: search, fetch-by-id, the agentic tools, and the graph walk, which drops entities from documents the caller cannot read.
-- **Labelling documents.** Uploads default to the uploader's groups (or `public` if they have none, or when `ACL_DEFAULT_PUBLIC=true`). Pass `groups` on `POST /ingest` (the Upload page has a field) to choose; only groups you belong to are accepted, except for admins, who may label with any group but get no extra read access. Chunks indexed before ACLs existed count as public until re-ingested (`ACL_LEGACY_PUBLIC=false` hides them).
-- **Managing keys.** `python scripts/setup_auth.py --create-key NAME --groups legal,finance --tenant acme`, or `PUT /admin/keys/{id}/access` with `{groups, tenant, is_admin}`.
-- **Audit log.** Every ask, compare, ingest, advise, eval, admin action and privacy erasure is recorded in Postgres: who, when, which documents were returned, status. Question text is stored only as a SHA-256 hash unless `AUDIT_STORE_QUESTIONS=true`. Query it with `GET /admin/audit?principal=&action=&since=`.
-
-Principal ids are `key:<id>`, `oidc:<sub>` or `local`; the privacy endpoints below use the same ids.
-
-### GDPR
-
-- **PII masking at ingest.** Uploads are scanned for emails, French phone numbers, NIR (with its check key, including Corsica), IBAN (mod-97), SIREN/SIRET (Luhn), card numbers and IPv4 addresses. `PII_MODE_INGEST` is `mask` (replace with `[EMAIL]`, `[NIR]`, ...), `reject` (refuse with a 422 listing the types) or `off`. File metadata such as an email's sender is masked too. Only counts are stored, never the values. Person names are not detected; the detector interface is pluggable if you want to add an NER model.
-- **Logs and traces.** `PII_REDACT_LOGS` and `PII_REDACT_TRACES` (both on) mask the same patterns in log lines and stored or exported traces. Questions still reach the LLM unmasked.
-- **Right to erasure** (admin only): `DELETE /privacy/documents/{doc_id}`, `DELETE /privacy/sources?source_key=...`, `DELETE /privacy/principals/{principal_id}`. Each removes the data from vectors, graph triples, traces, eval runs (answers scrubbed, scores kept), usage rows and the audit log, and returns a count per store. They are idempotent; a partial failure returns 503 with the report, so run it again.
-- **Subject access:** `GET /privacy/export/{principal_id}` returns the documents a principal owns, their usage, traces and audit events.
-- **Retention.** Traces, eval runs and audit events are purged daily after `RETENTION_TRACES_DAYS` (7), `RETENTION_EVAL_RUNS_DAYS` (365) and `RETENTION_AUDIT_DAYS` (365); `0` keeps forever. `POST /privacy/retention/run` purges now.
-- **Paperwork.** [`docs/gdpr/README.md`](docs/gdpr/README.md) covers what is stored where, lawful-basis notes, procedures with `curl` examples and subprocessors (Anthropic, and optional Langfuse/W&B). [`docs/gdpr/ropa_template.md`](docs/gdpr/ropa_template.md) is a CNIL-style *registre des activités de traitement* template in French and English. Neither is legal advice.
-
-### Monitoring that stays in your infrastructure
-
-- **Off by default.** `TELEMETRY_MODE=off` sends nothing anywhere. `self_hosted` exports only to hosts in `TELEMETRY_ALLOWED_HOSTS` (default `localhost,127.0.0.1,langfuse`); a `LANGFUSE_HOST` outside the list is refused at startup. `cloud` also needs `TELEMETRY_CLOUD_OPT_IN=true`.
-- **Langfuse, self-hosted.** `--profile tracing` runs Langfuse v4 in the stack (web, worker, ClickHouse, Valkey, MinIO), with its own product telemetry off. Each request becomes a trace with retrieve, rerank, generation and tool-call spans, sent over OTLP from a background queue that never blocks a request. Text is PII-masked first; `TELEMETRY_INCLUDE_CONTENT=false` sends timings and token counts only.
-- **W&B is opt-in.** Nothing is sent unless `WANDB_ENABLED=true` and the telemetry mode allows it; `WANDB_MODE=offline` keeps runs on disk.
-- **Prometheus.** `METRICS_ENABLED=true` serves `/metrics` to localhost or with the admin key: request latency, per-strategy latency, tokens by model, refusals, circuit-breaker state and dropped telemetry. `--profile monitoring` adds Prometheus and a provisioned Grafana dashboard.
-
-Details, and what leaves the machine in each mode: [`docs/monitoring.md`](docs/monitoring.md).
-
-### Document formats
-
-`.pdf`, `.docx`, `.pptx`, `.odt`, `.ods`, `.eml`, `.html`/`.htm`, `.txt`, `.md`, `.markdown`, `.rst`, `.csv` and `.json`, up to `MAX_UPLOAD_MB` (25 MB). `GET /ingest/formats` returns the live list and whether OCR is available.
-
-- **Structure is kept.** Word, ODF and HTML headings become `#` headings, tables become pipe tables, lists become `-` items. Page headers and footers in `.docx` are skipped. Title, author, dates, page count and language come from the file's own metadata.
-- **Chunks follow headings**, including French legal divisions written as plain lines (`Titre I`, `Chapitre 2`, `Section 3`, `Article L. 121-1`, `Art. 12`), then by size. Tables are never cut mid-row; a long table is split into row groups that each repeat the header. Each chunk records a `heading_path` such as `Chapitre 2 > Article 5`.
-- **Scanned PDFs are OCR'd** page by page when a page has almost no text layer (`OCR_MIN_CHARS_PER_PAGE`), with tesseract in `OCR_LANGUAGES` (`fra+eng`), up to `OCR_MAX_PAGES`. The Docker image ships tesseract and poppler; without them the backend logs a warning and indexes what text there is.
-- **Emails** index their headers and body (plain text preferred, HTML converted without scripts or styles) and parse attachments of a supported type, two levels deep at most.
-- **Hostile files get a 422**: password-protected PDFs and Office/ODF files, and zip-based documents that would inflate past `MAX_UNCOMPRESSED_MB` (checked before any parser runs).
-
----
-
-## Quickstart (Docker)
-
-Brings up frontend, backend, Qdrant and Postgres together.
-
-> **Note.** The Compose file lives at `infra/docker-compose.yml`, not at the project root, and Compose only auto-loads a `.env` sitting next to it. Run every command from the project root as `docker compose --env-file .env -f infra/docker-compose.yml ...`. Without `--env-file`, Compose stops with `required variable POSTGRES_PASSWORD is missing a value`; a bare `docker compose down` fails with `no configuration file provided`.
-
-### 1. Configure
-
-```powershell
-# Windows PowerShell (from the project root)
-copy .env.example .env
-```
-
-```bash
-# macOS / Linux
-cp .env.example .env
-```
-
-Open `.env` and check these:
-
-| Variable | Required? | Notes |
-|---|---|---|
-| `ANTHROPIC_API_KEY` | Yes, for answers | Without it the stack starts and the UI loads, but every answer is a refusal |
-| `POSTGRES_PASSWORD` | Yes | Compose refuses to start without it. `.env.example` ships a development value; change it |
-| `LANGFUSE_*`, `CLICKHOUSE_PASSWORD`, `MINIO_ROOT_PASSWORD` | Only with `--profile tracing` | Blank by default; Langfuse will not start until they are set. [docs/monitoring.md](docs/monitoring.md) lists them |
-| `GRAFANA_ADMIN_PASSWORD` | Only with `--profile monitoring` | Blank by default |
-| `QDRANT_API_KEY` | No | Blank leaves Qdrant unauthenticated (fine on loopback). Set it to turn Qdrant auth on; Compose passes it to both Qdrant and the backend |
-| `HF_HUB_OFFLINE`, `TRANSFORMERS_OFFLINE` | No | Default `0`. Add them as `1` only after the models are downloaded (step 2) |
-
-Everything else has a working default.
-
-### 2. Models (optional)
-
-The backend needs two Hugging Face models: the embedder (`EMBEDDING_MODEL`) and the cross-encoder reranker (`RERANKER_MODEL`). By default it downloads them on first use into `.hf_cache/` at the project root, which Compose bind-mounts, so they survive rebuilds. To fetch them up front instead (useful when Docker's DNS is flaky, and required before turning on offline mode):
-
-```bash
-pip install huggingface_hub
-python scripts/download_models.py --cache-dir .hf_cache
-```
-
-Then you may set `HF_HUB_OFFLINE=1` and `TRANSFORMERS_OFFLINE=1` in `.env`. Do not set them on an empty cache: the embedder cannot load, and the reranker silently degrades to BM25.
-
-### 3. Start
-
-```bash
-docker compose --env-file .env -f infra/docker-compose.yml up -d --build
-```
-
-Add `--profile tracing` for a self-hosted Langfuse (after setting its secrets), or `--profile monitoring` for Prometheus and Grafana. The first build downloads a couple of GB; later starts take seconds.
-
-Every port is published on **127.0.0.1 only**, so nothing is reachable from other machines on your network. That is deliberate: the services run with development credentials and, by default, no API key.
-
-### 4. Open
-
-| App | URL | Notes |
-|---|---|---|
-| Frontend | <http://localhost:5173> | Vite dev server with hot reload |
-| Backend | <http://localhost:8011/docs> | OpenAPI / Swagger UI |
-| Health | <http://localhost:8011/health> | Which providers are configured |
-| Langfuse | <http://localhost:3100> | Only with `--profile tracing` |
-| Prometheus | <http://localhost:9090> | Only with `--profile monitoring` |
-| Grafana | <http://localhost:3300> | Only with `--profile monitoring` |
-
-### 5. Ingest and evaluate
-
-```bash
-docker compose --env-file .env -f infra/docker-compose.yml exec backend python /scripts/ingest.py
-docker compose --env-file .env -f infra/docker-compose.yml exec backend python /scripts/run_eval.py --dataset golden_v1
-```
-
-Or drag files onto the Upload page, optionally choosing which groups may read them. Supported formats and how they are parsed: [Document formats](#document-formats).
-
-### 6. Logs, stop, wipe
-
-```bash
-docker compose --env-file .env -f infra/docker-compose.yml logs -f backend      # follow logs
-docker compose --env-file .env -f infra/docker-compose.yml ps                   # what's running
-docker compose --env-file .env -f infra/docker-compose.yml down                 # stop (keeps data)
-docker compose --env-file .env -f infra/docker-compose.yml down -v              # also wipe volumes
-```
-
-### Port map (host → container)
-
-| Service | Host (127.0.0.1) | Container | Why this host port |
-|---|---|---|---|
-| Frontend | `5173` | `5173` | Vite default |
-| Backend | `8011` | `8000` | `8001` was taken on the author's machine |
-| Langfuse | `3100` | `3000` | `3000` is a common Next.js default |
-| Postgres | `5434` | `5432` | `5432`/`5433` taken by other stacks |
-| Qdrant | `6333` | `6333` | free |
-| Prometheus | `9090` | `9090` | `--profile monitoring` |
-| Grafana | `3300` | `3000` | `--profile monitoring` |
-| MinIO (Langfuse) | `9190` | `9000` | `--profile tracing` |
-
-Containers reach each other by **service name** on the internal network (`qdrant:6333`, `postgres:5432`), never `localhost`. The host ports are only for reaching services from your machine.
-
-`backend/app/` and `frontend/src/` are bind-mounted, so edits appear inside the containers immediately and uvicorn `--reload` / Vite HMR pick them up.
-
----
-
-## Authentication
-
-Auth is **off by default** so a fresh clone runs with no setup: every caller is a local admin, which is fine on localhost and not fine anywhere else. Turning it on enables both API keys and, if `OIDC_ISSUER` is set, SSO tokens; see [Access control and single sign-on](#access-control-and-single-sign-on) for groups, tenants and the audit log.
-
-To turn it on:
-
-```bash
-# 1. In .env
-REQUIRE_API_KEY=true
-ADMIN_KEY=<python -c "import secrets; print(secrets.token_urlsafe(32))">
-
-# 2. Restart, then mint a key
-python scripts/setup_auth.py --create-key "my-laptop" --groups legal --tenant default
-```
-
-The key is shown once, only its SHA-256 hash is stored. Paste it into the field the UI shows (it appears automatically when the backend reports `auth_required`), or send it yourself:
-
-```bash
-curl -H "Authorization: Bearer sk_..." http://localhost:8011/ingest/stats
-```
-
-Each key carries a per-minute rate limit (`--rpm`, default 10) enforced across every protected route and weighted by cost: an agentic question counts 3, and `/compare` and `/eval/run` count per variant or example. Token usage is recorded per request. OIDC users are not rate-limited or metered, since they have no key row. Graph build and reset, `/admin` and `/privacy` also need the `X-Admin-Key` header.
-
-```bash
-python scripts/setup_auth.py --list-keys           # keys and 24h usage
-python scripts/setup_auth.py --deactivate-key 1    # revoke, effective immediately
-```
-
-Auth and the audit log require Postgres. With `REQUIRE_API_KEY=false` and no `ADMIN_KEY` the backend never opens a database connection, and auditing is skipped.
-
----
-
-## Configuration
-
-[`.env.example`](./.env.example) documents every setting. The ones worth knowing:
+`hybrid_search` ([`retrieve.py`](backend/app/rag/retrieve.py)) runs the dense and BM25 retrievers concurrently. It fuses them with Reciprocal Rank Fusion, `score(d) = Σ 1 / (k + rank_i(d))` ([`fusion.py`](backend/app/rag/fusion.py)), then reranks the fused pool with the cross-encoder.
 
 | Setting | Default | Effect |
 |---|---|---|
-| `GENERATOR_MODEL` | `claude-sonnet-5` | Model that writes answers |
-| `JUDGE_MODEL` | `claude-opus-5-5` | Model that grades them |
-| `RETRIEVAL_MODE` | `hybrid` | `dense`, `sparse` (BM25) or `hybrid` (both, fused with RRF) |
-| `DENSE_TOP_K` | `50` | Dense candidates before fusion (`RETRIEVAL_TOP_K` is its deprecated alias) |
-| `BM25_TOP_K` | `50` | BM25 candidates before fusion |
-| `RRF_K` | `60` | Reciprocal Rank Fusion constant |
-| `RERANK_TOP_K` | `8` | Chunks kept after reranking |
-| `FINAL_CONTEXT_K` | `RERANK_TOP_K` | Chunks sent to the model, the main cost lever |
-| `CHUNK_SIZE_TOKENS` | `300` | Words per chunk (applies to new ingests), capped to fit `CHUNK_MAX_MODEL_TOKENS` |
-| `CHUNK_STRATEGY` | `structured` | `structured` (headings, paragraphs, sentences) or `fixed` (legacy word windows) |
-| `CHUNK_MAX_MODEL_TOKENS` | `512` | Embedder/reranker input window; chunk size is capped at this / 1.5 words (0 disables) |
-| `AGENTIC_MAX_ITERS` | `15` | Bounds worst-case cost of one agentic question |
-| `MAX_UPLOAD_MB` | `25` | Upload ceiling |
-| `REQUIRE_API_KEY` | `false` | Enforce API keys |
-| `EMBEDDING_MODEL` | `intfloat/multilingual-e5-small` | Changing it requires a re-ingest |
-| `RERANKER_MODEL` | `cross-encoder/mmarco-mMiniLMv2-L12-H384-v1` | Multilingual cross-encoder |
-| `OIDC_ISSUER` | empty | Accept SSO tokens from this issuer |
-| `DEFAULT_TENANT` | `default` | Tenant for keys and users that carry none |
-| `AUDIT_STORE_QUESTIONS` | `false` | Keep question text in the audit log, not just its hash |
-| `PII_MODE_INGEST` | `mask` | `off`, `mask` or `reject` personal data found in uploads |
-| `RETENTION_TRACES_DAYS` | `7` | Days before request traces are purged (`0` = never) |
-| `TELEMETRY_MODE` | `off` | Where traces may go: `off`, `self_hosted`, `cloud` |
-| `METRICS_ENABLED` | `false` | Serve Prometheus metrics on `/metrics` |
-| `OCR_ENABLED` / `OCR_LANGUAGES` | `true` / `fra+eng` | OCR for scanned PDFs |
+| `RETRIEVAL_MODE` | `hybrid` | `dense`, `sparse` (BM25 only) or `hybrid` |
+| `DENSE_TOP_K` | `50` | Dense candidates (`RETRIEVAL_TOP_K` is a deprecated alias) |
+| `BM25_TOP_K` | `50` | BM25 candidates |
+| `RRF_K` | `60` | RRF constant |
+| `RERANK_TOP_K` | `8` | Chunks kept by the reranker |
+| `FINAL_CONTEXT_K` | `RERANK_TOP_K` | Chunks sent to the model; may not exceed `RERANK_TOP_K` |
 
-The embedding model is stamped on the Qdrant collection; the backend refuses a collection built with a different one (see [Language](#language-french-english-and-more)).
+- **BM25 index** ([`sparse.py`](backend/app/rag/sparse.py)). It is built in memory from the chunk payloads in Qdrant, with one model per access scope, so unreadable chunks never contribute candidates or term statistics. It is rebuilt in full when the collection's point count or the process's write generation changes. Tokens are lowercased, accent-folded, and French and English stopwords are removed.
+- **Rerank pool.** The reranker receives `max(DENSE_TOP_K, BM25_TOP_K)` fused candidates, so hybrid mode costs the cross-encoder no more than dense-only.
+- **Degradation.** If the BM25 index fails in hybrid mode, retrieval continues dense-only and records `"sparse"` in `degraded`. If the cross-encoder cannot load, reranking falls back to BM25, and the response reports `reranker: "bm25-fallback"` instead of hiding it.
+- **Diagnostics in the API.** `/ask` and `/compare/strategies` return `retrieval`, which holds the mode, the reranker actually used, counts per stage (`dense`, `sparse`, `fused`, `reranked`, `final`), latency per stage, `degraded`, and, for each context chunk, its dense rank, sparse rank, fused score and rerank score.
+
+## Chunking
+
+`CHUNK_STRATEGY=structured` (default, [`chunking.py`](backend/app/rag/chunking.py)) cuts at headings first, including French legal divisions such as `Titre I`, `Chapitre 2` and `Article L. 121-1`. It then packs whole paragraphs. Only a paragraph larger than a chunk is split, between sentences, and only an over-long sentence is split between words. Overlap is made of whole trailing sentences. Markdown tables are split between rows, and each row group repeats the header. `fixed` keeps the legacy word windows for comparison.
+
+- **Size.** `CHUNK_SIZE_TOKENS` (300) is counted in **words**. It is capped at `CHUNK_MAX_MODEL_TOKENS / 1.5` words, which is 341 words for the default 512-token window of the embedder and reranker. The cap is an estimate (1.5 subword tokens per word, `config.py:TOKENS_PER_WORD`), not a tokenizer count.
+- **Metadata on every chunk** ([`ingest.py`](backend/app/rag/ingest.py)): `document_id`, `chunk_id`, `chunk_index`, `title`, `section`, `heading_path`, `page`/`page_end` (PDF and PPTX), `char_start`/`char_end`, `token_count`, plus `tenant`, `acl_groups`, `source_key`, `owner`, `ingested_at` and `pii_counts`. Citations use `title`, `section` and `page`.
+
+## Grounding and citations
+
+[`grounding.py`](backend/app/rag/grounding.py):
+
+1. Each context chunk is shown to the model under a handle, `[S1]` … `[Sn]`, with a header such as `[S2] handbook.pdf | section: Leave | p. 12`. The model never sees raw chunk ids.
+2. The model answers through a `submit_answer` tool (the agent uses `finish`, which has the same schema). The answer carries inline `[S#]` markers, `claims` (each with citations and a `supported` flag), `status` (`answered` | `partial` | `insufficient_context`) and `unsupported_notes`. Providers without tool use return the same object as JSON.
+3. `validate_citations` is a pure function. It drops handles that are not in the context and strips their markers, listing them in `invalid_citations`. It builds `sources` from the **cited** chunks only, in citation order; the full context stays in `extra.context_sources`. The answer becomes the localised "cannot answer from the retrieved documents" refusal in three cases: the status is `insufficient_context`, the answer is empty, or no valid citation survives.
+4. `grounded` is true only when all of these hold: status `answered`, at least one claim, every claim supported with a valid citation, and no invalid citation.
+5. `confidence` is an **evidence score, not a calibrated probability**:
+
+```
+coverage  = supported claims citing >= 1 valid source / all claims
+status    = 1.0 answered, 0.5 partial, 0 otherwise
+relevance = mean cited-chunk retrieval score mapped to [0, 1] (logistic for logits)
+base      = 0.5*coverage + 0.2*status + 0.3*relevance      (no scores: (0.5*coverage + 0.2*status) / 0.7)
+score     = base * (1 - 0.5 * invalid / (invalid + valid)) ; a refusal scores 0
+```
 
 ---
+
+## Evaluation methodology
+
+### Datasets
+
+Documented in [data/golden/README.md](data/golden/README.md). The questions and labels were written by the project author.
+
+| File | Questions | Language | Corpus | Notes |
+|---|---:|---|---|---|
+| `golden_v1` | 34 | English | `data/docs` | Frozen. One expected source per question (two have two) |
+| `golden_v2` | 34 | English | `data/docs` | Frozen. v1's questions with every covering document; 2 refusal cases |
+| `golden_fr_v1` | 16 | French | `data/docs` (English) | Frozen. Cross-lingual retrieval |
+| `golden_v3` | 54 | English | `data/docs` | Categorised, with verbatim evidence quotes |
+| `golden_fr_business_v1` | 37 | French | `data/demo_fr_business/docs` | Categorised, synthetic French business documents |
+
+| Category | golden_v3 | golden_fr_business_v1 |
+|---|---:|---:|
+| single_hop / multi_hop / comparison / aggregation | 7 / 7 / 7 / 6 | 5 / 5 / 4 / 4 |
+| ambiguous / unanswerable / citation_sensitive / adversarial | 6 / 7 / 7 / 7 | 4 / 5 / 5 / 5 |
+
+`python scripts/run_eval.py --dry-run --all-datasets` validates every file offline ([`eval/dataset.py`](backend/app/eval/dataset.py)): JSON, schema, duplicate ids and questions, and that every referenced document exists in the dataset's own corpus (`data/golden/corpora.toml`). The verbatim evidence quotes were checked by a script when the sets were written; no check in the repository re-runs that.
+
+### Metrics
+
+- **Deterministic retrieval metrics** ([`eval/retrieval.py`](backend/app/eval/retrieval.py)), at document level with binary relevance: Recall@K, Precision@K (denominator K, trec_eval convention), HitRate@K, MRR and nDCG@K, at K = 1, 3, 5, 10 by default (`--k`). They are scored on each strategy's ranked context, so the agentic strategy's longer list is compared at the same K. Examples with no relevant documents are excluded and counted separately, not scored as zero.
+- **LLM judge** ([`eval/judge.py`](backend/app/eval/judge.py), rubric in [`eval/rubric.py`](backend/app/eval/rubric.py)): faithfulness, answer relevance, context precision, context recall, and answer correctness when an ideal answer exists. The rubric is versioned (`RUBRIC_VERSION = "2026-09.v2"`), with anchors at 0 / 0.25 / 0.5 / 0.75 / 1, and each run records its version and fingerprint. The reply must validate against a Pydantic model: every score must be a float in [0, 1] (out-of-range values are rejected, not clamped), and every reasoning string must be non-empty. An invalid reply gets exactly one repair retry. The judge runs at temperature 0 where the model accepts it.
+- **Failure accounting** ([`eval/metrics.py`](backend/app/eval/metrics.py)). Every example ends as `scored`, `judge_failed`, `generation_failed` or `not_judged`. Each aggregate reports `mean`/`std`/`n` over the examples where that metric was actually measured, and the run lists its `failures`. No score is invented for a failed judge call.
+- **Refusal scoring.** Examples with `expected_behavior: "refuse"` (the unanswerable ones) are not judged. They are scored with `correct_refusal` (1 when the system declined). Answerable examples get `false_refusal`.
+- Results are also broken down by `question_type` and `difficulty`, with p50/p95 latency, tokens per question and judge tokens.
+
+## Regression testing
+
+- **Thresholds** are set in [`eval/regression_thresholds.toml`](eval/regression_thresholds.toml): faithfulness, answer relevance, `recall@5` and MRR may drop by at most 0.03; `latency_p50_ms` may rise by at most 20%; `tokens_per_question` by at most 15%. A metric measured on fewer than `min_examples = 5` examples is `SKIPPED`, not passed.
+- **Configuration fingerprint.** Runs are grouped by dataset, strategy, provider, model, prompt version, judge model, rubric version and `config_hash`. The hash covers the retrieval settings whose names start with `retrieval_`, `rerank_`, `bm25_`, `rrf_` or `chunk`, plus the embedding model, the reranker model and the retrieval mode the strategies reported ([`eval/metrics.py:retrieval_config`](backend/app/eval/metrics.py)).
+- **Gate.** After each run, a regression report is saved next to it. The baseline is the pinned baseline for the configuration, or else the previous comparable run. `run_eval.py --fail-on-regression` exits with code 2 on any `FAIL`, and `--set-baseline` pins a run. `GET /eval/runs/{id}/regression` and the Runs tab of the Evaluation page serve the report.
+- **Offline comparison** of two saved runs:
+
+```bash
+python scripts/regression_report.py BASELINE.json CURRENT.json --fail-on-regression
+```
+
+## Observability
+
+- **Spans, in pipeline order** ([`tracing/stages.py`](backend/app/tracing/stages.py)): `preprocess → dense → sparse → fusion → rerank → context_selection → generation → citation_validation → response`. Graph adds `entity_extraction` and `graph_walk` before them; agentic runs repeat stages for each step. `GET /traces/{id}` returns them as `stages`. Traces are kept in memory (1,000 most recent) and are lost on restart.
+- **Langfuse, self-hosted.** `--profile tracing` runs Langfuse v4 in the Compose stack. Export is off by default (`TELEMETRY_MODE=off`). In `self_hosted` mode it goes only to hosts in `TELEMETRY_ALLOWED_HOSTS`. Spans are tagged `evalrag.stage`, and generation spans carry `usage_details` and `cost_details`. All providers (Anthropic, OpenAI, Ollama) produce generation spans.
+- **Prometheus** (`METRICS_ENABLED=true`, [`monitoring.py`](backend/app/monitoring.py)): HTTP requests and latency, `evalrag_strategy_duration_seconds`, `evalrag_stage_duration_seconds`, `evalrag_llm_tokens_total`, `evalrag_llm_cost_usd_total`, `evalrag_llm_unpriced_calls_total`, `evalrag_request_cost_usd`, `evalrag_context_chunks`, refusals, circuit-breaker state and telemetry export and drop counters.
+- **Never recorded:**
+  - Stage attributes, span metadata and structured logs never contain chunk or question text; `backend/tests/test_request_metrics.py` checks this.
+  - Metrics carry no content and no identifiers.
+  - API keys, user identifiers and IP addresses are never exported.
+  - Question and answer text reaches Langfuse only when `TELEMETRY_INCLUDE_CONTENT=true` (the default), and only after PII redaction; set it to `false` to export timings and counts only.
+  - The audit log stores a SHA-256 hash of each question unless `AUDIT_STORE_QUESTIONS=true`.
+
+Details: [docs/monitoring.md](docs/monitoring.md).
+
+## Cost and latency measurement
+
+- **`RequestMetrics`** ([`rag/request_metrics.py`](backend/app/rag/request_metrics.py)) is returned on every `/ask` answer and every `/compare/strategies` row. It holds input and output tokens, `estimated_cost_usd`, `llm_calls`, `retrieved_chunks`, `context_chunks`, and `latency_ms` split into `retrieval`, `rerank`, `generation`, `citation_validation` and `other`, which add up to `total`.
+- **Prices** come from [`config/model_pricing.toml`](config/model_pricing.toml): Anthropic list prices in USD per million tokens, with source "Anthropic Claude API list prices", `as_of = "2026-09-25"`, checked 2026-09-29. Each call is priced with the model that served it. A call to an unlisted model (for example an OpenAI or Ollama model) makes the request's cost `null`, never an estimate. Set `MODEL_PRICING_PATH` to use a different table.
+- **Evaluation page, Overview tab** (`/eval`) plots recorded eval runs as quality against cost and latency, by strategy, with the regression status of each configuration.
+
+## French business-document demo
+
+[data/demo_fr_business/](data/demo_fr_business/README.md) holds 13 **synthetic, fictional** French business documents: terms of sale, a supplier contract, quotes, a purchase order, a delivery note, invoices, a penalty notice, certificates and a CSV invoice register. The amounts are internally consistent, the identifiers are deliberately invalid, and the documents contain deliberate contract-versus-terms conflicts. `golden_fr_business_v1` (37 questions) evaluates multi-hop chains over them, such as quote → order → delivery → invoice → penalty. The corpus is ingested into its own collection; see that README.
+
+---
+
+## Current benchmark
+
+**Measured:** BM25 (sparse) first-stage retrieval, reranking off. Produced by `scripts/benchmark_retrieval.py` on 2026-09-29 from commit `885f3fd` ([data/benchmarks/](data/benchmarks/README.md)). Corpus `data/docs`: 41 documents, 467 chunks. `golden_fr_business_v1` uses its own corpus: 13 documents, 43 chunks. Unanswerable questions are excluded from the retrieval metrics.
+
+| Dataset (questions scored) | K | Recall@K | Precision@K | HitRate@K | MRR | nDCG@K |
+|---|---:|---:|---:|---:|---:|---:|
+| golden_v1 (34/34) | 5 | 0.529 | 0.132 | 0.529 | 0.422 | 0.449 |
+| golden_v1 | 10 | 0.647 | 0.092 | 0.647 | 0.439 | 0.489 |
+| golden_v2 (32/34) | 5 | 0.669 | 0.384 | 0.875 | 0.724 | 0.636 |
+| golden_v2 | 10 | 0.815 | 0.280 | 0.938 | 0.735 | 0.704 |
+| golden_fr_v1 (16/16) | 5 | 0.760 | 0.419 | 0.875 | 0.750 | 0.700 |
+| golden_fr_v1 | 10 | 0.844 | 0.311 | 0.875 | 0.750 | 0.745 |
+| golden_v3 (47/54) | 5 | 0.938 | 0.402 | 1.000 | 0.888 | 0.877 |
+| golden_v3 | 10 | 0.968 | 0.238 | 1.000 | 0.888 | 0.891 |
+| golden_fr_business_v1 (32/37) | 5 | 0.867 | 0.340 | 0.906 | 0.708 | 0.739 |
+| golden_fr_business_v1 | 10 | 0.940 | 0.220 | 0.969 | 0.717 | 0.766 |
+
+K = 1 and K = 3 are in the per-dataset files. How to read these numbers:
+
+- **Environment.** The benchmark environment had no access to Hugging Face, so the embedding model could not be loaded. Dense and hybrid modes were **skipped** and are listed as such in each file. No dense or hybrid number exists in this repository.
+- **Optimism.** `golden_v3` and `golden_fr_business_v1` were written by reading the source documents, so their questions share vocabulary with the relevant passages. BM25 is favoured on them, and their numbers are not evidence that lexical retrieval is sufficient.
+- **`golden_v1` labels.** They reference only 6 of the 41 documents, because the set was labelled when the corpus had 6. Documents added later on the same topics (for example `reranking_deep_dive.md` next to `reranking.md`) are not labelled relevant, so retrieving them counts as a miss.
+- **Definitions in the benchmark script.** K counts **chunks**: the documents behind the top K chunks are deduplicated and scored. Precision is the share of those distinct documents that are relevant, and MRR is computed within the top K. These differ from the eval harness's document-level @K metrics described above, so compare benchmark files only with each other.
+
+### Not yet measured
+
+The following have **not** been measured on the current pipeline, because no Anthropic API key and no Hugging Face access were available: dense and hybrid retrieval, reranking gains, all generation metrics (faithfulness, relevance, correctness, refusal accuracy), and per-request cost and latency. To produce them:
+
+```bash
+python scripts/download_models.py --cache-dir .hf_cache            # embedder + reranker
+PYTHONPATH=backend python scripts/benchmark_retrieval.py --dataset golden_v3              # dense, sparse, hybrid
+PYTHONPATH=backend python scripts/benchmark_retrieval.py --dataset golden_v3 --rerank     # with the reranker
+# Needs ANTHROPIC_API_KEY and an ingested corpus (step 5 of the quickstart):
+python scripts/run_eval.py --dataset golden_v3 --all                # every strategy, judge included
+python scripts/run_eval.py --dataset golden_v3 --all --no-judge     # retrieval + refusal metrics only
+```
+
+### Historical baseline (previous pipeline, not re-run)
+
+This table was produced at commit `2175ce8` by a pipeline that no longer exists: the `BAAI/bge-small-en-v1.5` embedder, the English `ms-marco-MiniLM-L-6-v2` reranker, word-window chunks, an English-only prompt, dense-only retrieval and no citation validation. The corpus was 41 documents and 107 chunks, with `golden_v1` (34 questions). It is kept for history only and is **not** a result of the current system.
+
+| Metric | Classic | Graph | Agentic |
+|---|---|---|---|
+| Retrieval recall / MRR | 0.765 / 0.554 | 0.765 / 0.554 | 0.544 / 0.356 |
+| Faithfulness | 0.507 | 0.519 | 0.249 |
+| Answer relevance | 0.862 | 0.854 | 0.521 |
+| Tokens (total) | 389,251 | 397,431 | 727,101 |
+| Refusals | 0 | 0 | 6 |
+
+---
+
+## Reproducibility
+
+### Docker quickstart
+
+The Compose file is `infra/docker-compose.yml`, and Compose only auto-loads a `.env` placed next to it. Run every command from the project root with `--env-file .env`; without it, Compose stops with `required variable POSTGRES_PASSWORD is missing a value`.
+
+```bash
+cp .env.example .env          # Windows: copy .env.example .env
+# set ANTHROPIC_API_KEY and POSTGRES_PASSWORD in .env
+pip install huggingface_hub && python scripts/download_models.py --cache-dir .hf_cache   # optional, recommended
+docker compose --env-file .env -f infra/docker-compose.yml up -d --build
+docker compose --env-file .env -f infra/docker-compose.yml exec backend python /scripts/ingest.py
+docker compose --env-file .env -f infra/docker-compose.yml exec backend python /scripts/run_eval.py --dataset golden_v3
+```
+
+- **Models.** The embedder and reranker download on first use into `.hf_cache/`, which is bind-mounted. Set `HF_HUB_OFFLINE=1` and `TRANSFORMERS_OFFLINE=1` in `.env` only after they are downloaded.
+- **Profiles.** Add `--profile tracing` (Langfuse; set its secrets first) or `--profile monitoring` (Prometheus and Grafana).
+- **Ports.** Every port is published on **127.0.0.1 only**. Frontend <http://localhost:5173>, API docs <http://localhost:8011/docs>, Langfuse `:3100`, Prometheus `:9090`, Grafana `:3300`, Postgres `:5434`, Qdrant `:6333`.
+- **Default corpus.** `scripts/ingest.py` also ingests the top-level `README.md`, `EvalRAG.md` and `LEARN.md` unless you pass `--no-meta`.
+- **Stop.** `docker compose --env-file .env -f infra/docker-compose.yml down` stops the stack; add `-v` to also wipe the volumes.
+
+### Evaluation and benchmark commands
+
+```bash
+python scripts/run_eval.py --dry-run --all-datasets                       # validate datasets, no model calls
+python scripts/measure_retrieval.py --dataset golden_v3 --show-misses     # dense + rerank on the live index, no LLM
+PYTHONPATH=backend python scripts/benchmark_retrieval.py --modes sparse --dataset golden_v3   # in-process, no Docker
+python scripts/run_eval.py --dataset golden_v3 --all --fail-on-regression
+```
+
+## Tests
+
+```bash
+cd backend && python -m pytest -q --cov=app          # 1,495 tests, 95% line coverage
+ruff check app tests ../scripts && mypy app
+cd ../frontend && npm ci && npm run lint && npm run typecheck && npm test && npm run build   # 102 Vitest tests
+```
+
+CI ([`.github/workflows/ci.yml`](.github/workflows/ci.yml)) runs ruff, mypy (app and scripts), pytest with `--cov-fail-under=90`, the frontend lint, typecheck, tests and build, `docker compose config`, image builds, and dependency audits. Qdrant, the embedding model and the cross-encoder are mocked or run in process in the tests. CI does **not** run any evaluation against a model.
+
+---
+
+## Limitations
+
+- **The judge is not calibrated against human labels.** Human ratings can be recorded (`POST /eval/human-rate`), but agreement with the judge is not computed.
+- **Small corpora, self-authored datasets.** 41 English documents and 13 French ones; 175 questions in total, all written by the project author. The two newest sets share vocabulary with their sources.
+- **Only BM25 retrieval has current numbers.** Dense, hybrid, reranking and generation have not been measured on this pipeline (see above).
+- **The strategies were compared on one small corpus**, and only in the historical baseline. The Advisor's weights still come from it.
+- **BM25 index:** held in memory per process and per access scope, and rebuilt in full whenever the collection changes. It does not scale to large corpora, and each worker holds its own copy.
+- **Config fingerprint gaps.** `DENSE_TOP_K` and `FINAL_CONTEXT_K` fall outside the name prefixes the hash covers. Two runs that differ only in those settings are grouped as comparable.
+- **Access scoping gaps.** `GET /traces/{id}` and `/eval/runs` require authentication but are not scoped by tenant or principal. OIDC users are not rate-limited or metered, because they have no key row.
+- **Grafana.** The provisioned dashboard has no panels for the cost, stage-latency and context-size metrics.
+- **Graph strategy.** Entity linking is exact string matching, the graph is a JSONL file with an in-process index, and it must be rebuilt with `POST /graph/build` after ingestion.
+- **Chunk cap.** The 512-token cap relies on a words-to-tokens ratio of 1.5, not on the tokenizer.
+- **`scripts/measure_retrieval.py` is dense-only.** It calls `dense_search` and the reranker directly and ignores `RETRIEVAL_MODE`; use `benchmark_retrieval.py` to compare modes.
+
+---
+
+## Enterprise and EU features
+
+- **Languages.** The embedder (`intfloat/multilingual-e5-small`) and reranker (`cross-encoder/mmarco-mMiniLMv2-L12-H384-v1`) are multilingual. Answers come back in the language of the question, and the UI has a FR/EN switch. The embedding model is stamped on the Qdrant collection, and a mismatch returns 503 `embedding_model_mismatch`.
+- **Access control.** API keys or OIDC SSO (Entra ID, ProConnect, Keycloak) with `REQUIRE_API_KEY=true`. Each chunk carries a `tenant` and `acl_groups`, filtered inside Qdrant and re-checked in Python. The BM25 index is built per scope, and the graph walk is restricted to readable documents. An audit log is kept in Postgres. Keys: `python scripts/setup_auth.py --create-key NAME --groups legal --tenant acme`.
+- **GDPR.** PII masking at ingest (`PII_MODE_INGEST`: e-mail, French phone numbers, NIR, IBAN, SIREN/SIRET, cards, IPv4); redaction in logs and traces; erasure, subject-access export and retention endpoints under `/privacy`. See [docs/gdpr/README.md](docs/gdpr/README.md) and the CNIL-style register template [docs/gdpr/ropa_template.md](docs/gdpr/ropa_template.md). Neither is legal advice.
+- **Telemetry that stays local.** Off by default, with self-hosted Langfuse and Prometheus; see [docs/monitoring.md](docs/monitoring.md).
+- **Formats.** `.pdf` (with OCR for scanned pages), `.docx`, `.pptx`, `.odt`, `.ods`, `.eml`, `.html`, `.txt`, `.md`, `.rst`, `.csv` and `.json`, with zip-bomb and encrypted-file guards. `GET /ingest/formats` lists them.
+
+## Configuration
+
+[`.env.example`](.env.example) documents every setting. Defaults below are from [`backend/app/config.py`](backend/app/config.py).
+
+| Setting | Default | Effect |
+|---|---|---|
+| `GENERATOR_PROVIDER` / `GENERATOR_MODEL` | `anthropic` / `claude-sonnet-5` | Answer generation |
+| `JUDGE_MODEL` | `claude-opus-5-5` | LLM judge |
+| `GRAPH_EXTRACTION_MODEL` | `claude-haiku-4-5-20251001` | Graph triples and question entities |
+| `AGENTIC_MODEL` / `AGENTIC_MAX_ITERS` | `claude-sonnet-5` / `15` | Agentic strategy |
+| `RETRIEVAL_MODE`, `DENSE_TOP_K`, `BM25_TOP_K`, `RRF_K` | `hybrid`, `50`, `50`, `60` | See [Hybrid retrieval](#hybrid-retrieval) |
+| `RERANK_TOP_K` / `FINAL_CONTEXT_K` | `8` / `RERANK_TOP_K` | Reranked chunks / chunks sent to the model |
+| `CHUNK_STRATEGY` / `CHUNK_SIZE_TOKENS` / `CHUNK_OVERLAP_TOKENS` | `structured` / `300` / `50` | Chunking, in words; applies to new ingests |
+| `CHUNK_MAX_MODEL_TOKENS` | `512` | Caps chunk size at this / 1.5 words (0 disables) |
+| `EMBEDDING_MODEL` | `intfloat/multilingual-e5-small` | Changing it requires a re-ingest |
+| `RERANKER_MODEL` | `cross-encoder/mmarco-mMiniLMv2-L12-H384-v1` | Cross-encoder |
+| `MAX_UPLOAD_MB` | `25` | Upload ceiling |
+| `REQUIRE_API_KEY` / `OIDC_ISSUER` | `false` / empty | Authentication |
+| `PII_MODE_INGEST` | `mask` | `off`, `mask` or `reject` |
+| `RETENTION_TRACES_DAYS` | `7` | `0` keeps forever |
+| `TELEMETRY_MODE` / `METRICS_ENABLED` | `off` / `false` | Telemetry export / `/metrics` |
+| `OCR_ENABLED` / `OCR_LANGUAGES` | `true` / `fra+eng` | OCR for scanned PDFs |
 
 ## Development
 
 ```bash
-cd backend
-python -m venv .venv && . .venv/Scripts/activate    # or bin/activate on macOS/Linux
-pip install --index-url https://download.pytorch.org/whl/cpu torch
-pip install -e ".[dev]"
-
-ruff check app tests     # lint
-mypy app                 # types
-pytest -q                # ~930 tests
+cd backend && python -m venv .venv && . .venv/bin/activate
+pip install --index-url https://download.pytorch.org/whl/cpu torch && pip install -e ".[dev]"
+cd ../frontend && npm ci && npm run dev    # Node 22.12 or newer
 ```
 
-```bash
-cd frontend
-npm ci
-npm run lint             # ESLint (typescript-eslint + react-hooks)
-npm run typecheck        # tsc, including tests
-npm test                 # vitest
-npm run build            # typecheck + production build
-npm run dev              # dev server on :5173
-```
-
-The frontend needs Node 22.12 or newer; `vitest` 5 refuses to start on Node 20.
-
-The app imports without any configuration. `settings.validate_startup()` runs in the FastAPI lifespan rather than at import time, so linters, tests and tooling all work in a bare checkout.
-
-CI ([`.github/workflows/ci.yml`](.github/workflows/ci.yml)) runs on every push to `main` and every pull request: the backend gates above (ruff, mypy, pytest) plus mypy on `scripts/`, the frontend gates (lint, typecheck, tests, build), `docker compose config`, a build of both Dockerfiles, and dependency audits (`npm audit --audit-level=high` blocks; `pip-audit` reports without failing the run).
-
-More detail, including troubleshooting: [`backend/SETUP.md`](./backend/SETUP.md).
-
----
+The app imports without any configuration: `settings.validate_startup()` runs in the FastAPI lifespan, not at import time. More detail: [backend/SETUP.md](backend/SETUP.md).
 
 ## Troubleshooting
 
-**Every answer is a refusal** → `ANTHROPIC_API_KEY` is unset. Check `GET /health`.
-
-**`Connection refused` from Postgres, Qdrant** → services aren't up. `docker compose --env-file .env -f infra/docker-compose.yml up -d`.
-
-**401 on every request** → `REQUIRE_API_KEY=true` and no key is set. See [Authentication](#authentication).
-
-**429 Rate limit exceeded** → your key's per-minute limit. Raise it with `--rpm` when creating the key.
-
-**Answers are slow** → lower `RETRIEVAL_TOP_K` and `RERANK_TOP_K`; try `claude-haiku-4-5-20251001` as `GENERATOR_MODEL`. The agentic strategy is inherently slower, it makes up to `AGENTIC_MAX_ITERS` model calls per question.
-
-**503 `embedding_model_mismatch`** → the collection was built with another embedding model. Re-ingest into a new `QDRANT_COLLECTION`, or wipe with `down -v`.
-
-**403 on ingest** → you asked for a group you are not a member of.
-
-**A document is missing from answers for one user** → check its `acl_groups` and tenant against the user's; `GET /admin/audit` shows which documents each request returned.
-
-**422 `pii_rejected` on upload** → `PII_MODE_INGEST=reject` found personal data; the response lists the types.
-
-**Graph strategy returns nothing** → build the graph first: `POST /graph/build` (admin key required), then poll `GET /graph/build/{job_id}`. It runs one model call per chunk, so it takes a while on a large corpus.
-
-Fuller guide: [`backend/SETUP.md`](./backend/SETUP.md).
-
----
-
-## Contributing
-
-1. **New strategy?** Add a `Strategy` subclass in `backend/app/rag/strategies/` and register it in `REGISTRY`.
-2. **New metric?** Extend `backend/app/eval/judge.py` and `DIMENSIONS`.
-3. **Frontend?** `frontend/src/`.
-4. **Bug?** Open an issue with logs (`LOG_LEVEL=DEBUG` in `.env`).
-
-Pull requests should keep `ruff check`, `mypy` and `pytest` green, add tests for new logic, and document any new setting in `.env.example`.
-
----
-
-## Where to go next
-
-- [`LEARN.md`](./LEARN.md), module-by-module walkthrough
-- [`backend/SETUP.md`](./backend/SETUP.md), local install, debugging, common errors
-- [`EvalRAG.md`](./EvalRAG.md), theory and extension recipes
-- [`docs/gdpr/README.md`](docs/gdpr/README.md), personal data, erasure, retention, subprocessors
-- [`docs/monitoring.md`](docs/monitoring.md), telemetry modes, Langfuse, Prometheus
-- [`.env.example`](./.env.example), every setting, annotated
-- <http://localhost:8011/docs>, live API reference
-
----
-
-## Glossary
-
-**Chunk**, a passage split from a source document (~600 words here, with overlap).
-**Embedding**, a fixed-length vector encoding meaning; the same model must embed both documents and queries.
-**Vector DB**, an index optimized for approximate nearest-neighbor search. Here: Qdrant.
-**Reranking**, a slower cross-encoder rescoring the top-K from retrieval, for higher precision.
-**Grounding / citations**, the answer references the chunks it used, which is what makes it auditable.
-**Golden dataset**, hand-labeled question/answer pairs used as ground truth.
-**LLM-as-judge**, a second model scoring answers against a rubric.
-**Faithfulness**, does the answer assert only what the retrieved context supports?
-**Regression**, a metric got worse than the previous run *of the same configuration*.
-**Circuit breaker**, after repeated provider failures, calls fail fast for 30 seconds instead of piling up.
-
----
+- **The backend exits at startup with `GENERATOR_PROVIDER is 'anthropic' but ANTHROPIC_API_KEY is not set`.** Set the key in `.env`, or use `GENERATOR_PROVIDER=local` with Ollama. The graph and agentic strategies, the judge and graph extraction still need Anthropic.
+- **`required variable POSTGRES_PASSWORD is missing a value`.** Add `--env-file .env` to the Compose command.
+- **`reranker: "bm25-fallback"` in the `retrieval` diagnostics.** The cross-encoder did not load. Download the models, or check `.hf_cache/`.
+- **503 `embedding_model_mismatch`.** The collection was built with another embedder. Re-ingest into a new `QDRANT_COLLECTION`, or wipe with `down -v`.
+- **401 on every request** means `REQUIRE_API_KEY=true` with no key sent. **429** means the key's per-minute limit (`--rpm`, default 10) was reached.
+- **The graph strategy returns nothing.** Run `POST /graph/build` (admin key), then poll `GET /graph/build/{job_id}`.
 
 ## License
 
-[MIT](./LICENSE)
+[MIT](LICENSE)

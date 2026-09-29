@@ -134,9 +134,9 @@ Then re-ingest. A collection created before the model was recorded is refused un
 
 Nothing is indexed. Check `GET /ingest/stats`. If it reports chunks but you still see this, Qdrant is probably unreachable, `count()` degrades to `0` rather than erroring. Check `docker compose logs qdrant`.
 
-### Every answer is a refusal, and `/health` shows `"anthropic": false`
+### The backend exits at startup: `GENERATOR_PROVIDER is 'anthropic' but ANTHROPIC_API_KEY is not set`
 
-`ANTHROPIC_API_KEY` is not reaching the process. Under Compose it comes from `../.env` via `env_file` (optional, so a missing `.env` does not stop the stack; it just leaves every key empty). Confirm with:
+`settings.validate_startup()` runs in the app lifespan and refuses to start when the selected generator provider has no credentials. Either set the key, or use `GENERATOR_PROVIDER=local` with Ollama (the graph and agentic strategies, the judge and graph extraction still need Anthropic). Under Compose the key comes from `../.env` via `env_file` (optional, so a missing `.env` leaves every key empty). Confirm with:
 
 ```bash
 docker compose --env-file .env -f infra/docker-compose.yml exec backend printenv ANTHROPIC_API_KEY
@@ -160,7 +160,7 @@ python scripts/setup_auth.py --create-key "load-test" --rpm 120
 
 ### Answers arrive but citations look wrong
 
-The prompt asks Claude to cite chunk ids like `[9fa3c1b0e2:4]`, and those are preserved in the response. Cross-reference them against the `sources` array. If they name chunks that are not in `sources`, the model is inventing citations, worth an eval run.
+The model cites source handles such as `[S2]`, and the server validates them against the context it was given (`app/rag/grounding.py`). Handles that were not in the context are removed from the answer and listed in `invalid_citations`; `sources` holds only the cited chunks. A non-empty `invalid_citations`, or `grounded: false`, on many answers is worth an eval run.
 
 ### The knowledge graph is empty after a rebuild
 
