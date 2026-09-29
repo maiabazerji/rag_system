@@ -35,7 +35,16 @@ Return JSON only, e.g.:
 _JSON_BLOCK = re.compile(r"\[\s*{.*}\s*]", re.DOTALL)
 
 
+_TRIPLE_KEYS = ("subject", "predicate", "object")
+
+
 def _parse_triples(raw: str) -> list[dict]:
+    """The well-formed triples in a model reply; anything else is dropped.
+
+    Tolerates prose around the JSON array and a single object instead of an
+    array. A reply that is valid JSON but not an array of objects (``null``,
+    a number, a string) yields no triples rather than an error.
+    """
     if not raw:
         return []
     m = _JSON_BLOCK.search(raw)
@@ -44,7 +53,25 @@ def _parse_triples(raw: str) -> list[dict]:
         data = json.loads(payload)
     except json.JSONDecodeError:
         return []
-    return [d for d in data if isinstance(d, dict) and {"subject", "predicate", "object"} <= d.keys()]
+    if isinstance(data, dict):
+        data = [data]
+    if not isinstance(data, list):
+        return []
+    return [
+        d for d in data if isinstance(d, dict) and all(_is_term(d.get(k)) for k in _TRIPLE_KEYS)
+    ]
+
+
+def _is_term(value: object) -> bool:
+    """A usable entity or predicate: a non-blank string or a number.
+
+    ``null`` must not pass: ``str(None)`` would become an entity named "None".
+    """
+    if isinstance(value, bool):
+        return False
+    if isinstance(value, int | float):
+        return True
+    return isinstance(value, str) and bool(value.strip())
 
 
 async def extract_triples(
@@ -71,7 +98,6 @@ async def extract_triples(
             doc_id=doc_id,
         )
         for t in triples
-        if all(str(t[k]).strip() for k in ("subject", "predicate", "object"))
     ]
 
 
