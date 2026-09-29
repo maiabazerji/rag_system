@@ -257,7 +257,7 @@ docker compose --env-file .env -f infra/docker-compose.yml exec backend python /
 - **Models.** The embedder and reranker download on first use into `.hf_cache/`, which is bind-mounted. Set `HF_HUB_OFFLINE=1` and `TRANSFORMERS_OFFLINE=1` in `.env` only after they are downloaded.
 - **Profiles.** Add `--profile tracing` (Langfuse; set its secrets first) or `--profile monitoring` (Prometheus and Grafana).
 - **Ports.** Every port is published on **127.0.0.1 only**. Frontend <http://localhost:5173>, API docs <http://localhost:8011/docs>, Langfuse `:3100`, Prometheus `:9090`, Grafana `:3300`, Postgres `:5434`, Qdrant `:6333`.
-- **Default corpus.** `scripts/ingest.py` also ingests the top-level `README.md`, `EvalRAG.md` and `LEARN.md` unless you pass `--no-meta`.
+- **Default corpus.** `scripts/ingest.py` ingests `data/docs` only, the corpus the golden datasets are labelled against. `--with-meta` also adds the top-level `README.md`, `EvalRAG.md` and `LEARN.md`.
 - **Stop.** `docker compose --env-file .env -f infra/docker-compose.yml down` stops the stack; add `-v` to also wipe the volumes.
 
 ### Evaluation and benchmark commands
