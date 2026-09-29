@@ -78,3 +78,57 @@ def test_missing_or_invalid_file_yields_no_costs(tmp_path, settings):
     bad.write_text("this is = = not toml")
     settings.model_pricing_path = str(bad)
     assert pricing.reload_price_table().models == {}
+
+
+# --- Where the price file is looked up ----------------------------------------
+
+
+def test_packaged_copy_matches_the_source_of_truth():
+    # config/model_pricing.toml is the one to edit; app/data/ holds a copy so
+    # images built from backend/ alone still have prices. Refresh it with
+    #   cp config/model_pricing.toml backend/app/data/model_pricing.toml
+    source = pricing.REPO_PRICING_PATH
+    packaged = pricing.PACKAGED_PRICING_PATH
+    assert source.is_file(), f"missing source of truth {source}"
+    assert packaged.is_file(), f"missing packaged copy {packaged}"
+    assert packaged.read_bytes() == source.read_bytes(), (
+        "backend/app/data/model_pricing.toml differs from config/model_pricing.toml; "
+        "copy the config file over it"
+    )
+
+
+def test_default_lookup_prefers_the_repository_file():
+    assert pricing.pricing_path() == pricing.REPO_PRICING_PATH
+
+
+def test_env_path_wins_over_the_defaults(tmp_path, settings):
+    path = tmp_path / "prices.toml"
+    settings.model_pricing_path = str(path)
+    # Returned even though it does not exist: a wrong path is reported, not
+    # silently replaced by the list prices.
+    assert pricing.pricing_path() == path
+
+
+def test_packaged_copy_is_used_without_a_checkout(tmp_path, monkeypatch):
+    monkeypatch.setattr(pricing, "REPO_PRICING_PATH", tmp_path / "absent.toml")
+    assert pricing.pricing_path() == pricing.PACKAGED_PRICING_PATH
+    table = pricing.reload_price_table()
+    assert table.path == pricing.PACKAGED_PRICING_PATH
+    assert pricing.estimate_cost("claude-sonnet-5", 1_000_000, 1_000_000) == pytest.approx(12.0)
+
+
+def test_no_file_anywhere_gives_an_empty_table(tmp_path, monkeypatch):
+    monkeypatch.setattr(pricing, "REPO_PRICING_PATH", tmp_path / "a.toml")
+    monkeypatch.setattr(pricing, "PACKAGED_PRICING_PATH", tmp_path / "b.toml")
+    assert pricing.pricing_path() is None
+    assert pricing.reload_price_table().models == {}
+
+
+def test_packaged_copy_is_declared_as_package_data():
+    import tomllib
+    from pathlib import Path
+
+    pyproject = Path(pricing.__file__).resolve().parents[1] / "pyproject.toml"
+    data = tomllib.loads(pyproject.read_text())
+    package_data = data["tool"]["setuptools"]["package-data"]["app"]
+    assert "data/model_pricing.toml" in package_data

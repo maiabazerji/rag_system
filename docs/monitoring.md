@@ -130,7 +130,11 @@ docker compose --env-file .env -f infra/docker-compose.yml --profile monitoring 
 
 - Prometheus: <http://localhost:9090>, 15 days retention.
 - Grafana: <http://localhost:3300> (user `admin`), with the **EvalRAG overview**
-  dashboard provisioned from `infra/monitoring/grafana/dashboards/`.
+  dashboard provisioned from `infra/monitoring/grafana/dashboards/`. Its
+  "Cost, pipeline stages and context" row shows estimated cost per hour and
+  over the time range by model and strategy, cost per request (p50/p95/mean),
+  unpriced model calls, stage latency p50/p95 by strategy and stage, and the
+  context-chunk distribution.
 
 `GET /metrics` answers only when `METRICS_ENABLED=true`, and then only to
 loopback callers or to requests carrying `X-Admin-Key: <ADMIN_KEY>`. Prometheus
@@ -166,7 +170,18 @@ model, provider, token totals, `estimated_cost_usd`, `llm_calls`,
 are timed exclusively). Graph entity extraction counts toward `retrieval`.
 
 Costs come from [`config/model_pricing.toml`](../config/model_pricing.toml)
-(list prices, with their source and date; override with `MODEL_PRICING_PATH`).
+(list prices, with their source and date). The backend looks for the price
+table in this order:
+
+1. `MODEL_PRICING_PATH`, when set (Compose sets it to the mounted `config/`);
+2. `config/model_pricing.toml` at the repository root, when it exists (the dev
+   server started from `backend/`);
+3. `backend/app/data/model_pricing.toml`, a copy shipped inside the package, so
+   the backend image run without Compose, or a `pip install`, still has prices.
+
+`config/model_pricing.toml` is the file to edit. After changing it, copy it to
+`backend/app/data/model_pricing.toml`; `tests/test_pricing.py` fails while the
+two differ.
 Each model call is priced with the model that served it. A call to a model
 without a listed price makes the request's cost `null`, never a guess.
 
