@@ -16,7 +16,7 @@ python scripts/run_eval.py --dataset golden_v3 --strategy classic  # retrieval +
 | `golden_v2.jsonl` | 34 | English | `data/docs` | Frozen: v1's questions with every document that covers each answer; includes 2 refusal cases (`note`) |
 | `golden_fr_v1.jsonl` | 16 | French | `data/docs` (English) | Frozen: cross-lingual retrieval |
 | `golden_v3.jsonl` | 54 | English | `data/docs` | Categorised set with evidence, see below |
-| `golden_fr_business_v1.jsonl` | 37 | French | `data/demo_fr_business/docs` | Categorised set over the synthetic French business corpus. Ingest that corpus into its own collection first (see `data/demo_fr_business/README.md`) |
+| `golden_fr_business_v1.jsonl` | 40 | French | `data/demo_fr_business/docs` | Categorised set over the synthetic French business corpus. Ingest that corpus into its own collection first (see `data/demo_fr_business/README.md`) |
 
 **`golden_v1`, `golden_v2` and `golden_fr_v1` are kept unchanged** so that scores stay
 comparable with earlier runs. The new fields were not backfilled into them. New
@@ -66,14 +66,14 @@ fields):
 |---|---:|---:|
 | single_hop | 7 | 5 |
 | multi_hop | 7 | 5 |
-| comparison | 7 | 4 |
-| aggregation | 6 | 4 |
-| ambiguous | 6 | 4 |
+| comparison | 7 | 5 |
+| aggregation | 6 | 5 |
+| ambiguous | 6 | 5 |
 | unanswerable | 7 | 5 |
 | citation_sensitive | 7 | 5 |
 | adversarial | 7 | 5 |
-| **Total** | **54** | **37** |
-| Difficulty (easy / medium / hard) | 14 / 31 / 9 | 12 / 21 / 4 |
+| **Total** | **54** | **40** |
+| Difficulty (easy / medium / hard) | 14 / 31 / 9 | 13 / 23 / 4 |
 
 Unanswerable questions have no expected sources, so `score_retrieval` skips them. Use
 the answer-level metrics (refusal, judge) for them. When you report retrieval
