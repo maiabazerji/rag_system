@@ -1,6 +1,6 @@
-# 🧠 EvalRAG: Production LLM Evaluation & Advanced RAG Platform
+# EvalRAG design blueprint
 
-## 📑 Table of Contents
+## Table of Contents
 
 - [A. Project Overview](#a-project-overview)
 - [B. Learning Goals & Outcomes](#b-learning-goals--outcomes)
@@ -32,9 +32,9 @@
 
 ## A. Project Overview
 
-**EvalRAG** is a full-stack AI platform demonstrating real-world LLM engineering: retrieval, evaluation, prompt regression testing, structured outputs, reranking, and observability. It simulates the systems production companies deploy when shipping LLM-based assistants.
+**EvalRAG** is a full-stack AI platform demonstrating real-world LLM engineering: retrieval, evaluation, prompt regression testing, structured outputs, reranking, and observability. It models the components companies typically deploy when shipping LLM-based assistants.
 
-> **Blueprint, not a spec of what is built.** This document is the design this project grew from, and some of it is still aspirational. What actually ships: **dense retrieval then cross-encoder rerank** (BM25 appears only as the reranker's fallback; there is no hybrid dense + BM25 fusion), Qdrant and Postgres under **Docker Compose** (no Redis, no queue, no Kubernetes manifests), and **non-streaming** JSON responses from `/ask`. The [README](./README.md) and [LEARN.md](./LEARN.md) describe the running system.
+> **Blueprint, not a description of what is built.** This is the design the project grew from. Each section starts with a **Status** line saying what is implemented, what differs and what is not implemented, checked against the code. What ships: hybrid dense + BM25 retrieval fused with RRF, cross-encoder reranking, grounded answers with validated citations, the evaluation harness and regression gate, Qdrant and Postgres under Docker Compose (no Redis, no queue, no Kubernetes manifests), and non-streaming JSON responses. The [README](./README.md) and [LEARN.md](./LEARN.md) describe the running system.
 
 **Four layers:**
 
@@ -47,20 +47,24 @@
 
 ## B. Learning Goals & Outcomes
 
+> **Status:** Implemented: hybrid dense + BM25 retrieval with RRF, cross-encoder reranking, structured answers through tool use, the automated metrics, versioned LLM-as-judge, threshold-based regression checks, tracing with cost and latency. Not implemented: query rewriting, multi-query, HyDE, judge calibration, constrained decoding.
+
 By completion, you will have hands-on experience with:
 
-- Building dense retrieval with cross-encoder reranking (hybrid dense + BM25 fusion is a next step)
+- Building hybrid dense + BM25 retrieval with RRF fusion and cross-encoder reranking
 - Query rewriting, multi-query expansion, and HyDE
 - Enforcing structured outputs via Pydantic + constrained decoding
 - Automated evaluation: faithfulness, answer relevance, context precision/recall
 - LLM-as-judge pipelines with calibration
 - Prompt regression testing (CI/CD for prompts)
 - Full LLM observability: tracing, cost, latency, failure analysis
-- Deploying a production-style FastAPI + React stack
+- Deploying a FastAPI + React stack with Docker Compose
 
 ---
 
 ## C. High-Level Architecture
+
+> **Status:** Partly as drawn. The BM25 index exists, in memory per process and per access scope (`backend/app/rag/sparse.py`). Not implemented: SSE (responses are JSON), a document store in Postgres + S3 (chunks live only in the Qdrant payload), a results database (eval runs are JSON files under `DATA_DIR/eval_runs`). Postgres holds API keys, usage and the audit log.
 
 ```
 ┌────────────────────────────────────────────────────────────────┐
@@ -91,14 +95,16 @@ By completion, you will have hands-on experience with:
 
 ## D. Tech Stack
 
+> **Status:** Differs from the table. Embeddings: `intfloat/multilingual-e5-small`; reranker: `cross-encoder/mmarco-mMiniLMv2-L12-H384-v1`; BM25 is a first-stage retriever fused with RRF, not only a fallback. Generation defaults to `claude-sonnet-5`, the judge to `claude-opus-5-5`. `instructor` and RAGAS are not dependencies (the judge rubric is inspired by RAGAS). No S3/MinIO document storage (MinIO appears only as Langfuse's storage).
+
 | Layer | Choice | Why |
 |---|---|---|
 | Language | Python 3.11 + TypeScript | Standard for ML + web |
 | Backend | FastAPI | Async, typed, OpenAPI |
 | Frontend | React + Vite + Tailwind | Fast iteration |
 | Vector DB | Qdrant | Dense search, payload filters |
-| Sparse | BM25 via `rank_bm25` | Reranker fallback when the cross-encoder is unavailable |
-| Embeddings | `text-embedding-3-large` or `bge-large-en` | SOTA quality |
+| Sparse | BM25 via `rank_bm25` | First-stage lexical retriever, fused with dense by RRF; also the reranker fallback |
+| Embeddings | `text-embedding-3-large` or `bge-large-en` (planned; see Status) | Retrieval quality |
 | Reranker | `bge-reranker-large` / Cohere Rerank | Cross-encoder accuracy |
 | LLM | Claude Opus/Sonnet 4.6, GPT-4o (comparison) | Multi-model A/B |
 | Structured out | Pydantic + `instructor` / tool-use | Schema safety |
@@ -111,6 +117,8 @@ By completion, you will have hands-on experience with:
 
 ## E. Repository Structure
 
+> **Status:** Roughly as shown; `rag/` also holds `sparse.py`, `fusion.py`, `grounding.py`, `chunking.py`, `parsers/` and `strategies/`, and `eval/` holds `retrieval.py`, `rubric.py` and `dataset.py`.
+
 ```
 evalrag/
 ├── backend/
@@ -119,7 +127,7 @@ evalrag/
 │   │   ├── rag/              # retrieval + generation
 │   │   │   ├── ingest.py
 │   │   │   ├── embed.py
-│   │   │   ├── retrieve.py   # dense vector search
+│   │   │   ├── retrieve.py   # hybrid search (dense + BM25, RRF)
 │   │   │   ├── rerank.py
 │   │   │   └── generate.py
 │   │   ├── eval/             # evaluation engine
@@ -134,7 +142,7 @@ evalrag/
 │   └── pyproject.toml
 ├── frontend/
 │   ├── src/
-│   │   ├── pages/            # Ask, Compare, Eval, Regressions
+│   │   ├── pages/            # Ask, Upload, Compare, Evaluation, Advisor
 │   │   ├── components/
 │   │   └── api/
 │   └── package.json
@@ -152,6 +160,8 @@ evalrag/
 ---
 
 ## F. Environment Setup
+
+> **Status:** Implemented; see the README quickstart.
 
 ```bash
 # Clone + install
@@ -171,6 +181,8 @@ docker compose --env-file .env -f infra/docker-compose.yml up -d   # qdrant, pos
 ---
 
 ## G. Data Layer
+
+> **Status:** Not implemented as described. There is no document store and no eval store in Postgres; `Chunk` has no `embedding` field (`backend/app/schemas/__init__.py`).
 
 Three stores with clear roles:
 
@@ -195,6 +207,8 @@ class Chunk(BaseModel):
 
 ## H. Document Ingestion Pipeline
 
+> **Status:** Implemented with the project's own parsers (`backend/app/rag/parsers/`, `pypdf` for PDF), structure-aware chunking of at most 300 words by default (capped under the 512-token model window), and content-hash idempotency with stale-revision cleanup. `unstructured` and `trafilatura` are not used.
+
 ```
 PDF/TXT/MD/RST/CSV/JSON → Loader → Clean → Chunk → Embed → Index (dense)
 ```
@@ -209,19 +223,23 @@ PDF/TXT/MD/RST/CSV/JSON → Loader → Clean → Chunk → Embed → Index (dens
 
 ## I. Embeddings & Vector Store
 
+> **Status:** Partly. The embedding model is stamped on the Qdrant collection, not on each vector. Payload indexes exist for `tenant` and `acl_groups` only. The BM25 index is separate and in memory.
+
 - Batch embed (64-128) with retries + exponential backoff.
 - Store embedding model name + version with each vector (for reindexing).
 - Qdrant collection with HNSW + `payload` for filters (`doc_id`, `tags`, `date`).
-- No separate sparse index: BM25 is computed over the retrieved candidates only, as the reranker fallback.
+- Sparse index: BM25 over every chunk's payload text, built in memory per access scope (`backend/app/rag/sparse.py`).
 
 ---
 
 ## J. Advanced RAG Pipeline
 
+> **Status:** Implemented: query normalisation (step 1, without rewrite/expansion/HyDE), hybrid retrieval with RRF (2), reranking (3), prompt assembly with citation handles (5), structured generation (6), citation validation (7), traces and eval hooks (8). Not implemented: context compression (4) and output guardrails (part of 7).
+
 **Stages:**
 
 1. Query processing (rewrite, expand, HyDE)
-2. Dense retrieval (top-50 from Qdrant; hybrid dense + BM25 with RRF fusion is not implemented)
+2. Hybrid retrieval (dense top-50 from Qdrant + BM25 top-50, fused with RRF)
 3. Reranking (cross-encoder)
 4. Context compression (extract relevant spans)
 5. Prompt assembly
@@ -233,6 +251,8 @@ PDF/TXT/MD/RST/CSV/JSON → Loader → Clean → Chunk → Embed → Index (dens
 
 ## K. Query Processing
 
+> **Status:** Not implemented. Queries are only normalised (`backend/app/rag/query.py`).
+
 - **Rewrite**: LLM rewrites ambiguous queries with conversation history.
 - **Multi-query**: generate N paraphrases; retrieve for each; union.
 - **HyDE**: LLM drafts a hypothetical answer; embed that; retrieve similar real chunks. Helps when queries are short/keyword-like.
@@ -243,12 +263,16 @@ Fallback order: rewrite → if low retrieval confidence → multi-query → HyDE
 
 ## L. Reranking & Context Compression
 
+> **Status:** Reranking implemented (fused top candidates → cross-encoder → `RERANK_TOP_K`). Compression not implemented.
+
 - **Rerank**: top-50 candidates → cross-encoder → top-k (5-8).
 - **Compression**: per-chunk extractive selection (LLM or lightweight extractor) keeps only spans relevant to the query, reduces tokens, raises faithfulness.
 
 ---
 
 ## M. LLM Inference Layer
+
+> **Status:** Mostly implemented: provider dispatcher (Anthropic, OpenAI, Ollama), timeouts, retries and a circuit breaker, JSON responses without streaming, a generation span per call with tokens and an estimated cost from `config/model_pricing.toml`. Prompt caching is not implemented. Prompt and output text reach traces only when `TELEMETRY_INCLUDE_CONTENT=true`.
 
 Unified gateway with provider adapters (Claude, OpenAI, local).
 
@@ -260,6 +284,8 @@ Unified gateway with provider adapters (Claude, OpenAI, local).
 ---
 
 ## N. Structured Output Enforcement
+
+> **Status:** Implemented differently. Answers are submitted through a `submit_answer` tool (answer, claims, status, unsupported notes) and validated by `backend/app/rag/grounding.py`; an answer with no valid citation becomes a refusal. There is no retry for answers (unparseable output falls back to JSON-in-text, then plain text); the judge gets one repair retry.
 
 ```python
 from pydantic import BaseModel, Field
@@ -284,6 +310,8 @@ class Answer(BaseModel):
 
 ## O. Evaluation Engine
 
+> **Status:** Implemented, plus answer correctness, deterministic retrieval metrics at K and refusal metrics. Each run records prompt version, model, judge, rubric version and a retrieval config hash; the commit SHA is not recorded.
+
 Four core metrics (RAGAS-aligned):
 
 | Metric | What it measures |
@@ -299,6 +327,8 @@ Run per-example and aggregate. Store every run with: commit SHA, prompt version,
 
 ## P. LLM-as-Judge
 
+> **Status:** Partly. A stronger default judge (`claude-opus-5-5`) and a versioned rubric with anchors are implemented. Not implemented: few-shot examples, calibration against human labels (ratings are stored but not compared), order randomisation and pairwise comparison.
+
 - Use a **stronger** model than the generator as judge (e.g., Opus judges Sonnet output).
 - Rubrics with explicit criteria + few-shot examples.
 - Calibrate: periodically sample judged items for human review; track judge/human agreement (Cohen's κ).
@@ -308,6 +338,8 @@ Run per-example and aggregate. Store every run with: commit SHA, prompt version,
 
 ## Q. Golden Dataset & Benchmarks
 
+> **Status:** Partly. 175 questions across five JSONL files (the largest has 54), two of them stratified into eight categories with difficulty labels. All were written by the project author. See `data/golden/README.md`.
+
 - 100-500 curated `(question, ideal_answer, expected_sources)` triples.
 - Stratified by difficulty, topic, and failure mode (multi-hop, numeric, refusal).
 - Versioned in git (JSONL). Changes require PR review.
@@ -316,6 +348,8 @@ Run per-example and aggregate. Store every run with: commit SHA, prompt version,
 ---
 
 ## R. Regression Testing (CI/CD for Prompts)
+
+> **Status:** Partly. A threshold gate compares a run with a pinned or previous baseline of the same configuration (`eval/regression_thresholds.toml`, `run_eval.py --fail-on-regression`, `scripts/regression_report.py`). Not implemented: a CI job running evals, per-example diffs, PR comments, `--baseline main` (only `--baseline RUN_FILE`), `post_pr_comment.py`.
 
 Every prompt/model/retriever change triggers:
 
@@ -342,6 +376,8 @@ jobs:
 
 ## S. Backend API
 
+> **Status:** Implemented, with more routes than listed (graph, advise, privacy, admin, metrics). Per-run regression reports are served at `GET /eval/runs/{id}/regression`.
+
 Core endpoints:
 
 | Method | Path | Purpose |
@@ -352,13 +388,15 @@ Core endpoints:
 | GET  | `/traces/{id}` | Fetch trace |
 | POST | `/eval/run` | Run eval on dataset |
 | GET  | `/eval/runs` | List runs + scores |
-| GET  | `/eval/regressions` | History + diffs |
+| GET  | `/eval/runs/{id}/regression` | Regression report of one run against its baseline |
 
 All responses typed via Pydantic; OpenAPI auto-generated.
 
 ---
 
 ## T. Frontend Dashboard
+
+> **Status:** Partly. Pages: Ask, Upload, Compare (strategies side by side), Evaluation (Overview and Runs tabs, including run history and per-run regression reports) and Advisor. There is no Traces page (traces are served by `GET /traces/{id}`).
 
 Pages:
 
@@ -374,6 +412,8 @@ Stack: React + Vite + Tailwind + TanStack Query + Recharts.
 
 ## U. Observability & Tracing
 
+> **Status:** Partly. Langfuse (self-hosted, OTLP) and Prometheus are implemented; per-chunk retrieval and rerank scores are returned in the API's retrieval diagnostics, while spans record counts only. Not implemented: query rewrites (none exist), eval scores on traces, alerts. The Grafana dashboard lacks panels for cost and stage latency.
+
 - **Langfuse** (or OTel + Grafana) for every request.
 - Track: query, rewrites, retrieved chunks (with scores), rerank scores, final prompt, model, tokens, cost, latency, eval scores.
 - Dashboards: p50/p95 latency, cost/request, faithfulness over time, failure rate.
@@ -382,6 +422,8 @@ Stack: React + Vite + Tailwind + TanStack Query + Recharts.
 ---
 
 ## V. Security & Guardrails
+
+> **Status:** Partly. Implemented: PII masking at ingest and redaction in logs and traces, prompts that treat sources as untrusted, per-key rate limits, OIDC (JWT) authentication. Not implemented: stripping instructions from retrieved text, output toxicity/jailbreak filters. OIDC users are not rate-limited.
 
 - **PII redaction** on ingest (optional) and on logs.
 - **Prompt injection defenses**: treat retrieved content as untrusted; use role separation; strip instructions from retrieved text; refuse if tool calls requested from context.
@@ -393,6 +435,8 @@ Stack: React + Vite + Tailwind + TanStack Query + Recharts.
 
 ## W. Testing Strategy
 
+> **Status:** Partly. Unit tests (including RRF) and offline end-to-end integration tests exist. Not implemented: eval thresholds as CI gates, load tests, an OpenAPI-generated client (the frontend client is hand-written and typed).
+
 - **Unit**: chunking, RRF fusion, schema validation.
 - **Integration**: ingest → retrieve → generate on a tiny fixture corpus.
 - **Eval tests**: golden set thresholds as CI gates.
@@ -403,6 +447,8 @@ Stack: React + Vite + Tailwind + TanStack Query + Recharts.
 
 ## X. Deployment
 
+> **Status:** Partly. Docker Compose and a runtime image target exist. Not implemented: Alembic migrations, blue/green rollouts.
+
 - **Local**: `docker compose --env-file .env -f infra/docker-compose.yml up` (API, frontend, qdrant, postgres; langfuse with `--profile tracing`). Ports bind to 127.0.0.1.
 - **Staging/Prod**: build `backend/Dockerfile`'s default `runtime` target and run it on any container host; no Kubernetes manifests ship with the repo.
 - **Config**: 12-factor; env vars only.
@@ -412,6 +458,8 @@ Stack: React + Vite + Tailwind + TanStack Query + Recharts.
 ---
 
 ## Y. Roadmap & Milestones
+
+> **Status:** Historical plan; not a record of what was delivered.
 
 | Week | Milestone |
 |---|---|
@@ -449,4 +497,4 @@ Stack: React + Vite + Tailwind + TanStack Query + Recharts.
 
 ---
 
-**End of blueprint.** Start with section F, then build iteratively through the Y roadmap. Every section above maps to a concrete module in `E. Repository Structure`.
+**End of blueprint.** Sections whose Status line says "not implemented" have no corresponding module. The README describes the current state; `docs/ARCHITECTURE_AUDIT.md` records the state before the upgrade.
