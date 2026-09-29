@@ -93,6 +93,21 @@ class Section:
         return " > ".join(self.heading_path)
 
 
+@dataclass(frozen=True)
+class PageSpan:
+    """Where one page (or slide) sits in a document's text.
+
+    Attributes:
+        number: 1-based page number.
+        start: Offset of the page's first character.
+        end: Offset one past its last character.
+    """
+
+    number: int
+    start: int
+    end: int
+
+
 @dataclass
 class ParsedDocument:
     """The result of parsing one file.
@@ -102,12 +117,33 @@ class ParsedDocument:
         metadata: File-level metadata.
         sections: Heading spans over ``text``, in document order.
         warnings: Non-fatal problems worth surfacing (e.g. OCR unavailable).
+        pages: Page spans over ``text``, in order, for formats that have
+            pages (PDF pages, presentation slides). Empty otherwise. Pages
+            with no text have no span.
     """
 
     text: str
     metadata: DocumentMetadata
     sections: list[Section] = field(default_factory=list)
     warnings: list[str] = field(default_factory=list)
+    pages: list[PageSpan] = field(default_factory=list)
+
+
+def join_pages(pages: list[str], separator: str = "\n\n") -> tuple[str, list[PageSpan]]:
+    """Join page texts with ``separator``, recording where each page lands.
+
+    The text is exactly ``separator.join(pages)``. Pages that are blank get
+    no span, so every span holds some text.
+    """
+    spans: list[PageSpan] = []
+    offset = 0
+    for number, page in enumerate(pages, start=1):
+        if number > 1:
+            offset += len(separator)
+        if page.strip():
+            spans.append(PageSpan(number, offset, offset + len(page)))
+        offset += len(page)
+    return separator.join(pages), spans
 
 
 def iso_date(value: object) -> str | None:
