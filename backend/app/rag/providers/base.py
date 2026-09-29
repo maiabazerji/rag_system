@@ -2,6 +2,9 @@ from __future__ import annotations
 
 import json
 
+from app.tracing import instrument
+from app.tracing.spans import span
+
 
 class ProviderError(RuntimeError):
     pass
@@ -46,18 +49,42 @@ async def generate_with_usage(
     if provider == "local":
         from app.rag.providers.local import generate_with_usage as fn
     elif provider == "anthropic":
+        # Traced and metered call by call inside the Anthropic provider.
         from app.rag.providers.anthropic_provider import generate_with_usage as fn
+
+        return await fn(
+            model=model,
+            prompt=prompt,
+            max_tokens=max_tokens,
+            system=system,
+            temperature=temperature,
+        )
     elif provider == "openai":
         from app.rag.providers.openai_provider import generate_with_usage as fn
     else:
         raise ProviderError(f"unknown generator provider: {provider!r}")
-    return await fn(
-        model=model,
-        prompt=prompt,
-        max_tokens=max_tokens,
-        system=system,
-        temperature=temperature,
-    )
+    # The other providers get the same generation span and token/cost metrics
+    # as an Anthropic call, so every request's usage is accounted the same way.
+    with span("generate", as_type="generation") as s:
+        out = await fn(
+            model=model,
+            prompt=prompt,
+            max_tokens=max_tokens,
+            system=system,
+            temperature=temperature,
+        )
+        instrument.record_usage(
+            s,
+            model=model,
+            input_tokens=int(out.get("input_tokens", 0) or 0),
+            output_tokens=int(out.get("output_tokens", 0) or 0),
+            provider=provider,
+        )
+        if s is not None:
+            s.input = {"system": system, "message": prompt}
+            s.output = out.get("text")
+            s.metadata.update({"operation": "generate_with_usage", "max_tokens": max_tokens})
+    return out
 
 
 async def generate_structured(
