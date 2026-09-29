@@ -92,10 +92,30 @@ class PIIRejected(ValueError):
 
 @dataclass(frozen=True)
 class Redaction:
-    """The outcome of :func:`redact`: the (possibly masked) text and per-type counts."""
+    """The outcome of :func:`redact`: the (possibly masked) text and per-type counts.
+
+    ``masked`` lists the spans that were replaced, as offsets into the
+    *original* text, so a caller can move its own offsets (page boundaries,
+    say) onto the masked text with :meth:`moved`.
+    """
 
     text: str
     counts: dict[str, int] = field(default_factory=dict)
+    masked: tuple[PIISpan, ...] = ()
+
+    def moved(self, offset: int) -> int:
+        """Map an offset in the original text to the same place in ``text``.
+
+        An offset inside a masked span maps to the start of its placeholder.
+        """
+        shift = 0
+        for span in self.masked:
+            if span.start >= offset:
+                break
+            if span.end > offset:
+                return span.start + shift
+            shift += len(placeholder(span.type)) - len(span)
+        return offset + shift
 
 
 # ---------------------------------------------------------------------------
@@ -424,7 +444,7 @@ def redact(
         parts.append(placeholder(s.type))
         cursor = s.end
     parts.append(text[cursor:])
-    return Redaction("".join(parts), counts)
+    return Redaction("".join(parts), counts, tuple(spans))
 
 
 def mask(text: str) -> str:

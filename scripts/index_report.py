@@ -56,7 +56,8 @@ async def main() -> int:
 
     total = sum(counts.values())
     print(f"{len(counts)} documents, {total} chunks "
-          f"(chunk size {settings.chunk_size_tokens}, overlap {settings.chunk_overlap_tokens})\n")
+          f"(chunk size {settings.chunk_word_budget} words, overlap "
+          f"{settings.chunk_overlap_tokens}, strategy {settings.chunk_strategy})\n")
 
     rows = (
         [(d, counts.get(d, 0)) for d in args.only]

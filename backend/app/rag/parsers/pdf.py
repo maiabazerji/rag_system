@@ -11,10 +11,12 @@ from app.rag.parsers import ocr
 from app.rag.parsers.base import (
     DocumentMetadata,
     EncryptedDocumentError,
+    PageSpan,
     ParsedDocument,
     ParseError,
     clean_str,
     iso_date,
+    join_pages,
 )
 
 logger = get_structured_logger(__name__)
@@ -47,8 +49,26 @@ def parse(filename: str, content: bytes, depth: int = 0) -> ParsedDocument:
 
     metadata = _metadata(reader, len(pages))
     warnings = _ocr_sparse_pages(filename, content, pages, metadata)
-    text = _BLANK_RUNS.sub("\n\n", "\n\n".join(p.strip("\n") for p in pages))
-    return ParsedDocument(text=text, metadata=metadata, warnings=warnings)
+    text, spans = _collapse_blank_runs(*join_pages([p.strip("\n") for p in pages]))
+    return ParsedDocument(text=text, metadata=metadata, warnings=warnings, pages=spans)
+
+
+def _collapse_blank_runs(text: str, spans: list[PageSpan]) -> tuple[str, list[PageSpan]]:
+    """Squeeze runs of blank lines to one, moving the page spans to match."""
+    runs = list(_BLANK_RUNS.finditer(text))
+
+    def moved(offset: int) -> int:
+        shift = 0
+        for run in runs:
+            if run.start() >= offset:
+                break
+            # Each run keeps its first two newlines and drops the rest.
+            shift += max(0, min(offset, run.end()) - run.start() - 2)
+        return offset - shift
+
+    return _BLANK_RUNS.sub("\n\n", text), [
+        PageSpan(s.number, moved(s.start), moved(s.end)) for s in spans
+    ]
 
 
 def _page_text(page: Any) -> str:

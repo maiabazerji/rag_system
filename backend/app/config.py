@@ -45,6 +45,11 @@ _REPO_ROOT = Path(__file__).resolve().parents[2]
 
 # What ingestion does with personal data it detects (see app.privacy.pii)
 VALID_PII_MODES = {"off", "mask", "reject"}
+VALID_CHUNK_STRATEGIES = {"structured", "fixed"}
+# Conservative subword tokens per whitespace word for the multilingual
+# sentencepiece vocabularies the default embedder and reranker use (French
+# and English prose measure about 1.3-1.5; numbers and codes run higher).
+TOKENS_PER_WORD = 1.5
 
 # Telemetry modes: where traces may be sent. See docs/monitoring.md.
 VALID_TELEMETRY_MODES = {"off", "self_hosted", "cloud"}
@@ -258,11 +263,34 @@ class Settings(BaseSettings):
     )
 
     # RAG Hyperparameters
+    # Chunk sizes are counted in words. The defaults keep a chunk inside the
+    # 512-token window of the default embedder (multilingual-e5-small) and
+    # reranker (mMiniLM), which silently truncate anything longer; see
+    # CHUNK_MAX_MODEL_TOKENS for the guard.
     chunk_size_tokens: int = Field(
-        default=600, ge=100, le=2000, description="Document chunk size in words."
+        default=300, ge=100, le=2000, description="Document chunk size in words."
     )
     chunk_overlap_tokens: int = Field(
-        default=80, ge=0, le=500, description="Overlap between consecutive chunks."
+        default=50, ge=0, le=500, description="Overlap between consecutive chunks."
+    )
+    chunk_strategy: str = Field(
+        default="structured",
+        description=(
+            "How documents are cut into chunks: 'structured' (headings, then "
+            "whole paragraphs, then sentences; tables split only between rows) "
+            "or 'fixed' (the legacy overlapping word windows, for comparison)."
+        ),
+    )
+    chunk_max_model_tokens: int = Field(
+        default=512,
+        ge=0,
+        le=32768,
+        description=(
+            "Input window, in model tokens, of the embedder and reranker. The "
+            "configured chunk size is capped at this divided by "
+            f"{TOKENS_PER_WORD} tokens per word, so chunks are not truncated "
+            "when embedded or reranked. 0 disables the cap."
+        ),
     )
     retrieval_top_k: int = Field(
         default=50, ge=1, le=100, description="Candidates to retrieve before reranking."
@@ -600,6 +628,15 @@ class Settings(BaseSettings):
             )
         return v.lower()
 
+    @field_validator("chunk_strategy")
+    @classmethod
+    def _v_chunk_strategy(cls, v: str) -> str:
+        if v.lower() not in VALID_CHUNK_STRATEGIES:
+            raise ValueError(
+                f"CHUNK_STRATEGY must be one of {sorted(VALID_CHUNK_STRATEGIES)}, got '{v}'"
+            )
+        return v.lower()
+
     @field_validator("pii_mode_ingest")
     @classmethod
     def _v_pii_mode(cls, v: str) -> str:
@@ -634,6 +671,27 @@ class Settings(BaseSettings):
                 f"CHUNK_SIZE_TOKENS ({size}); otherwise chunking never advances."
             )
         return v
+
+    @field_validator("chunk_max_model_tokens")
+    @classmethod
+    def _v_max_model_tokens(cls, v: int, info) -> int:
+        if v == 0:
+            return v
+        budget = int(v / TOKENS_PER_WORD)
+        overlap = info.data.get("chunk_overlap_tokens")
+        if overlap is not None and overlap >= budget:
+            raise ValueError(
+                f"CHUNK_MAX_MODEL_TOKENS ({v}) caps chunks at {budget} words, which "
+                f"must be more than CHUNK_OVERLAP_TOKENS ({overlap})."
+            )
+        return v
+
+    @property
+    def chunk_word_budget(self) -> int:
+        """Words per chunk: CHUNK_SIZE_TOKENS, capped to fit CHUNK_MAX_MODEL_TOKENS."""
+        if not self.chunk_max_model_tokens:
+            return self.chunk_size_tokens
+        return min(self.chunk_size_tokens, int(self.chunk_max_model_tokens / TOKENS_PER_WORD))
 
     def validate_startup(self) -> None:
         """Check cross-field configuration consistency when the server boots.
