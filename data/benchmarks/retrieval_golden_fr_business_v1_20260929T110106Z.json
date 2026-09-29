@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-09-29T10:43:31+00:00",
+  "generated_at": "2026-09-29T11:01:06+00:00",
   "config": {
     "dataset": "golden_fr_business_v1",
     "examples_total": 37,
@@ -28,37 +28,37 @@
       ],
       "degraded_queries": 0,
       "latency_ms": {
-        "mean": 1.43,
-        "p95": 1.47
+        "mean": 1.95,
+        "p95": 2.51
       },
       "at_k": {
         "1": {
           "recall": 0.4141,
           "precision": 0.5938,
           "hit_rate": 0.5938,
-          "mrr": 0.5938,
+          "mrr": 0.7199,
           "ndcg": 0.5938
         },
         "3": {
-          "recall": 0.8125,
-          "precision": 0.4688,
+          "recall": 0.8203,
+          "precision": 0.4167,
           "hit_rate": 0.9062,
-          "mrr": 0.7083,
-          "ndcg": 0.7121
+          "mrr": 0.7199,
+          "ndcg": 0.7194
         },
         "5": {
           "recall": 0.8672,
-          "precision": 0.3401,
+          "precision": 0.2687,
           "hit_rate": 0.9062,
-          "mrr": 0.7083,
+          "mrr": 0.7199,
           "ndcg": 0.7389
         },
         "10": {
-          "recall": 0.9401,
-          "precision": 0.2199,
+          "recall": 0.9583,
+          "precision": 0.1531,
           "hit_rate": 0.9688,
-          "mrr": 0.7174,
-          "ndcg": 0.7661
+          "mrr": 0.7199,
+          "ndcg": 0.7749
         }
       }
     }

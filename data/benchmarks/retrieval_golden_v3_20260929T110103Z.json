@@ -1,9 +1,9 @@
 {
-  "generated_at": "2026-09-29T10:43:27+00:00",
+  "generated_at": "2026-09-29T11:01:03+00:00",
   "config": {
-    "dataset": "golden_fr_v1",
-    "examples_total": 16,
-    "examples_scored": 16,
+    "dataset": "golden_v3",
+    "examples_total": 54,
+    "examples_scored": 47,
     "documents": 41,
     "chunks": 467,
     "chunk_size_tokens": 300,
@@ -28,37 +28,37 @@
       ],
       "degraded_queries": 0,
       "latency_ms": {
-        "mean": 5.89,
-        "p95": 3.16
+        "mean": 3.94,
+        "p95": 3.27
       },
       "at_k": {
         "1": {
-          "recall": 0.3281,
-          "precision": 0.625,
-          "hit_rate": 0.625,
-          "mrr": 0.625,
-          "ndcg": 0.625
+          "recall": 0.6472,
+          "precision": 0.8085,
+          "hit_rate": 0.8085,
+          "mrr": 0.8883,
+          "ndcg": 0.8085
         },
         "3": {
-          "recall": 0.6615,
-          "precision": 0.5208,
-          "hit_rate": 0.875,
-          "mrr": 0.75,
-          "ndcg": 0.6566
+          "recall": 0.8954,
+          "precision": 0.4184,
+          "hit_rate": 0.9787,
+          "mrr": 0.8883,
+          "ndcg": 0.8605
         },
         "5": {
-          "recall": 0.7604,
-          "precision": 0.4188,
-          "hit_rate": 0.875,
-          "mrr": 0.75,
-          "ndcg": 0.6996
+          "recall": 0.945,
+          "precision": 0.2681,
+          "hit_rate": 1.0,
+          "mrr": 0.8883,
+          "ndcg": 0.8812
         },
         "10": {
-          "recall": 0.8438,
-          "precision": 0.311,
-          "hit_rate": 0.875,
-          "mrr": 0.75,
-          "ndcg": 0.7453
+          "recall": 0.9787,
+          "precision": 0.1426,
+          "hit_rate": 1.0,
+          "mrr": 0.8883,
+          "ndcg": 0.8952
         }
       }
     },
