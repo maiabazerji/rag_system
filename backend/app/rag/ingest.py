@@ -22,7 +22,7 @@ from app.config import settings
 from app.logging_config import get_structured_logger
 from app.privacy.pii import redact
 from app.rag import graph_store, parsers
-from app.rag.chunking import chunk_structured
+from app.rag.chunking import TextChunk, chunk_document
 from app.rag.embed import embed_texts_async
 from app.rag.store import delete_stale_revisions, upsert
 from app.schemas import Chunk
@@ -87,6 +87,36 @@ def source_key(owner: str, path: str) -> str:
     return f"{owner}:{Path(path).as_posix()}"
 
 
+def _to_chunk(doc_id: str, index: int, chunk: TextChunk, base: dict) -> Chunk:
+    """Build the stored chunk, with the fields a citation needs at the top level.
+
+    ``char_start``/``char_end`` index the document's normalised (PII-masked)
+    text; ``page``/``page_end`` are 1-based, or None for formats without pages.
+    """
+    chunk_id = f"{doc_id}:{index}"
+    return Chunk(
+        id=chunk_id,
+        doc_id=doc_id,
+        text=chunk.text,
+        tokens=chunk.token_count,
+        section=chunk.section or None,
+        metadata={
+            **base,
+            "document_id": doc_id,
+            "chunk_id": chunk_id,
+            "chunk_index": index,
+            "section": chunk.section,
+            "heading_path": chunk.heading_path,
+            "headings": list(chunk.headings),
+            "page": chunk.page_start,
+            "page_end": chunk.page_end,
+            "char_start": chunk.start,
+            "char_end": chunk.end,
+            "token_count": chunk.token_count,
+        },
+    )
+
+
 async def enqueue_document(
     filename: str,
     content: bytes,
@@ -130,25 +160,25 @@ async def enqueue_document(
     ingested_at = datetime.now(UTC).isoformat(timespec="seconds")
     doc_metadata = _redact_metadata(parsed.metadata.as_dict())
 
+    # Page spans index the parsed text; masking shifts them, so move them too.
+    pages = [parsers.PageSpan(p.number, pii.moved(p.start), pii.moved(p.end)) for p in parsed.pages]
+    title = str(doc_metadata.get("title") or Path(filename).stem)
+    base_metadata = {
+        "filename": filename,
+        "source": filename,
+        "title": title,
+        "source_key": key,
+        "owner": owner,
+        "ingested_at": ingested_at,
+        "pii_counts": pii.counts,
+        "doc_metadata": doc_metadata,
+        "tenant": tenant,
+        "acl_groups": groups,
+    }
+
     chunks = [
-        Chunk(
-            id=f"{doc_id}:{i}",
-            doc_id=doc_id,
-            text=c.text,
-            tokens=len(c.text.split()),
-            metadata={
-                "filename": filename,
-                "source_key": key,
-                "owner": owner,
-                "ingested_at": ingested_at,
-                "pii_counts": pii.counts,
-                "heading_path": c.heading_path,
-                "doc_metadata": doc_metadata,
-                "tenant": tenant,
-                "acl_groups": groups,
-            },
-        )
-        for i, c in enumerate(chunk_structured(text))
+        _to_chunk(doc_id, i, c, base_metadata)
+        for i, c in enumerate(chunk_document(text, pages=pages))
     ]
 
     if not chunks:
