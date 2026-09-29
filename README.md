@@ -134,12 +134,12 @@ Documented in [data/golden/README.md](data/golden/README.md). The questions and 
 | `golden_v2` | 34 | English | `data/docs` | Frozen. v1's questions with every covering document; 2 refusal cases |
 | `golden_fr_v1` | 16 | French | `data/docs` (English) | Frozen. Cross-lingual retrieval |
 | `golden_v3` | 54 | English | `data/docs` | Categorised, with verbatim evidence quotes |
-| `golden_fr_business_v1` | 37 | French | `data/demo_fr_business/docs` | Categorised, synthetic French business documents |
+| `golden_fr_business_v1` | 40 | French | `data/demo_fr_business/docs` | Categorised, synthetic French business documents |
 
 | Category | golden_v3 | golden_fr_business_v1 |
 |---|---:|---:|
-| single_hop / multi_hop / comparison / aggregation | 7 / 7 / 7 / 6 | 5 / 5 / 4 / 4 |
-| ambiguous / unanswerable / citation_sensitive / adversarial | 6 / 7 / 7 / 7 | 4 / 5 / 5 / 5 |
+| single_hop / multi_hop / comparison / aggregation | 7 / 7 / 7 / 6 | 5 / 5 / 5 / 5 |
+| ambiguous / unanswerable / citation_sensitive / adversarial | 6 / 7 / 7 / 7 | 5 / 5 / 5 / 5 |
 
 `python scripts/run_eval.py --dry-run --all-datasets` validates every file offline ([`eval/dataset.py`](backend/app/eval/dataset.py)): JSON, schema, duplicate ids and questions, and that every referenced document exists in the dataset's own corpus (`data/golden/corpora.toml`). The verbatim evidence quotes were checked by a script when the sets were written; no check in the repository re-runs that.
 
@@ -184,7 +184,7 @@ Details: [docs/monitoring.md](docs/monitoring.md).
 
 ## French business-document demo
 
-[data/demo_fr_business/](data/demo_fr_business/README.md) holds 13 **synthetic, fictional** French business documents: terms of sale, a supplier contract, quotes, a purchase order, a delivery note, invoices, a penalty notice, certificates and a CSV invoice register. The amounts are internally consistent, the identifiers are deliberately invalid, and the documents contain deliberate contract-versus-terms conflicts. `golden_fr_business_v1` (37 questions) evaluates multi-hop chains over them, such as quote → order → delivery → invoice → penalty. The corpus is ingested into its own collection; see that README.
+[data/demo_fr_business/](data/demo_fr_business/README.md) holds 13 **synthetic, fictional** French business documents: terms of sale, a supplier contract, quotes, a purchase order, a delivery note, invoices, a penalty notice, certificates and a CSV invoice register. The amounts are internally consistent, the identifiers are deliberately invalid, and the documents contain deliberate contract-versus-terms conflicts. `golden_fr_business_v1` (40 questions) evaluates multi-hop chains over them, such as quote → order → delivery → invoice → penalty. The corpus is ingested into its own collection; see that README.
 
 ---
 
