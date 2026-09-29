@@ -193,6 +193,9 @@ services:
       dockerfile: Dockerfile
       target: dev
       network: host
+      args:
+        # See backend/Dockerfile: override where download.pytorch.org is unreachable.
+        TORCH_INDEX_URL: ${TORCH_INDEX_URL:-https://download.pytorch.org/whl/cpu}
     env_file:
       # Optional so `compose config` and CI work without a .env; the backend
       # still starts and reports what is missing.
