@@ -104,7 +104,7 @@ export const fr: Dictionary = {
   "ask.subtitle":
     "Interrogez les documents indexés, en français ou en anglais. Les sources permettent de vérifier l'exactitude.",
   "ask.strategy": "Stratégie",
-  "ask.hint.classic": "recherche vectorielle → reclassement → réponse",
+  "ask.hint.classic": "dense + BM25 → RRF → reclassement → réponse citée",
   "ask.hint.graph": "parcours des entités du graphe de connaissances",
   "ask.hint.agentic": "le modèle enchaîne les outils de recherche et de lecture",
   "ask.strategyAria": "Stratégie {label} : {hint}",
@@ -162,8 +162,8 @@ export const fr: Dictionary = {
     "La construction du graphe nécessite la clé d'administration du backend (ADMIN_KEY). Saisissez-la dans le champ « Clé d'administration » ci-dessous, puis réessayez.{detail}",
   "compare.buildUnavailable":
     "Construction du graphe indisponible : aucune ADMIN_KEY n'est configurée sur le backend, ou un service sous-jacent est arrêté. Définissez ADMIN_KEY dans .env et redémarrez le backend.{detail}",
-  "compare.tagline.classic": "embedding → recherche vectorielle → reclassement → réponse",
-  "compare.tagline.graph": "extraction d'entités → parcours du graphe → réponse",
+  "compare.tagline.classic": "dense + BM25 → fusion RRF → reclassement → réponse citée",
+  "compare.tagline.graph": "entités → parcours du graphe + recherche hybride → reclassement → réponse citée",
   "compare.tagline.agentic": "le modèle enchaîne les outils de recherche et de lecture",
   "compare.sample1":
     "Comment l'extraction d'entités du Graph RAG réduit-elle les hallucinations par rapport à une recherche uniquement dense ?",
@@ -483,7 +483,7 @@ export const fr: Dictionary = {
   "dash.loading": "Chargement des évaluations…",
   "dash.loadFailed": "Échec du chargement des évaluations : {error}",
   "dash.empty": "Aucune évaluation pour l'instant",
-  "dash.emptyHelp": "Enregistrez une exécution par stratégie depuis le dossier backend, puis revenez ici :",
+  "dash.emptyHelp": "Enregistrez une exécution par stratégie depuis la racine du dépôt, puis revenez ici :",
   "dash.emptyDataset": "Aucune exécution pour ce jeu de données.",
   "dash.chartTitle": "{metric} en fonction de {axis}",
   "dash.chartAria": "Nuage de points de {metric} en fonction de {axis}, un point par configuration. Le tableau ci-dessous donne chaque valeur.",
