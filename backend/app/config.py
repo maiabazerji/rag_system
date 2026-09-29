@@ -348,6 +348,15 @@ class Settings(BaseSettings):
         ),
     )
 
+    # Cost estimation
+    model_pricing_path: str = Field(
+        default="",
+        description=(
+            "TOML file of per-model prices (USD per million input/output tokens). "
+            "Defaults to config/model_pricing.toml at the repository root."
+        ),
+    )
+
     # Evaluation
     data_dir: str = Field(
         default="",
