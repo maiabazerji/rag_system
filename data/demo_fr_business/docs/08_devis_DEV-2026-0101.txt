@@ -1,0 +1,26 @@
+DEVIS N° DEV-2026-0101
+======================
+
+Document entièrement fictif, généré pour la démonstration d'un système RAG.
+
+Émetteur : Atelier Fictif SAS - 12 rue de l'Exemple, 99100 Villefictive - SIRET 999 000 111 00014 (numéro fictif)
+Client   : Cabinet Démo & Associés SELARL - 27 boulevard Imaginaire, 99300 Testbourg - SIRET 999 000 444 00013 (numéro fictif)
+Date d'émission : 20 janvier 2026
+Validité : 30 jours (article 2 des CGV)
+Objet : équipement de la salle de réunion
+
+Lignes :
+  AF-FAU-210   Fauteuil ergonomique « Modèle Brio »          x4   PU HT     265,00 €   Montant HT   1 060,00 €
+  AF-LAM-015   Lampe de bureau LED                           x4   PU HT      54,90 €   Montant HT     219,60 €
+  AF-TAB-180   Table de réunion « Modèle Cèdre » 180 cm      x1   PU HT     890,00 €   Montant HT     890,00 €
+
+Total HT marchandises          : 2 169,60 €
+Forfait de livraison (art. 5 CGV, commande inférieure à 3 000 € HT) : 150,00 €
+Total HT                       : 2 319,60 €
+TVA 20 %                       : 463,92 €
+Total TTC                      : 2 783,52 €
+
+Pas d'acompte (montant inférieur à 5 000 € HT, article 4 des CGV).
+Conditions de paiement : 30 jours fin de mois (article 8 des CGV).
+
+Devis retourné signé avec la mention « Bon pour accord » par le client le 26/01/2026.
