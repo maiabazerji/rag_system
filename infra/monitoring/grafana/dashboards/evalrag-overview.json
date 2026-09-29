@@ -6,7 +6,7 @@
   ],
   "timezone": "browser",
   "schemaVersion": 39,
-  "version": 1,
+  "version": 2,
   "refresh": "30s",
   "time": {
     "from": "now-6h",
@@ -343,6 +343,384 @@
           },
           "expr": "process_resident_memory_bytes{job=\"evalrag-backend\"}",
           "legendFormat": "RSS"
+        }
+      ]
+    },
+    {
+      "id": 9,
+      "type": "row",
+      "title": "Cost, pipeline stages and context",
+      "collapsed": false,
+      "gridPos": {
+        "x": 0,
+        "y": 32,
+        "w": 24,
+        "h": 1
+      },
+      "panels": []
+    },
+    {
+      "id": 10,
+      "type": "timeseries",
+      "title": "Estimated cost / hour by model and strategy",
+      "description": "USD per hour at the 5m rate of evalrag_llm_cost_usd_total. List prices from config/model_pricing.toml; calls to unpriced models are not included.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "evalrag-prometheus"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 33,
+        "w": 12,
+        "h": 8
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "currencyUSD"
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "evalrag-prometheus"
+          },
+          "expr": "sum by (model, strategy) (rate(evalrag_llm_cost_usd_total[5m])) * 3600",
+          "legendFormat": "{{model}} {{strategy}}"
+        }
+      ]
+    },
+    {
+      "id": 11,
+      "type": "bargauge",
+      "title": "Estimated cost in time range by model and strategy",
+      "description": "Total estimated USD over the selected time range (increase, so backend restarts do not reset it).",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "evalrag-prometheus"
+      },
+      "gridPos": {
+        "x": 12,
+        "y": 33,
+        "w": 12,
+        "h": 8
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "currencyUSD",
+          "decimals": 4
+        },
+        "overrides": []
+      },
+      "options": {
+        "orientation": "horizontal",
+        "displayMode": "gradient",
+        "showUnfilled": true,
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "evalrag-prometheus"
+          },
+          "expr": "sort_desc(sum by (model, strategy) (increase(evalrag_llm_cost_usd_total[$__range])))",
+          "legendFormat": "{{model}} {{strategy}}",
+          "instant": true
+        }
+      ]
+    },
+    {
+      "id": 12,
+      "type": "timeseries",
+      "title": "Cost per request p50 / p95 by strategy",
+      "description": "Estimated USD of one strategy run (priced runs only), from the evalrag_request_cost_usd histogram, plus the mean.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "evalrag-prometheus"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 41,
+        "w": 12,
+        "h": 8
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "currencyUSD",
+          "decimals": 5
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "evalrag-prometheus"
+          },
+          "expr": "histogram_quantile(0.5, sum by (le, strategy) (rate(evalrag_request_cost_usd_bucket[15m])))",
+          "legendFormat": "p50 {{strategy}}"
+        },
+        {
+          "refId": "B",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "evalrag-prometheus"
+          },
+          "expr": "histogram_quantile(0.95, sum by (le, strategy) (rate(evalrag_request_cost_usd_bucket[15m])))",
+          "legendFormat": "p95 {{strategy}}"
+        },
+        {
+          "refId": "C",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "evalrag-prometheus"
+          },
+          "expr": "sum by (strategy) (rate(evalrag_request_cost_usd_sum[15m])) / sum by (strategy) (rate(evalrag_request_cost_usd_count[15m]))",
+          "legendFormat": "mean {{strategy}}"
+        }
+      ]
+    },
+    {
+      "id": 13,
+      "type": "timeseries",
+      "title": "Unpriced model calls / hour by model and strategy",
+      "description": "Calls to a model with no row in the price table: their cost is null and missing from the cost panels. Add the model to config/model_pricing.toml.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "evalrag-prometheus"
+      },
+      "gridPos": {
+        "x": 12,
+        "y": 41,
+        "w": 12,
+        "h": 8
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "evalrag-prometheus"
+          },
+          "expr": "sum by (model, strategy) (increase(evalrag_llm_unpriced_calls_total[1h]))",
+          "legendFormat": "{{model}} {{strategy}}"
+        }
+      ]
+    },
+    {
+      "id": 14,
+      "type": "timeseries",
+      "title": "Stage latency p50 by strategy and stage",
+      "description": "Exclusive wall time of each pipeline stage (retrieval, rerank, generation, citation_validation).",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "evalrag-prometheus"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 49,
+        "w": 12,
+        "h": 8
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s"
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "evalrag-prometheus"
+          },
+          "expr": "histogram_quantile(0.5, sum by (le, strategy, stage) (rate(evalrag_stage_duration_seconds_bucket[15m])))",
+          "legendFormat": "{{strategy}} {{stage}}"
+        }
+      ]
+    },
+    {
+      "id": 15,
+      "type": "timeseries",
+      "title": "Stage latency p95 by strategy and stage",
+      "description": "Exclusive wall time of each pipeline stage (retrieval, rerank, generation, citation_validation).",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "evalrag-prometheus"
+      },
+      "gridPos": {
+        "x": 12,
+        "y": 49,
+        "w": 12,
+        "h": 8
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s"
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "evalrag-prometheus"
+          },
+          "expr": "histogram_quantile(0.95, sum by (le, strategy, stage) (rate(evalrag_stage_duration_seconds_bucket[15m])))",
+          "legendFormat": "{{strategy}} {{stage}}"
+        }
+      ]
+    },
+    {
+      "id": 16,
+      "type": "timeseries",
+      "title": "Context chunks per answer p50 / p95 / mean by strategy",
+      "description": "Chunks in the context each answer was generated from, from the evalrag_context_chunks histogram.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "evalrag-prometheus"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 57,
+        "w": 12,
+        "h": 8
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "evalrag-prometheus"
+          },
+          "expr": "histogram_quantile(0.5, sum by (le, strategy) (rate(evalrag_context_chunks_bucket[15m])))",
+          "legendFormat": "p50 {{strategy}}"
+        },
+        {
+          "refId": "B",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "evalrag-prometheus"
+          },
+          "expr": "histogram_quantile(0.95, sum by (le, strategy) (rate(evalrag_context_chunks_bucket[15m])))",
+          "legendFormat": "p95 {{strategy}}"
+        },
+        {
+          "refId": "C",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "evalrag-prometheus"
+          },
+          "expr": "sum by (strategy) (rate(evalrag_context_chunks_sum[15m])) / sum by (strategy) (rate(evalrag_context_chunks_count[15m]))",
+          "legendFormat": "mean {{strategy}}"
+        }
+      ]
+    },
+    {
+      "id": 17,
+      "type": "bargauge",
+      "title": "Context chunks distribution in time range",
+      "description": "Answers per context-size bucket (upper bound, le) over the selected time range, all strategies.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "evalrag-prometheus"
+      },
+      "gridPos": {
+        "x": 12,
+        "y": 57,
+        "w": 12,
+        "h": 8
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "options": {
+        "orientation": "vertical",
+        "displayMode": "basic",
+        "showUnfilled": true,
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "evalrag-prometheus"
+          },
+          "expr": "sum by (le) (increase(evalrag_context_chunks_bucket[$__range]))",
+          "legendFormat": "{{le}}",
+          "instant": true,
+          "format": "heatmap"
         }
       ]
     }

@@ -130,20 +130,62 @@ class TestContent:
         )
 
 
-def test_grafana_dashboard_only_uses_exported_metrics():
-    """The provisioned dashboard must not drift from the metric names."""
-    dashboard = (
+def _dashboard() -> dict:
+    path = (
         Path(__file__).resolve().parents[2]
         / "infra/monitoring/grafana/dashboards/evalrag-overview.json"
     )
-    if not dashboard.exists():  # the backend image carries backend/ only
+    if not path.exists():  # the backend image carries backend/ only
         pytest.skip("infra/ not available")
-    panels = json.loads(dashboard.read_text())["panels"]
+    return json.loads(path.read_text())
+
+
+# The series names a metric family exposes, by prometheus_client family type.
+_SERIES_SUFFIXES = {"counter": ("_total",), "histogram": ("_bucket", "_sum", "_count")}
+
+
+def test_grafana_dashboard_only_uses_exported_metrics():
+    """The provisioned dashboard must not drift from the metric names."""
+    panels = _dashboard()["panels"]
     used = {
-        m for p in panels for t in p["targets"] for m in re.findall(r"\b(evalrag_\w+)", t["expr"])
+        m
+        for p in panels
+        for t in p.get("targets", [])
+        for m in re.findall(r"\b(evalrag_\w+)", t["expr"])
     }
-    families = list(monitoring.REGISTRY.collect())
-    exported = {f.name for f in families} | {s.name for f in families for s in f.samples}
-    for name in used:
-        base = re.sub(r"_(bucket|count|sum|total)$", "", name)
-        assert name in exported or base in exported, name
+    exported = set()
+    for family in monitoring.REGISTRY.collect():
+        suffixes = _SERIES_SUFFIXES.get(family.type, ("",))
+        exported |= {family.name + suffix for suffix in suffixes}
+    assert used, "no evalrag_ metric found in the dashboard"
+    assert not used - exported, sorted(used - exported)
+
+
+def test_grafana_dashboard_covers_cost_stage_and_context_metrics():
+    exprs = " ".join(t["expr"] for p in _dashboard()["panels"] for t in p.get("targets", []))
+    for name in (
+        "evalrag_llm_cost_usd_total",
+        "evalrag_llm_unpriced_calls_total",
+        "evalrag_request_cost_usd_bucket",
+        "evalrag_stage_duration_seconds_bucket",
+        "evalrag_context_chunks_bucket",
+    ):
+        assert name in exprs, name
+
+
+def test_grafana_dashboard_layout_is_consistent():
+    dashboard = _dashboard()
+    panels = dashboard["panels"]
+    ids = [p["id"] for p in panels]
+    assert len(ids) == len(set(ids)), "duplicate panel ids"
+    cells: set[tuple[int, int]] = set()
+    for p in panels:
+        g = p["gridPos"]
+        assert g["x"] + g["w"] <= 24, p["title"]
+        area = {(x, y) for x in range(g["x"], g["x"] + g["w"]) for y in range(g["y"], g["y"] + g["h"])}
+        assert not cells & area, f"panel {p['title']!r} overlaps another"
+        cells |= area
+        if p["type"] != "row":
+            assert p["datasource"]["uid"] == "evalrag-prometheus", p["title"]
+            for t in p["targets"]:
+                assert t["datasource"]["uid"] == "evalrag-prometheus", p["title"]

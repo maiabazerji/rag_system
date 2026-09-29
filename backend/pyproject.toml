@@ -58,6 +58,12 @@ build-backend = "setuptools.build_meta"
 where = ["."]
 include = ["app*"]
 
+# The price table copy (config/model_pricing.toml is the source of truth; see
+# app/pricing.py). Ships with `pip install .` so installs without the
+# repository checkout still have prices.
+[tool.setuptools.package-data]
+"app" = ["data/model_pricing.toml"]
+
 [tool.ruff]
 line-length = 100
 target-version = "py311"
