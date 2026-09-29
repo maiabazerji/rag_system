@@ -92,3 +92,16 @@ export function cleanAnswer(text: string): string {
     .replace(/\n{3,}/g, "\n\n")
     .trim();
 }
+
+/** An estimated USD amount: 4 decimals below $1, 2 above; "< $0.0001" for tiny non-zero values. */
+export function formatUsd(value: number, locale: string = DEFAULT_LOCALE): string {
+  const usd = (v: number, digits: number) =>
+    num(v, locale, {
+      style: "currency",
+      currency: "USD",
+      minimumFractionDigits: digits,
+      maximumFractionDigits: digits,
+    });
+  if (value > 0 && value < 0.0001) return `< ${usd(0.0001, 4)}`;
+  return usd(value, value < 1 ? 4 : 2);
+}
