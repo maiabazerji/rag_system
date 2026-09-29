@@ -6,11 +6,14 @@ from __future__ import annotations
 
 import uuid
 from datetime import UTC, datetime
-from pathlib import Path
 
+from app.config import settings
 from app.schemas import HumanRating, HumanRatingRequest
 
-RATINGS_DIR = Path(__file__).resolve().parents[3] / "data" / "human_ratings"
+# Under DATA_DIR like the eval runs. A path computed from this file's location
+# points outside the data volume once the package is installed (in the runtime
+# image it resolved to /data, which the unprivileged user cannot create).
+RATINGS_DIR = settings.data_path / "human_ratings"
 RATINGS_FILE = RATINGS_DIR / "ratings.jsonl"
 
 
