@@ -54,7 +54,9 @@ jobs:
         run: python -c "import app.main"
 
       - name: Tests
-        run: pytest -q --cov=app --cov-report=term-missing
+        # Coverage floor: the measured total (95.3% when set), rounded down to
+        # the nearest 5. Raise it as coverage grows; never lower it to pass.
+        run: pytest -q --cov=app --cov-report=term-missing --cov-fail-under=95
 
       - name: Dependency audit
         # Reports known vulnerabilities in the installed environment. Not a gate
