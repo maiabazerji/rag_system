@@ -349,7 +349,9 @@ Auth and the audit log require Postgres. With `REQUIRE_API_KEY=false` and no `AD
 | `JUDGE_MODEL` | `claude-opus-5-5` | Model that grades them |
 | `RETRIEVAL_TOP_K` | `50` | Candidates fetched before reranking |
 | `RERANK_TOP_K` | `8` | Chunks sent to the model, the main cost lever |
-| `CHUNK_SIZE_TOKENS` | `600` | Words per chunk (applies to new ingests) |
+| `CHUNK_SIZE_TOKENS` | `300` | Words per chunk (applies to new ingests), capped to fit `CHUNK_MAX_MODEL_TOKENS` |
+| `CHUNK_STRATEGY` | `structured` | `structured` (headings, paragraphs, sentences) or `fixed` (legacy word windows) |
+| `CHUNK_MAX_MODEL_TOKENS` | `512` | Embedder/reranker input window; chunk size is capped at this / 1.5 words (0 disables) |
 | `AGENTIC_MAX_ITERS` | `15` | Bounds worst-case cost of one agentic question |
 | `MAX_UPLOAD_MB` | `25` | Upload ceiling |
 | `REQUIRE_API_KEY` | `false` | Enforce API keys |
