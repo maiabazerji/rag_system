@@ -413,19 +413,23 @@ class EvalScore(BaseModel):
 class RetrievalScore(BaseModel):
     """How well retrieval found the documents a golden example expects.
 
-    Computed by comparing the documents behind an answer's sources against the
-    example's `expected_sources`. Entirely deterministic -- no model call -- so
-    these numbers are available even when the LLM judge is unavailable, and they
-    are the metric that separates retrieval strategies most cleanly.
+    Computed by comparing the documents behind the retrieved context (the
+    strategy's ranked ``retrieved_docs``; the answer's cited sources only when a
+    strategy recorded none) against the example's relevance labels
+    (``relevant_doc_ids`` or ``expected_sources``). Entirely deterministic -- no
+    model call -- so these numbers are available even when the LLM judge is
+    unavailable. These are unranked, whole-list figures; the eval harness adds
+    ranked metrics at explicit cutoffs (``recall@5``, ``ndcg@10``, ...), which
+    are the ones to compare across strategies (see ``app.eval.retrieval``).
 
     Attributes:
-        precision: Fraction of cited documents that were expected (0-1).
-        recall: Fraction of expected documents that were cited (0-1).
-        hit: Whether at least one expected document was cited.
-        mrr: Reciprocal rank of the first expected document (1.0 if it ranked
+        precision: Fraction of retrieved documents that are relevant (0-1).
+        recall: Fraction of relevant documents that were retrieved (0-1).
+        hit: Whether at least one relevant document was retrieved.
+        mrr: Reciprocal rank of the first relevant document (1.0 if it ranked
             first, 0.5 if second, 0.0 if absent).
-        retrieved: Documents behind the answer's sources, best-ranked first.
-        expected: Documents the golden example expects.
+        retrieved: Documents behind the retrieved context, best-ranked first.
+        expected: Documents the golden example labels relevant.
 
     Example:
         {
@@ -435,15 +439,17 @@ class RetrievalScore(BaseModel):
         }
     """
 
-    precision: float = Field(ge=0, le=1, description="Cited docs that were expected")
-    recall: float = Field(ge=0, le=1, description="Expected docs that were cited")
-    hit: bool = Field(description="At least one expected document was cited")
-    mrr: float = Field(ge=0, le=1, description="Reciprocal rank of the first hit")
+    precision: float = Field(ge=0, le=1, description="Retrieved documents that are relevant")
+    recall: float = Field(ge=0, le=1, description="Relevant documents that were retrieved")
+    hit: bool = Field(description="At least one relevant document was retrieved")
+    mrr: float = Field(
+        ge=0, le=1, description="Reciprocal rank of the first relevant document"
+    )
     retrieved: list[str] = Field(
-        default_factory=list, description="Documents cited, best first"
+        default_factory=list, description="Documents behind the retrieved context, best first"
     )
     expected: list[str] = Field(
-        default_factory=list, description="Documents the example expects"
+        default_factory=list, description="Documents the example labels relevant"
     )
 
 

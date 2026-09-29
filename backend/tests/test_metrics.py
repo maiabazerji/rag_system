@@ -190,11 +190,15 @@ class TestRunEvaluation:
 
         answer = AsyncMock(return_value=(_fake_answer(), None))
 
+        outcomes = [
+            JudgeOutcome(scores={**SCORES, "answer_correctness": None}, attempts=1),
+            JudgeOutcome.failed("JudgeOutputInvalid", "faithfulness: missing", attempts=2),
+        ]
         with (
             patch("app.eval.metrics.answer_question_detailed", new=answer),
             patch(
-                "app.eval.metrics.score_example",
-                new=AsyncMock(side_effect=[EvalScore(**SCORES), None]),
+                "app.eval.metrics.score_example_detailed",
+                new=AsyncMock(side_effect=outcomes),
             ),
         ):
             result = await run_evaluation(dataset="d")
@@ -202,8 +206,19 @@ class TestRunEvaluation:
         assert result["n"] == 2
         assert result["n_scored"] == 1
         assert result["n_unscored"] == 1
+        assert result["n_judge_failed"] == 1
         assert result["aggregate"]["faithfulness"] == 0.9
+        assert result["aggregates"]["faithfulness"] == {"mean": 0.9, "std": None, "n": 1}
         assert [p["score"] for p in result["per_example"]].count(None) == 1
+        assert result["failures"] == [
+            {
+                "id": "q002",
+                "question": "two",
+                "stage": "judge",
+                "error_type": "JudgeOutputInvalid",
+                "error": "faithfulness: missing",
+            }
+        ]
 
     async def test_aggregate_is_none_when_nothing_scored(self, tmp_path, monkeypatch):
         monkeypatch.setattr("app.eval.metrics.GOLDEN_DIR", tmp_path)
@@ -214,7 +229,10 @@ class TestRunEvaluation:
 
         with (
             patch("app.eval.metrics.answer_question_detailed", new=answer),
-            patch("app.eval.metrics.score_example", new=AsyncMock(return_value=None)),
+            patch(
+                "app.eval.metrics.score_example_detailed",
+                new=AsyncMock(return_value=JudgeOutcome.failed("ProviderError", "down")),
+            ),
         ):
             result = await run_evaluation(dataset="d")
 
