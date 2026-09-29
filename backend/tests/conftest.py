@@ -29,6 +29,10 @@ TEST_SETTINGS = {
     "chunk_size_tokens": 100,
     "chunk_overlap_tokens": 20,
     "rerank_top_k": 8,
+    "final_context_k": 8,
+    # Dense-only unless a test opts into sparse or hybrid: most tests mock the
+    # dense retriever, and hybrid would also enumerate the store for BM25.
+    "retrieval_mode": "dense",
     "eval_concurrency": 2,
     # Telemetry off unless a test turns it on, whatever the developer's .env says.
     "telemetry_mode": "off",
@@ -72,6 +76,16 @@ def settings(monkeypatch):
     for key, value in TEST_SETTINGS.items():
         monkeypatch.setattr(app_settings, key, value, raising=True)
     return app_settings
+
+
+@pytest.fixture(autouse=True)
+def _fresh_sparse_index():
+    """Start every test with an empty BM25 index, so none sees another's corpus."""
+    from app.rag import sparse
+
+    sparse.get_index().invalidate()
+    yield
+    sparse.get_index().invalidate()
 
 
 @pytest.fixture(autouse=True)

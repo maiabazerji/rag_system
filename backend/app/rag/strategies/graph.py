@@ -39,7 +39,7 @@ from app.rag.graph_store import describe_subgraph, neighbors
 from app.rag.graph_store import load as load_graph
 from app.rag.providers.anthropic_provider import generate_with_usage
 from app.rag.rerank import rerank_async
-from app.rag.retrieve import dense_search
+from app.rag.retrieve import hybrid_search
 from app.rag.store import fetch_chunks, readable_doc_ids
 from app.rag.strategies.base import Strategy, StrategyResult
 from app.schemas import Chunk, Source
@@ -242,16 +242,20 @@ class GraphRAG(Strategy):
             }
         )
 
-        vector_chunks = await dense_search(
-            question, top_k=settings.retrieval_top_k, access=access
+        # Hybrid (dense + BM25, fused) candidates, left unreranked: the graph's
+        # own chunks join them below and the whole pool is reranked together.
+        retrieval = await hybrid_search(
+            question, access, final_k=settings.dense_top_k, rerank=False
         )
+        vector_chunks = retrieval.chunks
         vector_ids = {c.id for c in vector_chunks}
         logger.debug(
             "Vector search completed",
             extra_fields={
                 "strategy": "graph",
+                "mode": retrieval.diagnostics.mode,
                 "vector_chunks_count": len(vector_chunks),
-                "retrieval_top_k": settings.retrieval_top_k,
+                "dense_top_k": settings.dense_top_k,
             },
         )
         trace.append({"step": "vector_search", "chunks_from_vectors": len(vector_chunks)})
@@ -373,5 +377,6 @@ class GraphRAG(Strategy):
                 "retrieved_ids": [c.id for c in ranked],
                 "retrieved_docs": [c.metadata.get("filename") for c in ranked],
                 "context_text": augmented_ctx,
+                "retrieval": retrieval.diagnostics_for(ranked).model_dump(),
             },
         )

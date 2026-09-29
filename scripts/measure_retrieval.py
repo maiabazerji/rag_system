@@ -36,7 +36,7 @@ async def _measure(example: dict, top_k: int, semaphore: asyncio.Semaphore):
     """Retrieve for one question and score what came back."""
     async with semaphore:
         candidates = await dense_search(
-            example["question"], top_k=settings.retrieval_top_k
+            example["question"], top_k=settings.dense_top_k
         )
         ranked = await rerank_async(example["question"], candidates, top_k=top_k)
 

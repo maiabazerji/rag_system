@@ -35,8 +35,16 @@ def _describe_rerank(s: Span, args: tuple, kwargs: dict, result: Any) -> None:
     s.metadata = {"candidates": len(candidates or []), "kept": len(result or [])}
 
 
+def _describe_rerank_scored(s: Span, args: tuple, kwargs: dict, result: Any) -> None:
+    kept = getattr(result, "chunks", None)
+    _describe_rerank(s, args, kwargs, kept)
+    s.metadata["reranker"] = getattr(result, "reranker", None)
+
+
 retrieval = traced("retrieve", as_type="retriever", describe=_describe_retrieval)
 rerank = traced("rerank", describe=_describe_rerank)
+# The same span for a reranker call that returns a RerankOutcome.
+rerank_scored = traced("rerank", describe=_describe_rerank_scored)
 
 
 def _message_text(content: Any) -> Any:

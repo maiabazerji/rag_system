@@ -1,6 +1,6 @@
 """Classic RAG: the textbook 3-step vector search + rerank + LLM pipeline.
 
-    question ──► embed ──► vector search (top-50)
+    question ──► dense (top-50) + BM25 (top-50) ──► RRF fusion
                                 │
                                 ▼
                           cross-encoder rerank (top-8)
@@ -36,8 +36,7 @@ from app.i18n import localized
 from app.logging_config import get_structured_logger
 from app.prompts import render_prompt
 from app.rag.providers.base import generate_with_usage
-from app.rag.rerank import rerank_async
-from app.rag.retrieve import dense_search
+from app.rag.retrieve import hybrid_search
 from app.rag.strategies.base import Strategy, StrategyResult
 from app.schemas import Source
 
@@ -99,24 +98,17 @@ class ClassicRAG(Strategy):
             },
         )
 
-        candidates = await dense_search(
-            question, top_k=settings.retrieval_top_k, access=access
-        )
+        retrieval = await hybrid_search(question, access, final_k=top_k)
+        context = retrieval.chunks
+        diagnostics = retrieval.diagnostics.model_dump()
+        candidates = retrieval.diagnostics.counts.fused
         logger.debug(
             "Retrieval completed",
             extra_fields={
                 "strategy": "classic",
-                "candidates_count": len(candidates),
-                "retrieval_top_k": settings.retrieval_top_k,
-            },
-        )
-
-        context = await rerank_async(question, candidates, top_k=top_k)
-        logger.debug(
-            "Reranking completed",
-            extra_fields={
-                "strategy": "classic",
-                "reranked_count": len(context),
+                "mode": retrieval.diagnostics.mode,
+                "candidates_count": candidates,
+                "context_count": len(context),
                 "requested_top_k": top_k,
             },
         )
@@ -126,7 +118,7 @@ class ClassicRAG(Strategy):
                 "No relevant context found after reranking",
                 extra_fields={
                     "strategy": "classic",
-                    "candidates_count": len(candidates),
+                    "candidates_count": candidates,
                     "refusal": True,
                 },
             )
@@ -136,6 +128,7 @@ class ClassicRAG(Strategy):
                 refusal=True,
                 confidence=0.0,
                 trace=[{"step": "retrieve", "result": "empty"}],
+                extra={"retrieval": diagnostics},
             )
 
         ctx_block = "\n\n".join(f"[{c.id}]\n{c.text}" for c in context)
@@ -190,7 +183,7 @@ class ClassicRAG(Strategy):
             input_tokens=out["input_tokens"],
             output_tokens=out["output_tokens"],
             trace=[
-                {"step": "retrieve", "candidates": len(candidates), "kept": len(context)},
+                {"step": "retrieve", "candidates": candidates, "kept": len(context)},
                 {
                     "step": "generate",
                     "provider": self.provider,
@@ -203,5 +196,6 @@ class ClassicRAG(Strategy):
                 "retrieved_ids": [c.id for c in context],
                 "retrieved_docs": [c.metadata.get("filename") for c in context],
                 "context_text": ctx_block,
+                "retrieval": diagnostics,
             },
         )

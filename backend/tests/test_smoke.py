@@ -7,6 +7,8 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
+from app.rag.rerank import RerankOutcome
+
 
 def test_health(client):
     r = client.get("/health")
@@ -57,12 +59,12 @@ def test_ask_returns_token_telemetry(client, fake_chunks):
     with (
         patch("app.rag.generate.store_count", new=AsyncMock(return_value=10)),
         patch(
-            "app.rag.strategies.classic.dense_search",
+            "app.rag.retrieve.dense_search",
             new=AsyncMock(return_value=chunks),
         ),
         patch(
-            "app.rag.strategies.classic.rerank_async",
-            new=AsyncMock(return_value=chunks),
+            "app.rag.retrieve.rerank_scored_async",
+            new=AsyncMock(return_value=RerankOutcome.unscored(chunks)),
         ),
         patch(
             "app.rag.strategies.classic.generate_with_usage",

@@ -347,8 +347,12 @@ Auth and the audit log require Postgres. With `REQUIRE_API_KEY=false` and no `AD
 |---|---|---|
 | `GENERATOR_MODEL` | `claude-sonnet-5` | Model that writes answers |
 | `JUDGE_MODEL` | `claude-opus-5-5` | Model that grades them |
-| `RETRIEVAL_TOP_K` | `50` | Candidates fetched before reranking |
-| `RERANK_TOP_K` | `8` | Chunks sent to the model, the main cost lever |
+| `RETRIEVAL_MODE` | `hybrid` | `dense`, `sparse` (BM25) or `hybrid` (both, fused with RRF) |
+| `DENSE_TOP_K` | `50` | Dense candidates before fusion (`RETRIEVAL_TOP_K` is its deprecated alias) |
+| `BM25_TOP_K` | `50` | BM25 candidates before fusion |
+| `RRF_K` | `60` | Reciprocal Rank Fusion constant |
+| `RERANK_TOP_K` | `8` | Chunks kept after reranking |
+| `FINAL_CONTEXT_K` | `RERANK_TOP_K` | Chunks sent to the model, the main cost lever |
 | `CHUNK_SIZE_TOKENS` | `300` | Words per chunk (applies to new ingests), capped to fit `CHUNK_MAX_MODEL_TOKENS` |
 | `CHUNK_STRATEGY` | `structured` | `structured` (headings, paragraphs, sentences) or `fixed` (legacy word windows) |
 | `CHUNK_MAX_MODEL_TOKENS` | `512` | Embedder/reranker input window; chunk size is capped at this / 1.5 words (0 disables) |

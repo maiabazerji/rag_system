@@ -37,10 +37,9 @@ from app.access import AccessScope
 from app.config import settings
 from app.i18n import localized
 from app.logging_config import get_structured_logger
-from app.rag.embed import embed_query_async
 from app.rag.providers.anthropic_provider import tool_use_loop
+from app.rag.retrieve import hybrid_search
 from app.rag.store import fetch_chunks
-from app.rag.store import search as vector_search
 from app.rag.strategies.base import Strategy, StrategyResult
 from app.schemas import Source
 
@@ -69,7 +68,7 @@ _SYSTEM = (
 _TOOLS = [
     {
         "name": "search",
-        "description": "Semantic search the indexed documents. Returns up to N chunks "
+        "description": "Search the indexed documents (semantic and keyword). Returns up to N chunks "
         "with id and short preview.",
         "input_schema": {
             "type": "object",
@@ -115,14 +114,17 @@ _TOOLS = [
 ]
 
 
-def _retrieval_extra(seen_chunks: dict[str, dict]) -> dict:
+def _retrieval_extra(seen_chunks: dict[str, dict], searches: list[dict]) -> dict:
     """Describe everything the agent read, in the order it first saw it.
 
     The agent's "retrieved context" is every chunk its searches surfaced, so
     that is what retrieval metrics and the judge are given -- the same basis as
-    the reranked context of the other strategies.
+    the reranked context of the other strategies. ``retrieval`` holds the
+    diagnostics of the last search, ``retrieval_searches`` those of each.
     """
     return {
+        "retrieval": searches[-1] if searches else None,
+        "retrieval_searches": searches,
         "chunks_explored": list(seen_chunks.keys()),
         "retrieved_ids": list(seen_chunks.keys()),
         "retrieved_docs": [v.get("filename") for v in seen_chunks.values()],
@@ -210,6 +212,7 @@ class AgenticRAG(Strategy):
 
         # Closure-captured state the tool handlers populate.
         seen_chunks: dict[str, dict] = {}
+        retrieval_diagnostics: list[dict] = []
         final: dict = {}
         search_count = 0
         fetch_count = 0
@@ -242,20 +245,19 @@ class AgenticRAG(Strategy):
                     "top_k": k,
                 },
             )
-            vec = await embed_query_async(q)
-            hits = await vector_search(vec, top_k=k, access=access)
+            # Hybrid candidates without the cross-encoder: the agent reads the
+            # previews and judges relevance itself, and every tool call already
+            # costs a model round trip.
+            retrieval = await hybrid_search(q, access, final_k=k, rerank=False)
+            retrieval_diagnostics.append(retrieval.diagnostics.model_dump())
             previews = []
-            for h in hits:
-                cid = h.payload.get("chunk_id")
-                text = h.payload.get("text")
-                doc_id = h.payload.get("doc_id")
-                if cid and text and doc_id:
-                    seen_chunks[cid] = {
-                        "doc_id": doc_id,
-                        "text": text,
-                        "filename": h.payload.get("filename"),
-                    }
-                    previews.append({"chunk_id": cid, "preview": text[:300]})
+            for c in retrieval.chunks:
+                seen_chunks[c.id] = {
+                    "doc_id": c.doc_id,
+                    "text": c.text,
+                    "filename": c.metadata.get("filename"),
+                }
+                previews.append({"chunk_id": c.id, "preview": c.text[:300]})
             logger.debug(
                 "Search results",
                 extra_fields={
@@ -407,7 +409,7 @@ class AgenticRAG(Strategy):
                 output_tokens=out["output_tokens"],
                 iterations=out["iterations"],
                 trace=out["trace"],
-                extra=_retrieval_extra(seen_chunks),
+                extra=_retrieval_extra(seen_chunks, retrieval_diagnostics),
             )
 
         # The agent never called `finish`. If the loop stopped on a provider
@@ -459,5 +461,5 @@ class AgenticRAG(Strategy):
             output_tokens=out["output_tokens"],
             iterations=out["iterations"],
             trace=out["trace"],
-            extra={**_retrieval_extra(seen_chunks), "stop_reason": stop_reason},
+            extra={**_retrieval_extra(seen_chunks, retrieval_diagnostics), "stop_reason": stop_reason},
         )
