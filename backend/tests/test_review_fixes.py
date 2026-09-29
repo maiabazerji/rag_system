@@ -11,6 +11,7 @@ from fastapi import HTTPException
 
 from app import auth
 from app.config import VALID_ANTHROPIC_MODELS, Settings
+from app.eval.judge import JudgeOutcome
 from app.rag.providers.base import MissingKeyError, ProviderError
 from app.rag.rerank import RerankOutcome
 from app.rag.retrieve import RetrievalResult
@@ -23,6 +24,9 @@ from app.schemas import (
     EvalRunRequest,
     Source,
 )
+
+# A judge that could not score anything (the provider is down).
+JUDGE_DOWN = JudgeOutcome.failed("ProviderError", "judge unavailable")
 
 # --------------------------------------------------------------------------
 # Model allowlist and model IDs
@@ -477,14 +481,17 @@ class TestJudgeInputs:
         from app.eval.judge import judge
 
         long_context = [f"chunk {i} " + "x" * 400 for i in range(8)]
+        def dim(score):
+            return {"score": score, "reasoning": "r"}
+
         reply = {
             "text": json.dumps(
                 {
-                    "faithfulness": 1,
-                    "answer_relevance": 1,
-                    "context_precision": 1,
-                    "context_recall": 1,
-                    "answer_correctness": 0.25,
+                    "faithfulness": dim(1),
+                    "answer_relevance": dim(1),
+                    "context_precision": dim(1),
+                    "context_recall": dim(1),
+                    "answer_correctness": dim(0.25),
                 }
             ),
             "input_tokens": 1,
@@ -503,9 +510,15 @@ class TestJudgeInputs:
     async def test_correctness_is_none_without_an_ideal_answer(self):
         from app.eval.judge import judge
 
+        one = {"score": 1, "reasoning": "r"}
         reply = {
             "text": json.dumps(
-                {"faithfulness": 1, "answer_relevance": 1, "context_precision": 1, "context_recall": 1}
+                {
+                    "faithfulness": one,
+                    "answer_relevance": one,
+                    "context_precision": one,
+                    "context_recall": one,
+                }
             ),
             "input_tokens": 1,
             "output_tokens": 1,
@@ -572,7 +585,7 @@ class TestEvalRuns:
 
         with (
             patch("app.eval.metrics.answer_question_detailed", new=AsyncMock(return_value=_detailed())),
-            patch("app.eval.metrics.judge", new=AsyncMock(return_value=None)),
+            patch("app.eval.metrics.judge_detailed", new=AsyncMock(return_value=JUDGE_DOWN)),
         ):
             result = await run_evaluation(dataset="d")
 
@@ -589,7 +602,7 @@ class TestEvalRuns:
                 "app.eval.metrics.answer_question_detailed",
                 new=AsyncMock(return_value=_detailed(model="claude-sonnet-5")),
             ),
-            patch("app.eval.metrics.judge", new=AsyncMock(return_value=None)),
+            patch("app.eval.metrics.judge_detailed", new=AsyncMock(return_value=JUDGE_DOWN)),
         ):
             result = await run_evaluation(dataset="d")  # no model override
 
@@ -602,12 +615,16 @@ class TestEvalRuns:
 
         with (
             patch("app.eval.metrics.answer_question_detailed", new=AsyncMock(return_value=_detailed())),
-            patch("app.eval.metrics.judge", new=AsyncMock(return_value=None)),
+            patch("app.eval.metrics.judge_detailed", new=AsyncMock(return_value=JUDGE_DOWN)),
         ):
             await run_evaluation(dataset="d")
             await run_evaluation(dataset="d")
 
-        names = [p.name for p in (one_example / "runs").glob("*.json")]
+        names = [
+            p.name
+            for p in (one_example / "runs").glob("*.json")
+            if not p.name.endswith(".regression.json")  # reports saved beside runs
+        ]
         assert len(names) == 2
         assert all("classic" in n and "claude-sonnet-5" in n for n in names)
 
