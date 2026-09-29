@@ -1,0 +1,6 @@
+# Which document corpus each golden dataset is labelled against, relative to
+# the data directory. Datasets not listed here use "docs" (data/docs).
+# scripts/run_eval.py --dry-run and the dataset tests read this file.
+
+[corpora]
+golden_fr_business_v1 = "demo_fr_business/docs"

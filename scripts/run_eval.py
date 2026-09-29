@@ -37,7 +37,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "backend"))
 from app.config import settings  # noqa: E402
 from app.eval import metrics as eval_metrics  # noqa: E402
 from app.eval import regression  # noqa: E402
-from app.eval.dataset import validate_dataset_file  # noqa: E402
+from app.eval.dataset import corpus_dir_for, validate_dataset_file  # noqa: E402
 from app.eval.judge import DIMENSIONS  # noqa: E402
 from app.eval.metrics import run_evaluation  # noqa: E402
 from app.eval.retrieval import DEFAULT_K_VALUES  # noqa: E402
@@ -264,17 +264,33 @@ def dry_run(args: argparse.Namespace) -> int:
     else:
         candidate = Path(args.dataset)
         paths = [candidate if candidate.suffix == ".jsonl" else golden_dir / f"{args.dataset}.jsonl"]
-    corpus = Path(args.corpus_dir) if args.corpus_dir else settings.data_path / "docs"
+    def corpus_for(path: Path) -> Path:
+        # An explicit --corpus-dir wins; otherwise golden/corpora.toml decides.
+        if args.corpus_dir:
+            return Path(args.corpus_dir)
+        return corpus_dir_for(path.stem, settings.data_path)
 
     if not paths:
         print(f"No dataset files in {golden_dir}")
         return EXIT_ERROR
 
-    reports = [validate_dataset_file(p, corpus) for p in paths]
+    corpora = {p: corpus_for(p) for p in paths}
+    reports = [validate_dataset_file(p, corpora[p]) for p in paths]
     if args.json:
-        print(json.dumps({"corpus_dir": str(corpus), "datasets": [r.to_dict() for r in reports]}, indent=2))
+        print(
+            json.dumps(
+                {
+                    "datasets": [
+                        {**r.to_dict(), "corpus_dir": str(corpora[p])}
+                        for p, r in zip(paths, reports, strict=True)
+                    ]
+                },
+                indent=2,
+            )
+        )
     else:
-        print(f"Corpus: {corpus}")
+        for corpus in sorted({str(c) for c in corpora.values()}):
+            print(f"Corpus: {corpus}")
         for r in reports:
             status = "OK" if r.ok else "INVALID"
             print(
