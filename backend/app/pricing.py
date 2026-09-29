@@ -141,6 +141,22 @@ def reload_price_table() -> PriceTable:
     return price_table()
 
 
+def cost_breakdown(
+    model: str | None, input_tokens: int, output_tokens: int
+) -> dict[str, float] | None:
+    """Estimated USD cost of one call split into ``input``, ``output`` and ``total``.
+
+    None when ``model`` has no listed price. This is the shape Langfuse
+    expects for an observation's cost details.
+    """
+    price = price_table().price(model)
+    if price is None:
+        return None
+    inp = max(0, input_tokens) * price.input / TOKENS_PER_UNIT
+    out = max(0, output_tokens) * price.output / TOKENS_PER_UNIT
+    return {"input": round(inp, 8), "output": round(out, 8), "total": round(inp + out, 8)}
+
+
 def estimate_cost(model: str | None, input_tokens: int, output_tokens: int) -> float | None:
     """Estimated USD cost of one call, or None when ``model`` has no listed price.
 
@@ -150,10 +166,5 @@ def estimate_cost(model: str | None, input_tokens: int, output_tokens: int) -> f
         input_tokens: Input tokens billed.
         output_tokens: Output tokens billed.
     """
-    price = price_table().price(model)
-    if price is None:
-        return None
-    cost = (
-        max(0, input_tokens) * price.input + max(0, output_tokens) * price.output
-    ) / TOKENS_PER_UNIT
-    return round(cost, 8)
+    breakdown = cost_breakdown(model, input_tokens, output_tokens)
+    return breakdown["total"] if breakdown is not None else None

@@ -52,6 +52,8 @@ class Span:
         output: What came out, under the same rules as ``input``.
         model: Model ID, for generations.
         usage: Token counts, for generations: ``{"input": n, "output": m}``.
+        cost: Estimated USD cost, for generations with a listed price:
+            ``{"input": x, "output": y, "total": z}``.
         metadata: Small non-content facts (counts, stop reasons).
         error: Exception type name when the step raised.
     """
@@ -66,6 +68,7 @@ class Span:
     output: Any = None
     model: str | None = None
     usage: dict[str, int] | None = None
+    cost: dict[str, float] | None = None
     metadata: dict[str, Any] = field(default_factory=dict)
     error: str | None = None
 
@@ -149,7 +152,14 @@ class Trace:
             "output_tokens": getattr(result, "output_tokens", 0),
             "latency_ms": getattr(result, "latency_ms", None),
             "confidence": getattr(result, "confidence", None),
+            "grounded": getattr(result, "grounded", None),
+            "status": getattr(result, "status", None),
         }
+        metrics = getattr(result, "metrics", None)
+        if metrics is not None:
+            self.output["estimated_cost_usd"] = metrics.estimated_cost_usd
+            self.output["llm_calls"] = metrics.llm_calls
+            self.output["context_chunks"] = metrics.context_chunks
         return result
 
     def fail(self, message: str, *, reason: str = "error") -> None:
