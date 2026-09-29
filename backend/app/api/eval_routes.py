@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Path, Query
 from fastapi.concurrency import run_in_threadpool
 
 from app.access import Principal
@@ -6,7 +6,8 @@ from app.audit import audited, doc_id_of
 from app.auth import charge, record_tokens, require_principal, strategy_units
 from app.eval.human_ratings import load_all as load_ratings
 from app.eval.human_ratings import save as save_rating
-from app.eval.metrics import load_dataset, run_evaluation
+from app.eval.metrics import GOLDEN_DIR, load_dataset, run_evaluation
+from app.eval.online import GoldenNotFound, golden_questions
 from app.eval.regression import (
     get_run,
     list_run_summaries,
@@ -75,6 +76,37 @@ async def run(req: EvalRunRequest, principal: Principal = Depends(require_princi
         model=result.get("model"),
     )
     return result
+
+
+@router.get("/golden", summary="List golden datasets")
+def golden_datasets() -> list[str]:
+    """Names of the golden datasets available for evaluation, sorted."""
+    if not GOLDEN_DIR.is_dir():
+        return []
+    return sorted(p.stem for p in GOLDEN_DIR.glob("*.jsonl") if p.is_file())
+
+
+@router.get("/golden/{dataset}", summary="List a golden dataset's questions")
+def golden_dataset_questions(
+    dataset: str = Path(
+        min_length=1, max_length=64, pattern=r"^[A-Za-z0-9_-][A-Za-z0-9._-]*$"
+    ),
+) -> list[dict]:
+    """Questions of one golden dataset for a question picker.
+
+    Returns ``[{id, question, question_type, difficulty}]`` only: reference
+    answers and relevance labels stay on the server, so picking a question
+    cannot leak its expected answer into the UI.
+
+    Raises:
+        HTTPException: 404 if the dataset does not exist; 500 if it is malformed.
+    """
+    try:
+        return golden_questions(dataset)
+    except GoldenNotFound as e:
+        raise HTTPException(status_code=404, detail=str(e)) from e
+    except ValueError as e:
+        raise HTTPException(status_code=500, detail=str(e)) from e
 
 
 @router.get("/runs", summary="List evaluation runs")
