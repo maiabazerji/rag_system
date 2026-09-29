@@ -735,6 +735,24 @@ def ground(
     return validate_citations(raw, context, question), raw
 
 
+def validation_attributes(grounded: GroundedAnswer) -> dict[str, Any]:
+    """Span attributes for the citation-validation stage.
+
+    Handles and counts only: invalid citations are model output and may be
+    arbitrary text, so only their number is recorded.
+    """
+    return {
+        "cited_handles": [c.handle for c in grounded.cited],
+        "cited_count": grounded.citation_count,
+        "invalid_count": len(grounded.invalid_citations),
+        "claims": len(grounded.claims),
+        "grounded": grounded.grounded,
+        "status": grounded.status,
+        "refusal": grounded.refusal,
+        "mode": grounded.mode,
+    }
+
+
 def grounding_extra(
     grounded: GroundedAnswer, raw: RawAnswer | None, context: Sequence[CitedChunk]
 ) -> dict:

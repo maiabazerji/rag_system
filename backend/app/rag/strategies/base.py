@@ -14,7 +14,7 @@ from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 
 from app.access import AccessScope
-from app.schemas import Claim, Source
+from app.schemas import Claim, RequestMetrics, Source
 
 
 @dataclass
@@ -53,6 +53,11 @@ class StrategyResult:
         invalid_citations: Handles the model cited that were not in its context.
         citation_count: Distinct valid sources cited.
         unsupported_notes: What the model said the context does not cover.
+        candidate_count: Candidate chunks retrieved before the final cut
+            (fused candidates; graph adds its own; agentic sums its searches).
+        context_count: Chunks in the context the answer was generated from.
+        metrics: Cost and per-stage latency, filled in by the orchestrator
+            (:mod:`app.rag.generate`) once the run finishes.
 
     Example:
         >>> result = StrategyResult(
@@ -81,6 +86,9 @@ class StrategyResult:
     invalid_citations: list[str] = field(default_factory=list)
     citation_count: int = 0
     unsupported_notes: str | None = None
+    candidate_count: int = 0
+    context_count: int = 0
+    metrics: RequestMetrics | None = None
 
 
 class Strategy(ABC):
