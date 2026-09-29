@@ -134,7 +134,7 @@ evalrag/
 │   └── pyproject.toml
 ├── frontend/
 │   ├── src/
-│   │   ├── pages/            # Ask, Compare, Eval, Regressions
+│   │   ├── pages/            # Ask, Ingest, Compare, Eval, Advisor
 │   │   ├── components/
 │   │   └── api/
 │   └── package.json
@@ -352,7 +352,7 @@ Core endpoints:
 | GET  | `/traces/{id}` | Fetch trace |
 | POST | `/eval/run` | Run eval on dataset |
 | GET  | `/eval/runs` | List runs + scores |
-| GET  | `/eval/regressions` | History + diffs |
+| GET  | `/eval/runs/{id}/regression` | Regression report of one run against its baseline |
 
 All responses typed via Pydantic; OpenAPI auto-generated.
 
@@ -364,8 +364,7 @@ Pages:
 
 - **Ask**: query box, answer, retrieved sources, citations.
 - **Compare**: side-by-side A/B (two models or two prompt versions).
-- **Eval**: run overview, per-metric charts, failure drilldown.
-- **Regressions**: timeline of runs, diff viewer for changed examples.
+- **Evaluation**: an Overview tab (quality against cost for the latest run of each configuration, per-question-type breakdown, regression status) and a Runs tab (launch a run, run history, per-run regression report against the baseline).
 - **Traces**: per-request drilldown: retrieval → rerank → prompt → output.
 
 Stack: React + Vite + Tailwind + TanStack Query + Recharts.

@@ -1,33 +1,13 @@
-import React, { Suspense, lazy } from "react";
+import React from "react";
 import ReactDOM from "react-dom/client";
-import { BrowserRouter, NavLink, Route, Routes } from "react-router-dom";
+import { BrowserRouter, NavLink } from "react-router-dom";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import Ask from "./pages/Ask";
-import Compare from "./pages/Compare";
-import EvalPage from "./pages/Eval";
-import Regressions from "./pages/Regressions";
-import Ingest from "./pages/Ingest";
-import Data from "./pages/Data";
-import Advisor from "./pages/Advisor";
+import AppRoutes, { NAV } from "./AppRoutes";
 import ApiKeyGate from "./components/ApiKeyGate";
 import LanguageSwitch from "./components/LanguageSwitch";
-import { I18nProvider, useT, type MessageKey } from "./i18n";
+import { I18nProvider, useT } from "./i18n";
 import { ApiError, RequestTimeoutError } from "./api/client";
-import {
-  BeakerIcon,
-  ChatIcon,
-  CompareIcon,
-  DatabaseIcon,
-  ScatterIcon,
-  SparkleIcon,
-  TrendIcon,
-  UploadIcon,
-} from "./components/Icons";
-import LoadingSpinner from "./components/LoadingSpinner";
 import "./index.css";
-
-// Loaded on demand: it is the only page that ships the charting library.
-const Dashboard = lazy(() => import("./pages/Dashboard"));
 
 const qc = new QueryClient({
   defaultOptions: {
@@ -42,17 +22,6 @@ const qc = new QueryClient({
     },
   },
 });
-
-const NAV: { to: string; label: MessageKey; Icon: typeof ChatIcon; end?: boolean }[] = [
-  { to: "/", label: "nav.ask", Icon: ChatIcon, end: true },
-  { to: "/ingest", label: "nav.ingest", Icon: UploadIcon },
-  { to: "/compare", label: "nav.compare", Icon: CompareIcon },
-  { to: "/data", label: "nav.data", Icon: DatabaseIcon },
-  { to: "/eval", label: "nav.eval", Icon: BeakerIcon },
-  { to: "/dashboard", label: "nav.dashboard", Icon: ScatterIcon },
-  { to: "/regressions", label: "nav.regressions", Icon: TrendIcon },
-  { to: "/advisor", label: "nav.advisor", Icon: SparkleIcon },
-];
 
 function Wordmark() {
   return (
@@ -157,23 +126,7 @@ ReactDOM.createRoot(document.getElementById("root")!).render(
       <QueryClientProvider client={qc}>
         <BrowserRouter>
           <Layout>
-            <Routes>
-              <Route path="/" element={<Ask />} />
-              <Route path="/ingest" element={<Ingest />} />
-              <Route path="/compare" element={<Compare />} />
-              <Route path="/data" element={<Data />} />
-              <Route path="/eval" element={<EvalPage />} />
-              <Route
-                path="/dashboard"
-                element={
-                  <Suspense fallback={<LoadingSpinner />}>
-                    <Dashboard />
-                  </Suspense>
-                }
-              />
-              <Route path="/regressions" element={<Regressions />} />
-              <Route path="/advisor" element={<Advisor />} />
-            </Routes>
+            <AppRoutes />
           </Layout>
         </BrowserRouter>
       </QueryClientProvider>
