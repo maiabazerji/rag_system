@@ -1,4 +1,4 @@
-import React from "react";
+import React, { Suspense, lazy } from "react";
 import ReactDOM from "react-dom/client";
 import { BrowserRouter, NavLink, Route, Routes } from "react-router-dom";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
@@ -18,11 +18,16 @@ import {
   ChatIcon,
   CompareIcon,
   DatabaseIcon,
+  ScatterIcon,
   SparkleIcon,
   TrendIcon,
   UploadIcon,
 } from "./components/Icons";
+import LoadingSpinner from "./components/LoadingSpinner";
 import "./index.css";
+
+// Loaded on demand: it is the only page that ships the charting library.
+const Dashboard = lazy(() => import("./pages/Dashboard"));
 
 const qc = new QueryClient({
   defaultOptions: {
@@ -44,6 +49,7 @@ const NAV: { to: string; label: MessageKey; Icon: typeof ChatIcon; end?: boolean
   { to: "/compare", label: "nav.compare", Icon: CompareIcon },
   { to: "/data", label: "nav.data", Icon: DatabaseIcon },
   { to: "/eval", label: "nav.eval", Icon: BeakerIcon },
+  { to: "/dashboard", label: "nav.dashboard", Icon: ScatterIcon },
   { to: "/regressions", label: "nav.regressions", Icon: TrendIcon },
   { to: "/advisor", label: "nav.advisor", Icon: SparkleIcon },
 ];
@@ -157,6 +163,14 @@ ReactDOM.createRoot(document.getElementById("root")!).render(
               <Route path="/compare" element={<Compare />} />
               <Route path="/data" element={<Data />} />
               <Route path="/eval" element={<EvalPage />} />
+              <Route
+                path="/dashboard"
+                element={
+                  <Suspense fallback={<LoadingSpinner />}>
+                    <Dashboard />
+                  </Suspense>
+                }
+              />
               <Route path="/regressions" element={<Regressions />} />
               <Route path="/advisor" element={<Advisor />} />
             </Routes>

@@ -54,3 +54,12 @@ export const DatabaseIcon = ({ className = "w-4 h-4" }: Props) => (
     <path d="M3 12c0 1.66 4 3 9 3s9-1.34 9-3" strokeLinejoin="round"/>
   </svg>
 );
+
+export const ScatterIcon = ({ className = "w-4 h-4" }: Props) => (
+  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className={className}>
+    <path d="M4 4v16h16" strokeLinejoin="round" strokeLinecap="round"/>
+    <circle cx="9" cy="14" r="1.5"/>
+    <circle cx="13" cy="9" r="1.5"/>
+    <circle cx="18" cy="12" r="1.5"/>
+  </svg>
+);
