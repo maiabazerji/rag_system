@@ -9,7 +9,7 @@ from unittest.mock import AsyncMock, patch
 
 import pytest
 
-from app.eval.judge import _extract_json, judge
+from app.eval.judge import JudgeOutcome, _extract_json, judge
 from app.eval.metrics import aggregate, load_dataset, run_evaluation, score_example
 from app.eval.regression import load_regressions
 from app.schemas import Answer, EvalScore, Source
@@ -20,6 +20,16 @@ SCORES = {
     "context_precision": 0.7,
     "context_recall": 0.6,
 }
+
+
+def _verdict(scores=None, **overrides) -> dict:
+    """A structured judge reply: per dimension, a score and its reasoning."""
+    body = {
+        dim: {"score": value, "reasoning": f"why {dim}"}
+        for dim, value in (scores or SCORES).items()
+    }
+    body.update(overrides)
+    return body
 
 
 def _fake_answer(text="a"):
@@ -62,7 +72,7 @@ class TestExtractJson:
 @pytest.mark.asyncio
 class TestJudge:
     async def test_returns_scores_on_a_well_formed_reply(self):
-        reply = _judge_reply(json.dumps({**SCORES, "reasoning": "looks right"}))
+        reply = _judge_reply(json.dumps(_verdict()))
         with patch(
             "app.eval.judge.generate_with_usage", new=AsyncMock(return_value=reply)
         ):
@@ -70,19 +80,17 @@ class TestJudge:
 
         assert result is not None
         assert result["faithfulness"] == 0.9
-        assert result["reasoning"] == "looks right"
+        assert result["reasoning_by_dimension"]["faithfulness"] == "why faithfulness"
+        assert "why context_recall" in result["reasoning"]
 
-    async def test_clamps_out_of_range_scores(self):
-        reply = _judge_reply(
-            json.dumps({**SCORES, "faithfulness": 1.7, "context_recall": -0.4})
-        )
+    async def test_rejects_out_of_range_scores_instead_of_clamping(self):
+        """A 1.7 is a broken reply, not a 1.0: clamping would hide the fault."""
+        bad = _verdict({**SCORES, "faithfulness": 1.7, "context_recall": -0.4})
         with patch(
-            "app.eval.judge.generate_with_usage", new=AsyncMock(return_value=reply)
+            "app.eval.judge.generate_with_usage",
+            new=AsyncMock(return_value=_judge_reply(json.dumps(bad))),
         ):
-            result = await judge("q", "a", ["ctx"])
-
-        assert result["faithfulness"] == 1.0
-        assert result["context_recall"] == 0.0
+            assert await judge("q", "a", ["ctx"]) is None
 
     async def test_returns_none_when_the_provider_fails(self):
         """The regression this guards: a failed judge must not become a 0.5."""
@@ -100,7 +108,7 @@ class TestJudge:
             assert await judge("q", "a", ["ctx"]) is None
 
     async def test_returns_none_when_a_dimension_is_missing(self):
-        partial = {k: v for k, v in SCORES.items() if k != "context_recall"}
+        partial = _verdict({k: v for k, v in SCORES.items() if k != "context_recall"})
         with patch(
             "app.eval.judge.generate_with_usage",
             new=AsyncMock(return_value=_judge_reply(json.dumps(partial))),
@@ -108,7 +116,7 @@ class TestJudge:
             assert await judge("q", "a", ["ctx"]) is None
 
     async def test_returns_none_when_a_score_is_not_numeric(self):
-        bad = {**SCORES, "faithfulness": "very high"}
+        bad = _verdict({**SCORES, "faithfulness": "very high"})
         with patch(
             "app.eval.judge.generate_with_usage",
             new=AsyncMock(return_value=_judge_reply(json.dumps(bad))),

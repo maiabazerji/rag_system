@@ -464,14 +464,17 @@ class TestJudgeInputs:
         from app.eval.judge import judge
 
         long_context = [f"chunk {i} " + "x" * 400 for i in range(8)]
+        def dim(score):
+            return {"score": score, "reasoning": "r"}
+
         reply = {
             "text": json.dumps(
                 {
-                    "faithfulness": 1,
-                    "answer_relevance": 1,
-                    "context_precision": 1,
-                    "context_recall": 1,
-                    "answer_correctness": 0.25,
+                    "faithfulness": dim(1),
+                    "answer_relevance": dim(1),
+                    "context_precision": dim(1),
+                    "context_recall": dim(1),
+                    "answer_correctness": dim(0.25),
                 }
             ),
             "input_tokens": 1,
@@ -490,9 +493,15 @@ class TestJudgeInputs:
     async def test_correctness_is_none_without_an_ideal_answer(self):
         from app.eval.judge import judge
 
+        one = {"score": 1, "reasoning": "r"}
         reply = {
             "text": json.dumps(
-                {"faithfulness": 1, "answer_relevance": 1, "context_precision": 1, "context_recall": 1}
+                {
+                    "faithfulness": one,
+                    "answer_relevance": one,
+                    "context_precision": one,
+                    "context_recall": one,
+                }
             ),
             "input_tokens": 1,
             "output_tokens": 1,
