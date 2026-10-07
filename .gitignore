@@ -37,8 +37,6 @@ build/
 .DS_Store
 Thumbs.db
 
-# Local Claude / agent state
-.claude/
 
 # Runtime data (generated locally)
 .hf_cache/
