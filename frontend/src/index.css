@@ -1,6 +1,10 @@
-@tailwind base;
-@tailwind components;
-@tailwind utilities;
+@import "tailwindcss";
+@config "../tailwind.config.js";
+
+/* v3 compatibility: borders default to the theme border colour, not currentColor. */
+@layer base {
+  *, ::before, ::after, ::backdrop { border-color: theme("colors.bg.border"); }
+}
 
 @layer base {
   html, body, #root { height: 100%; }
@@ -18,13 +22,15 @@
   ::-webkit-scrollbar-thumb:hover { @apply bg-zinc-600; }
 }
 
+/* A utility (not a component) so .btn-primary and .btn-ghost can @apply it. */
+@utility btn {
+  @apply inline-flex items-center justify-center gap-2 px-4 py-2 rounded-lg font-medium
+         transition-colors disabled:opacity-50 disabled:cursor-not-allowed select-none;
+}
+
 @layer components {
   .card {
     @apply bg-bg-surface border border-bg-border rounded-xl p-6;
-  }
-  .btn {
-    @apply inline-flex items-center justify-center gap-2 px-4 py-2 rounded-lg font-medium
-           transition-colors disabled:opacity-50 disabled:cursor-not-allowed select-none;
   }
   .btn-primary {
     @apply btn bg-accent text-bg hover:bg-accent-hover active:scale-[0.98];
