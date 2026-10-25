@@ -96,7 +96,7 @@ class TestScoring:
         assert recs[0].suggested_config.expected_relative_cost == BASELINE_RELATIVE_TOKENS[
             "agentic"
         ]
-        assert any("1.9x" in t for t in recs[0].tradeoffs)
+        assert any("1.6x" in t for t in recs[0].tradeoffs)
 
     def test_agentic_capped_when_cost_sensitive_even_if_exploratory(self):
         prof = RESEARCH.model_copy(update={"cost_sensitivity": "high"})
@@ -213,6 +213,38 @@ class TestProfile:
         assert p.data_residency == "EU"
         assert p.entity_richness == "high"
         assert p.question_mix.relational_multi_hop > 25
+
+    def test_heuristic_reads_a_qualified_unit(self):
+        p = extract_heuristic("FAQ chatbot, 300 help pages in English.")
+        assert p.corpus_size_docs == 300  # named pages are the documents
+        p = extract_heuristic("Due diligence over 2 million pages of filings.")
+        assert p.corpus_size_docs == 200_000  # bare page counts are a tenth of a document
+
+    def test_heuristic_latency_not_a_problem_is_generous(self):
+        for text in (
+            "Recherche juridique, la latence n'est pas un problème.",
+            "Research assistant; latency is not a concern.",
+            "Pas de contrainte de temps réel pour nos juristes.",
+        ):
+            p = extract_heuristic(text)
+            assert p.latency_budget_ms is not None and p.latency_budget_ms >= 30_000, text
+            assert p.data_freshness != "realtime", text
+
+    def test_heuristic_open_questions_across_documents_are_exploratory(self):
+        p = extract_heuristic(
+            "Les avocats posent des questions ouvertes qui demandent de croiser plusieurs "
+            "documents."
+        )
+        mix = p.question_mix
+        assert mix.exploratory_multi_step > mix.single_fact
+        assert mix.exploratory_multi_step > mix.relational_multi_hop
+
+    def test_heuristic_sensitive_and_personal_data(self):
+        p = extract_heuristic("Chatbot interne, données sensibles et données personnelles.")
+        assert "sensitive data" in p.compliance
+        assert "GDPR" in p.compliance
+        notes = compliance_notes(p, "fr")
+        assert any(n.startswith("Données sensibles") for n in notes)
 
     def test_overrides_win(self):
         base = extract_heuristic("FAQ over 300 documents, tight budget, 2 seconds.")

@@ -1,4 +1,4 @@
-"""Pydantic schemas for EvalRAG API requests and responses.
+"""Pydantic schemas for Veritas RAG API requests and responses.
 
 These models define the contract between frontend and backend, enforce validation,
 and provide structured documentation for the API.

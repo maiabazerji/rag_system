@@ -4,7 +4,10 @@
  * Kept separate from client.ts; it reuses that module's `post` helper so auth
  * headers and error handling stay identical.
  */
-import { post } from "./client";
+import { adviseLocally } from "../advisor-engine";
+import { getBrowserKey } from "../advisor-engine/llm";
+import { isStaticDemo } from "../staticDemo";
+import { LONG_TIMEOUT_MS, del, post } from "./client";
 
 export type StrategyName = "classic" | "graph" | "agentic";
 export type Level = "low" | "medium" | "high";
@@ -85,6 +88,41 @@ export interface AdviseResponse {
     suggested_strategies: StrategyName[];
     example_payload: Record<string, unknown>;
   };
+  /** Facts worth confirming, most decisive first. Older backends omit it. */
+  follow_up_questions?: FollowUpQuestion[];
+  confidence?: Confidence | null;
+}
+
+/** Ids of the follow-up questions: each is the AdviseOverrides field it sets. */
+export type FollowUpId =
+  | "question_mix"
+  | "corpus_size_docs"
+  | "entity_richness"
+  | "latency_budget_ms"
+  | "cost_sensitivity"
+  | "data_freshness"
+  | "compliance";
+
+export interface FollowUpOption {
+  id: string;
+  /** Merge into the request overrides to give this answer. */
+  overrides: AdviseOverrides;
+  /** Strategy that would come first with this answer. */
+  top_strategy: StrategyName;
+}
+
+export interface FollowUpQuestion {
+  id: FollowUpId;
+  options: FollowUpOption[];
+  /** Option the description pointed to (a guess), if any. */
+  current: string | null;
+  changes_recommendation: boolean;
+}
+
+export interface Confidence {
+  level: Level;
+  margin: number;
+  open_questions: number;
 }
 
 export interface ValidateQuestion {
@@ -143,8 +181,23 @@ export function cleanOverrides(o: AdviseOverrides): AdviseOverrides {
   return out as AdviseOverrides;
 }
 
-export function advise(description: string, overrides: AdviseOverrides = {}): Promise<AdviseResponse> {
-  return post<AdviseResponse>("/advise", { description, overrides: cleanOverrides(overrides) });
+/** Language of the backend-written text (reasons, notes, next step). */
+export type AdviceLanguage = "en" | "fr";
+
+export function advise(
+  description: string,
+  overrides: AdviseOverrides = {},
+  language?: AdviceLanguage,
+): Promise<AdviseResponse> {
+  // No backend in the static demo: the same advice, computed in the browser.
+  if (isStaticDemo()) {
+    return adviseLocally(description, cleanOverrides(overrides), language ?? "en", getBrowserKey());
+  }
+  return post<AdviseResponse>("/advise", {
+    description,
+    overrides: cleanOverrides(overrides),
+    ...(language ? { language } : {}),
+  });
 }
 
 /**
@@ -171,10 +224,29 @@ export function validateStrategies(
   questions: ValidateQuestion[],
   strategies?: StrategyName[],
   profile?: ProjectProfile,
+  language?: AdviceLanguage,
+  workspace?: string,
 ): Promise<ValidateResponse> {
-  return post<ValidateResponse>("/advise/validate", {
-    questions,
-    ...(strategies && strategies.length ? { strategies } : {}),
-    ...(profile ? { profile } : {}),
-  });
+  return post<ValidateResponse>(
+    "/advise/validate",
+    {
+      questions,
+      ...(strategies && strategies.length ? { strategies } : {}),
+      ...(profile ? { profile } : {}),
+      ...(language ? { language } : {}),
+      ...(workspace ? { workspace } : {}),
+    },
+    { timeoutMs: LONG_TIMEOUT_MS },
+  );
+}
+
+/** A fresh private test workspace id (an access group, see /advise/validate). */
+export function newWorkspace(): string {
+  const bytes = crypto.getRandomValues(new Uint8Array(10));
+  return "audit-" + Array.from(bytes, (b) => b.toString(16).padStart(2, "0")).join("");
+}
+
+/** Erase every document uploaded into a test workspace. */
+export function deleteWorkspace(workspace: string): Promise<unknown> {
+  return del(`/advise/workspace/${encodeURIComponent(workspace)}`);
 }

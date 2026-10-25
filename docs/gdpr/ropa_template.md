@@ -1,8 +1,8 @@
 # Registre des activités de traitement / Record of processing activities
 
 > **Modèle, pas un avis juridique. / Template, not legal advice.**
-> Ce modèle suit la structure de l'article 30 du RGPD et du modèle de registre proposé par la CNIL. Il est pré-rempli avec ce que fait EvalRAG. Tout ce qui est entre `<…>` dépend de votre déploiement et doit être complété ou validé par le responsable de traitement et son DPO.
-> This template follows GDPR art. 30 and the CNIL's record template. It is pre-filled with what EvalRAG does. Everything in `<…>` depends on your deployment and must be completed or validated by the controller and its DPO.
+> Ce modèle suit la structure de l'article 30 du RGPD et du modèle de registre proposé par la CNIL. Il est pré-rempli avec ce que fait Veritas RAG. Tout ce qui est entre `<…>` dépend de votre déploiement et doit être complété ou validé par le responsable de traitement et son DPO.
+> This template follows GDPR art. 30 and the CNIL's record template. It is pre-filled with what Veritas RAG does. Everything in `<…>` depends on your deployment and must be completed or validated by the controller and its DPO.
 
 Voir aussi / See also: [GDPR guide](./README.md).
 
@@ -24,7 +24,7 @@ Voir aussi / See also: [GDPR guide](./README.md).
 
 | Champ / Field | Valeur / Value |
 |---|---|
-| Nom du traitement / Name | Assistant de recherche documentaire (RAG) « EvalRAG » / Document question-answering assistant (RAG) "EvalRAG" |
+| Nom du traitement / Name | Assistant de recherche documentaire (RAG) « Veritas RAG » / Document question-answering assistant (RAG) "Veritas RAG" |
 | Référence interne / Internal reference | `<ex. / e.g. TRT-2026-014>` |
 | Date de création / Created | `<date>` |
 | Dernière mise à jour / Last updated | `<date>` |

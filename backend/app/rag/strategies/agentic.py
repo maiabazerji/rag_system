@@ -141,6 +141,7 @@ def _retrieval_extra(seen: dict[str, CitedChunk], searches: list[dict]) -> dict:
         "chunks_explored": [c.chunk_id for c in chunks],
         "retrieved_ids": [c.chunk_id for c in chunks],
         "retrieved_docs": [c.document for c in chunks],
+        "context_texts": [c.text for c in chunks],
         "context_text": format_context(chunks),
     }
 

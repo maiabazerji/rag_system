@@ -71,6 +71,20 @@ describe("advisor client", () => {
     });
   });
 
+  it("sends the UI language when given", async () => {
+    await advise("Nous avons 5 000 contrats", {}, "fr");
+    expect(JSON.parse(String(lastCall().init.body))).toEqual({
+      description: "Nous avons 5 000 contrats",
+      overrides: {},
+      language: "fr",
+    });
+    await validateStrategies([{ question: "q?" }], [], undefined, "fr");
+    expect(JSON.parse(String(lastCall().init.body))).toEqual({
+      questions: [{ question: "q?" }],
+      language: "fr",
+    });
+  });
+
   it("posts /advise/validate and omits empty strategies", async () => {
     await validateStrategies([{ question: "q?" }], []);
     const { url, init } = lastCall();

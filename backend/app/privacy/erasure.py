@@ -161,6 +161,26 @@ async def resolve_source(source_key: str) -> ErasureRequest:
     )
 
 
+async def resolve_group(tenant: str, group: str) -> ErasureRequest:
+    """Erase every document of ``tenant`` labelled with access group ``group``.
+
+    Used to clear a private test workspace (see ``/advise/workspace``).
+    """
+    doc_ids, filenames = await _documents_matching(
+        qm.Filter(
+            must=[
+                _match("tenant", tenant),
+                qm.FieldCondition(key="acl_groups", match=qm.MatchAny(any=[group])),
+            ]
+        )
+    )
+    return ErasureRequest(
+        subject=f"group:{group}",
+        doc_ids=frozenset(doc_ids),
+        filenames=frozenset(filenames),
+    )
+
+
 async def resolve_principal(principal_id: str) -> ErasureRequest:
     """Erase every document a principal owns, and their own records."""
     doc_ids, filenames = await _documents_matching(

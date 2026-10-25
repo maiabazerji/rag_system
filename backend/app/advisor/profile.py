@@ -79,7 +79,8 @@ PROFILE_TOOL: dict[str, Any] = {
             },
             "latency_budget_ms": {
                 "type": ["integer", "null"],
-                "description": "Acceptable time to answer in ms, or null if not stated.",
+                "description": "Acceptable time to answer in ms, or null if not stated. "
+                "Use 60000 when the description says latency does not matter.",
             },
             "cost_sensitivity": _LEVEL,
             "data_freshness": {
@@ -90,7 +91,8 @@ PROFILE_TOOL: dict[str, Any] = {
                 "type": "array",
                 "items": {"type": "string"},
                 "description": "Stated compliance or residency needs, e.g. 'EU only', "
-                "'GDPR', 'on-prem'. Empty if none stated. Do not invent any.",
+                "'GDPR', 'on-prem', and 'sensitive data' when the description says the "
+                "data is sensitive or confidential. Empty if none stated. Do not invent any.",
             },
             "data_residency": {
                 "type": ["string", "null"],
@@ -196,8 +198,10 @@ async def extract_with_llm(description: str) -> tuple[ProjectProfile, int, int]:
 # --- heuristic fallback -------------------------------------------------------
 
 _NUM_UNIT = re.compile(
-    r"(\d[\d\s.,]*)\s*(k|m|million|millions|mille|thousand)?\s*"
-    r"(?:de\s+|d')?(documents?|docs?|fichiers?|files?|pages?|pdfs?|articles?|tickets?|"
+    r"(\d[\d\s.,]*)\s*(?:(k|m|million|millions|mille|thousand)\b)?\s*"
+    # One qualifier word may sit before the unit: "300 help pages", "60 Notion pages".
+    r"(?:de\s+|d')?([a-zà-ÿ-]+\s+)?"
+    r"(documents?|docs?|fichiers?|files?|pages?|pdfs?|articles?|tickets?|"
     r"contrats?|contracts?|records?|emails?|mails?)\b",
     re.IGNORECASE,
 )
@@ -205,6 +209,24 @@ _LATENCY = re.compile(
     r"(\d+(?:[.,]\d+)?)\s*(ms|milliseconds?|millisecondes?|s|secs?|seconds?|secondes?)\b",
     re.IGNORECASE,
 )
+# "Pas de contrainte de temps réel" denies real time: it must not read as a tight budget.
+_NO_REALTIME = (
+    r"(pas de|sans|aucune?|no|not|without)\s+(contrainte de\s+|need for\s+)?"
+    r"(temps r[ée]el|real[- ]time)"
+)
+_GENEROUS_LATENCY = (
+    r"latenc\w* (n'est pas|is not|isn't) (un probl[èe]me|une contrainte|an issue|a concern|"
+    r"a problem|critical|critique|important)|pas de contrainte de (temps|latence|d[ée]lai)|"
+    r"no latency (constraint|requirement)|(latency|speed) (does not|doesn't) matter|"
+    r"can take (a|one|several) minutes?|peu(t|vent) prendre (une|quelques|plusieurs) minutes?"
+)
+#: Budget assumed when the description says latency does not matter (above the generous bar).
+GENEROUS_LATENCY_HINT_MS = 60_000
+_SENSITIVE = (
+    r"donn[ée]es (sensibles|confidentielles)|sensitive|confidenti|secret professionnel|"
+    r"secret m[ée]dical|health data|donn[ée]es de sant[ée]"
+)
+_PERSONAL_DATA = r"donn[ée]es (personnelles|à caract[èe]re personnel)|personal data|\bpii\b"
 
 _LANGS = {
     "fr": r"\b(french|fran[cç]ais|francophone)\b",
@@ -232,7 +254,8 @@ _RELATIONAL = (
 _EXPLORATORY = (
     "research", "analysis", "analyse", "investigat", "explore", "synthes", "report on",
     "rapport", "why", "pourquoi", "open-ended", "due diligence", "recherche", "compare",
-    "comparer", "trend", "tendance", "summari", "résum",
+    "comparer", "trend", "tendance", "summari", "résum", "ouverte", "plusieurs documents",
+    "multiple documents", "several documents", "across documents",
 )
 _ENTITIES = (
     "contract", "contrat", "legal", "juridique", "compan", "entreprise", "société",
@@ -281,7 +304,9 @@ def extract_heuristic(description: str) -> ProjectProfile:
     for m in _NUM_UNIT.finditer(description):
         n = _parse_number(m.group(1), m.group(2))
         if n is not None:
-            if m.group(3).lower().startswith("page"):
+            # "2 million pages of filings" is page count, not documents; "300 help
+            # pages" names the documents themselves.
+            if m.group(4).lower().startswith("page") and m.group(3) is None:
                 n = max(1, n // 10)
             docs = max(docs or 0, n)
 
@@ -296,13 +321,16 @@ def extract_heuristic(description: str) -> ProjectProfile:
     exp = 0.5 + _count(text, _EXPLORATORY)
     mix = QuestionMix(single_fact=sf, relational_multi_hop=rel, exploratory_multi_step=exp)
 
+    no_realtime = re.search(_NO_REALTIME, text) is not None
     latency: int | None = None
     lat = _LATENCY.search(text)
-    if lat:
+    if re.search(_GENEROUS_LATENCY, text):
+        latency = GENEROUS_LATENCY_HINT_MS
+    elif lat:
         value = float(lat.group(1).replace(",", "."))
         latency = int(value if lat.group(2).startswith("m") else value * 1000)
         latency = max(100, latency)
-    elif re.search(r"real[- ]time|temps r[ée]el|instant", text):
+    elif not no_realtime and re.search(r"real[- ]time|temps r[ée]el|instant", text):
         latency = 2_000
 
     cost = "medium"
@@ -315,7 +343,7 @@ def extract_heuristic(description: str) -> ProjectProfile:
         cost = "high"
 
     freshness = "weekly"
-    if re.search(r"real[- ]time|temps r[ée]el|\blive\b|continuous", text):
+    if not no_realtime and re.search(r"real[- ]time|temps r[ée]el|\blive\b|continuous", text):
         freshness = "realtime"
     elif re.search(r"daily|every day|quotidien|chaque jour|tous les jours", text):
         freshness = "daily"
@@ -326,8 +354,10 @@ def extract_heuristic(description: str) -> ProjectProfile:
 
     compliance: list[str] = []
     residency: str | None = None
-    if re.search(r"\bgdpr\b|\brgpd\b", text):
+    if re.search(r"\bgdpr\b|\brgpd\b", text) or re.search(_PERSONAL_DATA, text):
         compliance.append("GDPR")
+    if re.search(_SENSITIVE, text):
+        compliance.append("sensitive data")
     if re.search(r"\beu\b|\bue\b|europe|union europ|h[ée]berg\w* en france|hosted in (the )?eu",
                  text):
         compliance.append("EU data residency")

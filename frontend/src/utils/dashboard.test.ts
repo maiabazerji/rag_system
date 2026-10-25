@@ -3,11 +3,8 @@ import type { EvalRun, EvalRunSummary } from "../api/eval";
 import {
   configKey,
   datasetsOf,
-  hasCostData,
   latestPerConfig,
   questionTypeBreakdown,
-  scatterPoints,
-  seriesByStrategy,
 } from "./dashboard";
 
 function run(over: Partial<EvalRunSummary>): EvalRunSummary {
@@ -65,31 +62,6 @@ describe("dashboard aggregation", () => {
   it("derives cost per question from the run total when no mean is recorded", () => {
     const rows = latestPerConfig(RUNS, "golden_v3");
     expect(rows.find((r) => r.strategy === "agentic")!.costPerQuestion).toBeCloseTo(0.05);
-    expect(hasCostData(rows)).toBe(true);
-    expect(hasCostData(latestPerConfig(RUNS, "golden_v1"))).toBe(false);
-  });
-
-  it("plots only configurations that measured both coordinates", () => {
-    const rows = latestPerConfig(RUNS, "golden_v3");
-    const { points, missing } = scatterPoints(rows, "faithfulness", "tokens");
-    expect(points.map((p) => [p.strategy, p.x, p.y])).toEqual([
-      ["agentic", 9000, 0.9],
-      ["classic", 1500, 0.8],
-    ]);
-    expect(missing).toEqual(["graph · claude-sonnet-5 · hybrid"]);
-    // Classic has no USD cost, so it drops out of the cost axis.
-    expect(scatterPoints(rows, "faithfulness", "cost").points.map((p) => p.strategy)).toEqual(["agentic"]);
-    expect(scatterPoints(rows, "recall@5", "latency").points).toEqual([
-      expect.objectContaining({ strategy: "classic", x: 900, y: 0.7, n: 8, std: 0.2 }),
-    ]);
-  });
-
-  it("groups points into one series per strategy", () => {
-    const { points } = scatterPoints(latestPerConfig(RUNS, "golden_v3"), "faithfulness", "tokens");
-    expect(seriesByStrategy(points).map(([s, p]) => [s, p.length])).toEqual([
-      ["agentic", 1],
-      ["classic", 1],
-    ]);
   });
 
   it("builds the question-type breakdown from run details", () => {

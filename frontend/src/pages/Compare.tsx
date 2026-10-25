@@ -1,6 +1,7 @@
-import { useEffect, useId, useMemo, useRef, useState, type ReactNode } from "react";
+import { useEffect, useId, useMemo, useState, type ReactNode } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { ApiError, errorMessage, get, getAdminKey, post, setAdminKey } from "../api/client";
+import { Link } from "react-router-dom";
+import { errorMessage } from "../api/client";
 import {
   STRATEGY_NAMES,
   compareStrategies,
@@ -14,7 +15,7 @@ import {
 } from "../api/eval";
 import LoadingSpinner from "../components/LoadingSpinner";
 import ErrorAlert from "../components/ErrorAlert";
-import Tooltip from "../components/Tooltip";
+import { useGraphStats } from "../components/GraphBuilder";
 import {
   CitedText,
   GroundingBadge,
@@ -35,39 +36,13 @@ import {
   type Fact,
 } from "../utils/compareInsights";
 import { STAGE_COLORS } from "../utils/chartColors";
-import { useI18n, type I18n, type MessageKey } from "../i18n";
+import { useI18n, type MessageKey } from "../i18n";
 
 type StrategyOut = StrategyComparison;
-type GraphStats = { triples: number; entities: number };
-type JobStatus = "queued" | "running" | "completed" | "failed";
-/** POST /graph/build answers 202 with a job; GET /graph/build/{id} reports on it. */
-type BuildJob = {
-  id?: string;
-  job_id?: string;
-  status: JobStatus;
-  total?: number;
-  completed?: number;
-  failures?: string[];
-  error?: string;
-};
 type QuestionSource = "own" | "golden";
 type Best = Record<string, Set<StrategyName>>;
 
-const POLL_INTERVAL_MS = 2000;
 const ALL_TYPES = "";
-
-/** Graph build and reset need the admin key on top of any API key. */
-function graphBuildError(e: unknown, t: I18n["t"]): string {
-  const detail = e instanceof ApiError && e.detail ? ` (${e.detail})` : "";
-  if (e instanceof ApiError && e.status === 403) {
-    return t("compare.adminNeeded", { detail });
-  }
-  if (e instanceof ApiError && e.status === 503) {
-    return t("compare.buildUnavailable", { detail });
-  }
-  return errorMessage(e);
-}
-const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
 const STRATEGIES: StrategyName[] = [...STRATEGY_NAMES];
 
@@ -97,72 +72,21 @@ const META: Record<
 
 const SAMPLES: MessageKey[] = ["compare.sample1", "compare.sample2", "compare.sample3"];
 
-const JOB_STATUS: Record<JobStatus, MessageKey> = {
-  queued: "compare.status.queued",
-  running: "compare.status.running",
-  completed: "compare.status.completed",
-  failed: "compare.status.failed",
-};
-
-/** Split "a.md, b.md" into ["a.md", "b.md"]. */
-function parseDocList(value: string): string[] {
-  return value
-    .split(/[,\n]/)
-    .map((s) => s.trim())
-    .filter(Boolean);
-}
-
 export default function Compare() {
-  const { t, tp } = useI18n();
+  const { t, rich } = useI18n();
   const [q, setQ] = useState("");
   const [source, setSource] = useState<QuestionSource>("own");
   const [dataset, setDataset] = useState("");
   const [typeFilter, setTypeFilter] = useState(ALL_TYPES);
   const [goldenId, setGoldenId] = useState("");
-  const [evaluate, setEvaluate] = useState(false);
-  const [idealAnswer, setIdealAnswer] = useState("");
-  const [relevantDocs, setRelevantDocs] = useState("");
   const [res, setRes] = useState<CompareStrategiesResponse | null>(null);
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
-  const [buildingGraph, setBuildingGraph] = useState(false);
-  const [buildProgress, setBuildProgress] = useState<string | null>(null);
-  const [showAdminKey, setShowAdminKey] = useState(false);
-  const evaluateHelpId = useId();
-  const { data: graphStats = null, refetch: refetchStats } = useQuery({
-    queryKey: ["graph-stats"],
-    queryFn: () => get<GraphStats>("/graph/stats"),
-  });
-
-  // Stops the build poller when the page unmounts.
-  const mounted = useRef(true);
-  useEffect(() => {
-    mounted.current = true;
-    return () => {
-      mounted.current = false;
-    };
-  }, []);
+  const { data: graphStats } = useGraphStats();
+  const graphMissing = graphStats?.triples === 0;
 
   const golden = source === "golden";
   const canRun = !busy && !!q.trim() && (!golden || !!goldenId);
-
-  function buildRequest(): CompareStrategiesRequest {
-    const req: CompareStrategiesRequest = { question: q, strategies: STRATEGIES };
-    if (!evaluate) return req;
-    req.evaluate = true;
-    if (golden) {
-      req.golden = { dataset, id: goldenId };
-    } else {
-      const docs = parseDocList(relevantDocs);
-      if (idealAnswer.trim() || docs.length > 0) {
-        req.reference = {
-          ...(idealAnswer.trim() ? { ideal_answer: idealAnswer.trim() } : {}),
-          ...(docs.length > 0 ? { relevant_doc_ids: docs } : {}),
-        };
-      }
-    }
-    return req;
-  }
 
   async function run() {
     if (!canRun) return;
@@ -170,51 +94,12 @@ export default function Compare() {
     setBusy(true);
     setRes(null);
     try {
-      setRes(await compareStrategies(buildRequest()));
+      const req: CompareStrategiesRequest = { question: q, strategies: STRATEGIES };
+      setRes(await compareStrategies(req));
     } catch (e) {
       setErr(errorMessage(e));
     } finally {
       setBusy(false);
-    }
-  }
-
-  /** Start a build, then poll its job until it finishes. It can run for minutes. */
-  async function buildGraph() {
-    if (buildingGraph) return;
-    setErr(null);
-    setBuildingGraph(true);
-    setBuildProgress(t(JOB_STATUS.queued));
-    try {
-      const started = await post<BuildJob>("/graph/build", {}, { admin: true });
-      const jobId = started.job_id ?? started.id;
-      if (!jobId) throw new Error(t("compare.noJobId"));
-      let job = started;
-      while (mounted.current && job.status !== "completed" && job.status !== "failed") {
-        await sleep(POLL_INTERVAL_MS);
-        if (!mounted.current) return;
-        job = await get<BuildJob>(`/graph/build/${encodeURIComponent(jobId)}`, { admin: true });
-        setBuildProgress(
-          job.total
-            ? t("compare.progressChunks", { done: job.completed ?? 0, total: job.total })
-            : t(JOB_STATUS[job.status] ?? "compare.status.running"),
-        );
-      }
-      if (!mounted.current) return;
-      if (job.status === "failed") {
-        setErr(t("compare.buildFailed", { error: job.error ?? t("compare.unknownError") }));
-      } else if (job.failures && job.failures.length > 0) {
-        setErr(tp("compare.partialFailures", job.failures.length));
-      }
-      await refetchStats();
-    } catch (e) {
-      if (!mounted.current) return;
-      setErr(graphBuildError(e, t));
-      if (e instanceof ApiError && e.status === 403) setShowAdminKey(true);
-    } finally {
-      if (mounted.current) {
-        setBuildingGraph(false);
-        setBuildProgress(null);
-      }
     }
   }
 
@@ -313,41 +198,16 @@ export default function Compare() {
           </div>
         )}
 
-        <div className="flex flex-col gap-2">
-          <label className="inline-flex items-center gap-2 text-sm text-zinc-200 cursor-pointer self-start min-h-[36px]">
-            <input
-              type="checkbox"
-              role="switch"
-              checked={evaluate}
-              onChange={(e) => setEvaluate(e.target.checked)}
-              aria-describedby={evaluateHelpId}
-              className="h-4 w-4 accent-[#e8a93c]"
-            />
-            {t("compare.evaluate")}
-          </label>
-          <p id={evaluateHelpId} className="text-xs text-zinc-500 max-w-2xl">
-            {t("compare.evaluateHelp")}
-          </p>
-          {evaluate && golden && (
-            <p className="text-xs text-zinc-400">{t("compare.goldenReference")}</p>
-          )}
-          {evaluate && !golden && (
-            <ReferenceFields
-              idealAnswer={idealAnswer}
-              onIdealAnswer={setIdealAnswer}
-              relevantDocs={relevantDocs}
-              onRelevantDocs={setRelevantDocs}
-            />
-          )}
-        </div>
-
         <div className="flex items-center justify-between gap-2 flex-wrap">
-          <GraphStatus
-            stats={graphStats}
-            busy={buildingGraph}
-            progress={buildProgress}
-            onBuild={buildGraph}
-          />
+          {graphMissing ? (
+            <p className="text-xs text-amber-300">
+              {rich("graph.compareHint", {
+                link: <Link to="/ingest" className="underline hover:text-amber-200">{t("ingest.title")}</Link>,
+              })}
+            </p>
+          ) : (
+            <span />
+          )}
           <button
             type="button"
             onClick={run}
@@ -367,18 +227,18 @@ export default function Compare() {
             onDismiss={() => setErr(null)}
           />
         )}
-        <AdminKeyField open={showAdminKey} onToggle={setShowAdminKey} />
       </div>
-
-      {busy && evaluate && <p className="text-xs text-zinc-400" role="status">{t("compare.evaluating")}</p>}
 
       {results.length > 1 && <SummaryTable results={results} best={best} />}
 
-      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
-        {STRATEGIES.map((s) => (
-          <StrategyCard key={s} name={s} result={byName(s)} loading={busy} best={best} />
-        ))}
-      </div>
+      {/* No empty placeholder cards before the first run: they only add noise. */}
+      {(busy || results.length > 0) && (
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
+          {STRATEGIES.map((s) => (
+            <StrategyCard key={s} name={s} result={byName(s)} loading={busy} best={best} />
+          ))}
+        </div>
+      )}
     </div>
   );
 }
@@ -483,52 +343,6 @@ function GoldenPicker({
         )}
       </label>
     </div>
-  );
-}
-
-function ReferenceFields({
-  idealAnswer,
-  onIdealAnswer,
-  relevantDocs,
-  onRelevantDocs,
-}: {
-  idealAnswer: string;
-  onIdealAnswer: (v: string) => void;
-  relevantDocs: string;
-  onRelevantDocs: (v: string) => void;
-}) {
-  const { t } = useI18n();
-  const ids = { answer: useId(), docs: useId(), answerHelp: useId(), docsHelp: useId() };
-  return (
-    <details className="text-xs text-zinc-400">
-      <summary className="cursor-pointer select-none hover:text-zinc-200">{t("compare.reference")}</summary>
-      <div className="mt-2 grid gap-2 sm:grid-cols-2">
-        <div className="flex flex-col gap-1">
-          <label htmlFor={ids.answer}>{t("compare.idealAnswer")}</label>
-          <textarea
-            id={ids.answer}
-            rows={2}
-            value={idealAnswer}
-            onChange={(e) => onIdealAnswer(e.target.value)}
-            aria-describedby={ids.answerHelp}
-            className="input resize-y !py-2 text-sm"
-          />
-          <span id={ids.answerHelp} className="text-zinc-500">{t("compare.idealAnswerHelp")}</span>
-        </div>
-        <div className="flex flex-col gap-1">
-          <label htmlFor={ids.docs}>{t("compare.relevantDocs")}</label>
-          <input
-            id={ids.docs}
-            value={relevantDocs}
-            onChange={(e) => onRelevantDocs(e.target.value)}
-            aria-describedby={ids.docsHelp}
-            spellCheck={false}
-            className="input !py-2 text-sm font-mono"
-          />
-          <span id={ids.docsHelp} className="text-zinc-500">{t("compare.relevantDocsHelp")}</span>
-        </div>
-      </div>
-    </details>
   );
 }
 
@@ -674,7 +488,6 @@ function StrategyCard({
 
           <InvalidCitationsWarning invalid={result.invalid_citations} />
 
-          {!failed && <EvaluationBlock result={result} best={best} />}
           {!failed && <CostBlock result={result} best={best} />}
 
           {!failed && result.sources.length > 0 && result.sources[0].chunk_id !== "none" && (
@@ -738,53 +551,6 @@ function MetricTile({
 }
 
 const byId = (id: string) => COMPARE_METRICS.find((m) => m.id === id)!;
-
-function EvaluationBlock({ result, best }: { result: StrategyOut; best: Best }) {
-  const { t } = useI18n();
-  const text = useMetricText();
-  const ev = result.evaluation;
-  if (!ev) return null;
-
-  if (ev.status === "refusal_checked") {
-    return (
-      <p className="text-xs text-zinc-300">
-        {ev.correct_refusal === 1 ? t("compare.refusalCorrect") : t("compare.refusalWrong")}
-      </p>
-    );
-  }
-
-  const tiles: { id: string; note?: string }[] = [
-    { id: "faithfulness" },
-    { id: "answer_relevance" },
-    { id: "answer_correctness", note: ev.has_reference_answer ? undefined : t("compare.noReference") },
-    { id: "recall@5", note: ev.retrieval ? undefined : t("compare.noRelevantDocs") },
-    { id: "mrr", note: ev.retrieval ? undefined : t("compare.noRelevantDocs") },
-  ];
-  return (
-    <section className="flex flex-col gap-1.5" aria-label={t("compare.scores")}>
-      {ev.status === "judge_failed" && (
-        <p role="status" className="text-[11px] text-amber-300 bg-amber-500/10 border border-amber-500/30 rounded px-2 py-1">
-          {t("compare.judgeFailed", { error: ev.error ?? ev.error_type ?? t("compare.unknownError") })}
-        </p>
-      )}
-      <div className="grid grid-cols-2 sm:grid-cols-3 gap-1.5">
-        {tiles.map(({ id, note }) => {
-          const m = byId(id);
-          return (
-            <MetricTile
-              key={id}
-              label={t(m.label)}
-              value={text(m, m.value(result))}
-              isBest={best[id]?.has(result.strategy)}
-              note={note}
-            />
-          );
-        })}
-      </div>
-      {!ev.retrieval && <p className="text-[11px] text-zinc-500">{t("compare.noRelevantDocs")}</p>}
-    </section>
-  );
-}
 
 function CostBlock({ result, best }: { result: StrategyOut; best: Best }) {
   const { t, locale } = useI18n();
@@ -879,121 +645,6 @@ function WhyPanel({ result }: { result: StrategyOut }) {
         ))}
       </ul>
     </details>
-  );
-}
-
-/** Optional admin key, sent as X-Admin-Key on graph build. Kept in this browser only. */
-function AdminKeyField({ open, onToggle }: { open: boolean; onToggle: (open: boolean) => void }) {
-  const { t, rich } = useI18n();
-  const [value, setValue] = useState(getAdminKey() ?? "");
-  const [stored, setStored] = useState(!!getAdminKey());
-
-  function save(e: React.FormEvent) {
-    e.preventDefault();
-    setAdminKey(value);
-    setStored(!!value.trim());
-  }
-
-  function clear() {
-    setAdminKey(null);
-    setValue("");
-    setStored(false);
-  }
-
-  return (
-    <details
-      open={open}
-      onToggle={(e) => onToggle((e.currentTarget as HTMLDetailsElement).open)}
-      className="text-xs text-zinc-500"
-    >
-      <summary className="cursor-pointer select-none hover:text-zinc-300">
-        {t("compare.adminKey")} {stored ? t("compare.adminSaved") : t("compare.adminNeededHint")}
-      </summary>
-      <form onSubmit={save} className="mt-2 flex gap-2 flex-wrap items-center">
-        <input
-          type="password"
-          value={value}
-          onChange={(e) => setValue(e.target.value)}
-          placeholder={t("compare.adminPlaceholder")}
-          autoComplete="off"
-          spellCheck={false}
-          aria-label={t("compare.adminKey")}
-          className="flex-1 min-w-[14rem] rounded border border-bg-border bg-bg-base px-3 py-1.5 text-sm font-mono text-zinc-200 placeholder:text-zinc-600 focus:outline-none focus:border-accent"
-        />
-        <button
-          type="submit"
-          disabled={!value.trim()}
-          className="rounded border border-bg-border px-3 py-1.5 text-sm text-zinc-200 hover:border-accent disabled:opacity-40 transition-colors"
-        >
-          {t("common.save")}
-        </button>
-        {stored && (
-          <button
-            type="button"
-            onClick={clear}
-            className="rounded px-3 py-1.5 text-sm text-zinc-500 hover:text-zinc-300 transition-colors"
-          >
-            {t("common.clear")}
-          </button>
-        )}
-        <span className="basis-full text-[11px] text-zinc-600">
-          {rich("compare.adminHelp", { header: <code className="font-mono">X-Admin-Key</code> })}
-        </span>
-      </form>
-    </details>
-  );
-}
-
-function GraphStatus({
-  stats,
-  busy,
-  progress,
-  onBuild,
-}: {
-  stats: GraphStats | null;
-  busy: boolean;
-  progress: string | null;
-  onBuild: () => void;
-}) {
-  const { t, rich, formatNumber } = useI18n();
-  const ready = !!stats && stats.triples > 0;
-  return (
-    <div className="flex items-center gap-2">
-      <Tooltip label={t("compare.graphTip")} side="top">
-        <div className={`text-xs font-mono px-2.5 py-1.5 rounded border flex items-center gap-2 cursor-help ${
-          ready
-            ? "bg-violet-500/10 border-violet-500/40 text-violet-300"
-            : "bg-amber-500/10 border-amber-500/40 text-amber-300"
-        }`}>
-          <span className={`w-2 h-2 rounded-full ${ready ? "bg-violet-400" : "bg-amber-400"}`} aria-hidden="true" />
-          {stats ? (
-            <span>
-              {rich("compare.triples", {
-                count: <span className="font-semibold">{formatNumber(stats.triples)}</span>,
-              })}
-            </span>
-          ) : (
-            <span>{t("compare.graphNotBuilt")}</span>
-          )}
-        </div>
-      </Tooltip>
-      <button
-        onClick={onBuild}
-        disabled={busy}
-        className={`text-xs px-3 py-1.5 rounded font-medium transition-colors min-h-[44px] flex items-center ${
-          busy
-            ? "bg-zinc-700/40 text-zinc-500 cursor-not-allowed"
-            : "bg-violet-500/20 border border-violet-500/40 text-violet-300 hover:bg-violet-500/30 hover:border-violet-500/60"
-        }`}
-        aria-label={t("compare.buildAria")}
-      >
-        {busy
-          ? t("compare.building", { progress: progress ?? "" }).trim()
-          : ready
-            ? t("compare.rebuild")
-            : t("compare.buildGraph")}
-      </button>
-    </div>
   );
 }
 

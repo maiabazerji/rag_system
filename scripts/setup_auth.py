@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Manage EvalRAG API keys.
+"""Manage Veritas RAG API keys.
 
 Creates the auth tables if they do not exist, then mints, lists or revokes API
 keys. Keys are stored as SHA-256 hashes, so a created key is shown once and
@@ -34,7 +34,7 @@ from app.config import settings  # noqa: E402
 
 def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        description="Manage EvalRAG API keys.",
+        description="Manage Veritas RAG API keys.",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""\
 Examples:

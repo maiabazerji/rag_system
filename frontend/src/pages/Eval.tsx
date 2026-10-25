@@ -10,7 +10,7 @@ import LoadingSpinner from "../components/LoadingSpinner";
 import EvalRuns from "../components/eval/EvalRuns";
 import { useI18n, type MessageKey } from "../i18n";
 
-// Loaded on demand: the Overview is the only view that ships the charting library.
+// Loaded on demand, so the Runs tab renders without waiting for it.
 const EvalOverview = lazy(() => import("../components/eval/EvalOverview"));
 
 const EVAL_TABS = ["overview", "runs"] as const;

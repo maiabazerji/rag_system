@@ -7,12 +7,6 @@ export const SparkleIcon = ({ className = "w-4 h-4" }: Props) => (
   </svg>
 );
 
-export const ChatIcon = ({ className = "w-4 h-4" }: Props) => (
-  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className={className}>
-    <path d="M21 12a8 8 0 1 1-3.2-6.4L21 4l-1.6 3.2A7.96 7.96 0 0 1 21 12z" strokeLinejoin="round"/>
-  </svg>
-);
-
 export const CompareIcon = ({ className = "w-4 h-4" }: Props) => (
   <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className={className}>
     <rect x="3" y="4" width="7" height="16" rx="2"/>

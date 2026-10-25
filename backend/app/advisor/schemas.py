@@ -96,6 +96,9 @@ class AdviseRequest(BaseModel):
         description="Free-text project description, in any language.",
     )
     overrides: AdviseOverrides = Field(default_factory=AdviseOverrides)
+    language: Literal["en", "fr"] = Field(
+        default="en", description="Language of the reasons, notes and next step."
+    )
 
 
 class ProjectProfile(BaseModel):
@@ -165,6 +168,33 @@ class NextStep(BaseModel):
     example_payload: dict
 
 
+class FollowUpOption(BaseModel):
+    """One answer to a follow-up question, as the override it stands for."""
+
+    id: str
+    overrides: dict = Field(description="Merge into AdviseRequest.overrides to apply.")
+    top_strategy: StrategyName = Field(description="Top strategy if this answer is given.")
+
+
+class FollowUpQuestion(BaseModel):
+    """A fact worth confirming. ``id`` is the AdviseOverrides field it sets."""
+
+    id: str
+    options: list[FollowUpOption]
+    current: str | None = Field(
+        default=None, description="Option the description pointed to, if any (a guess)."
+    )
+    changes_recommendation: bool
+
+
+class Confidence(BaseModel):
+    """How settled the top strategy is."""
+
+    level: Level
+    margin: int = Field(description="Score points between the first two strategies.")
+    open_questions: int = Field(description="Unanswered questions that could change the top pick.")
+
+
 class AdviseResponse(BaseModel):
     profile: ProjectProfile
     recommendations: list[StrategyRecommendation]
@@ -172,11 +202,16 @@ class AdviseResponse(BaseModel):
     hybrid_routing: HybridRouting
     compliance_notes: list[str]
     next_step: NextStep
+    follow_up_questions: list[FollowUpQuestion] = Field(default_factory=list)
+    confidence: Confidence | None = None
 
 
 # --- validation -------------------------------------------------------------
 
 MAX_VALIDATE_QUESTIONS = 20
+
+#: Access group of a private test workspace (see ValidateRequest.workspace).
+WORKSPACE_PATTERN = r"^audit-[a-z0-9]{8,40}$"
 MAX_VALIDATE_STRATEGIES = 3
 
 
@@ -204,6 +239,18 @@ class ValidateRequest(BaseModel):
     judge: bool = Field(
         default=True,
         description="Run the LLM judge on questions that carry an ideal_answer.",
+    )
+    language: Literal["en", "fr"] = Field(
+        default="en", description="Language of the winner explanation."
+    )
+    workspace: str | None = Field(
+        default=None,
+        pattern=WORKSPACE_PATTERN,
+        description=(
+            "Private test workspace: an access group the documents were ingested "
+            "under. When set, retrieval sees only those documents, so the "
+            "measurement reflects the client's sample and nothing else indexed."
+        ),
     )
 
     @field_validator("strategies")

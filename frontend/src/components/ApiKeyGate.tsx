@@ -7,16 +7,15 @@ import { useI18n } from "../i18n";
  * Shows an API key field when the backend requires one.
  *
  * The backend reports `auth_required` from GET /health, so a local instance
- * with auth disabled never sees this. The field also appears when /health
- * cannot be reached (so there is no way to tell), and whenever a request comes
+ * with auth disabled never sees this. It also appears whenever a request comes
  * back 401, e.g. because a saved key was revoked. When auth is on and no key
- * is stored, the banner explains how to mint one.
+ * is stored, the banner explains how to mint one. An unreachable backend shows
+ * nothing here: each page reports its own failed requests.
  */
 export default function ApiKeyGate() {
   const queryClient = useQueryClient();
   const { t, rich } = useI18n();
   const [authRequired, setAuthRequired] = useState<boolean | null>(null);
-  const [healthFailed, setHealthFailed] = useState(false);
   const [rejected, setRejected] = useState(false);
   const [key, setKeyState] = useState(getApiKey() ?? "");
   const [saved, setSaved] = useState(false);
@@ -26,7 +25,6 @@ export default function ApiKeyGate() {
     fetchHealth().then((h) => {
       if (cancelled) return;
       if (h) setAuthRequired(h.auth_required);
-      else setHealthFailed(true);
     });
     return () => {
       cancelled = true;
@@ -41,7 +39,7 @@ export default function ApiKeyGate() {
     return () => clearTimeout(timer);
   }, [saved]);
 
-  if (!authRequired && !healthFailed && !rejected) return null;
+  if (!authRequired && !rejected) return null;
 
   const stored = getApiKey();
 
@@ -62,17 +60,14 @@ export default function ApiKeyGate() {
     queryClient.invalidateQueries();
   }
 
-  const unreachable = healthFailed && !authRequired && !rejected;
   const title = t(
     rejected
       ? stored
         ? "apikey.rejected"
         : "apikey.required"
-      : unreachable
-        ? "apikey.unreachable"
-        : stored
-          ? "apikey.saved"
-          : "apikey.required",
+      : stored
+        ? "apikey.saved"
+        : "apikey.required",
   );
 
   return (
@@ -81,11 +76,7 @@ export default function ApiKeyGate() {
         <div className="min-w-0">
           <div className="text-sm font-medium text-zinc-200">{title}</div>
           <p className="text-xs text-zinc-500 mt-1 leading-relaxed max-w-prose">
-            {unreachable
-              ? rich("apikey.unreachableHelp", {
-                  endpoint: <code className="font-mono">GET /health</code>,
-                })
-              : stored && !rejected
+            {stored && !rejected
                 ? rich("apikey.storedHelp", {
                     header: <code className="font-mono">Authorization: Bearer …</code>,
                   })

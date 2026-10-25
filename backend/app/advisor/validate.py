@@ -20,6 +20,7 @@ import statistics
 from collections import Counter
 
 from app.access import AccessScope
+from app.advisor.messages import decimal, msg, pct
 from app.advisor.schemas import (
     ProjectProfile,
     StrategyName,
@@ -88,7 +89,9 @@ def build_scorecard(strategy: StrategyName, rows: list[ValidateRow]) -> Strategy
     )
 
 
-def pick_winner(cards: list[StrategyScorecard]) -> tuple[StrategyName | None, str]:
+def pick_winner(
+    cards: list[StrategyScorecard], lang: str = "en"
+) -> tuple[StrategyName | None, str]:
     """Choose the measured winner and explain the rule that picked it.
 
     Quality signal, in order of preference: judge score, answer F1, then
@@ -97,23 +100,28 @@ def pick_winner(cards: list[StrategyScorecard]) -> tuple[StrategyName | None, st
     """
     usable = [c for c in cards if c.errors < c.questions]
     if not usable:
-        return None, "Every run failed; check that documents are ingested and the provider is up."
+        return None, msg("winner.none", lang)
 
     if all(c.avg_judge_score is not None for c in usable):
-        signal, label = (lambda c: c.avg_judge_score or 0.0), "judge score"
+        signal, label = (lambda c: c.avg_judge_score or 0.0), msg("winner.label.judge", lang)
     elif all(c.avg_answer_f1 is not None for c in usable):
-        signal, label = (lambda c: c.avg_answer_f1 or 0.0), "answer F1 vs ideal answers"
+        signal, label = (lambda c: c.avg_answer_f1 or 0.0), msg("winner.label.f1", lang)
     else:
-        signal, label = (lambda c: 1.0 - c.refusal_rate), "answer rate (no ideal answers given)"
+        signal, label = (lambda c: 1.0 - c.refusal_rate), msg("winner.label.answer_rate", lang)
 
     best = sorted(
         usable,
         key=lambda c: (-signal(c), c.refusal_rate, c.avg_tokens_per_question, c.avg_latency_ms),
     )[0]
-    reason = (
-        f"{best.strategy} has the best {label} ({signal(best):.2f}), "
-        f"refusal rate {best.refusal_rate:.0%}, "
-        f"{best.avg_tokens_per_question:.0f} tokens and {best.avg_latency_ms:.0f} ms per question."
+    reason = msg(
+        "winner.reason",
+        lang,
+        strategy=best.strategy,
+        label=label,
+        signal=decimal(signal(best), 2, lang),
+        refusal=pct(best.refusal_rate, lang),
+        tokens=f"{best.avg_tokens_per_question:.0f}",
+        latency=f"{best.avg_latency_ms:.0f}",
     )
     return best.strategy, reason
 
@@ -203,7 +211,7 @@ async def run_validation(
             )
 
     cards = [build_scorecard(s, [r for r in rows if r.strategy == s]) for s in strategies]
-    winner, reason = pick_winner(cards)
+    winner, reason = pick_winner(cards, req.language)
     return (
         ValidateResponse(
             strategies=strategies,

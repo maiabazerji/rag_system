@@ -1,6 +1,6 @@
 # Monitoring, tracing and data residency
 
-EvalRAG can report on itself in three ways:
+Veritas RAG can report on itself in three ways:
 
 | Signal | What it is | Where it goes | Off by default? |
 |---|---|---|---|
@@ -129,7 +129,7 @@ docker compose --env-file .env -f infra/docker-compose.yml --profile monitoring 
 ```
 
 - Prometheus: <http://localhost:9090>, 15 days retention.
-- Grafana: <http://localhost:3300> (user `admin`), with the **EvalRAG overview**
+- Grafana: <http://localhost:3300> (user `admin`), with the **Veritas RAG overview**
   dashboard provisioned from `infra/monitoring/grafana/dashboards/`. Its
   "Cost, pipeline stages and context" row shows estimated cost per hour and
   over the time range by model and strategy, cost per request (p50/p95/mean),

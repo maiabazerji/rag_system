@@ -1,0 +1,568 @@
+"""User-facing advisor text in English and French.
+
+Every sentence the advisor returns (reasons, tradeoffs, configuration notes,
+routing rationale, compliance notes, next step, measured winner) lives here,
+keyed by a stable id, so a French client reads French on the result page.
+Placeholders use ``str.format``. Technical identifiers (environment variables,
+endpoints, model names) are left as they are in both languages.
+"""
+from __future__ import annotations
+
+from typing import Literal
+
+Language = Literal["en", "fr"]
+LANGUAGES: tuple[Language, ...] = ("en", "fr")
+
+MESSAGES: dict[str, dict[str, str]] = {
+    "en": {
+        # --- classic ---------------------------------------------------------
+        "classic.baseline": (
+            "On the French business benchmark (40 questions) Classic used the fewest tokens "
+            "refused unanswerable questions best (0.80) and matched Agentic on single-fact "
+            "questions."
+        ),
+        "classic.single_fact": (
+            "{pct} of questions are single-fact lookups, which dense retrieval "
+            "plus a cross-encoder rerank answers well."
+        ),
+        "classic.relational": (
+            "Relational questions spread across documents can be missed by "
+            "top-k similarity alone."
+        ),
+        "classic.exploratory": (
+            "Open-ended research questions get one retrieval pass, with no "
+            "chance to refine the query."
+        ),
+        "classic.tight_latency": (
+            "A {ms} ms budget favours the single, predictable retrieve-rerank-generate path."
+        ),
+        "classic.high_cost": (
+            "High cost sensitivity: one generation call per question, fewest tokens."
+        ),
+        "classic.small_corpus": (
+            "On a corpus this size dense search already covers most of it; the "
+            "earlier benchmark showed Graph adding nothing over Classic there."
+        ),
+        "classic.fresh": (
+            "Frequent updates only need re-embedding of changed documents; no graph "
+            "re-extraction."
+        ),
+        "classic.tradeoff.single_pass": (
+            "Single retrieval pass: questions that need facts from several documents "
+            "may miss the second hop."
+        ),
+        "classic.tradeoff.rerank": (
+            "The CPU cross-encoder rerank is the largest per-query latency cost; tune "
+            "RETRIEVAL_TOP_K down or disable rerank for very tight budgets."
+        ),
+        # --- graph -----------------------------------------------------------
+        "graph.relational": (
+            "{pct} of questions are relational/multi-hop, where walking "
+            "entity links surfaces chunks similarity search misses."
+        ),
+        "graph.size_large": (
+            "A {size} corpus is large enough that dense top-k no longer covers it, so the "
+            "graph walk can add chunks."
+        ),
+        "graph.size_small": (
+            "A {size} corpus is small: on an earlier benchmark (107 chunks) Graph scored exactly "
+            "like Classic because dense search already returned half the corpus."
+        ),
+        "graph.entities_rich": (
+            "Documents are rich in named entities (people, companies, products, clauses), "
+            "which is what the graph is built from."
+        ),
+        "graph.entities_sparse": "Few structured entities: the extracted graph would be sparse.",
+        "graph.daily": "Daily updates require re-running entity extraction on changed documents.",
+        "graph.realtime": "Real-time updates fight the offline graph-extraction step.",
+        "graph.high_cost": "Graph extraction is an extra LLM pass over the whole corpus at ingest.",
+        "graph.capped_small": (
+            "Capped below Classic: on small corpora Graph RAG is Classic with extra steps."
+        ),
+        "graph.tradeoff.extraction": (
+            "Offline entity extraction over every document ({model}) "
+            "adds ingest cost and must be re-run when documents change."
+        ),
+        "graph.tradeoff.top_k": (
+            "Only differentiates from Classic with a smaller RETRIEVAL_TOP_K; at the default "
+            "of 50 it behaved identically on an earlier benchmark."
+        ),
+        "graph.tradeoff.quality": (
+            "Answer quality depends on entity-extraction quality; the walk is limited to one hop."
+        ),
+        # --- agentic ---------------------------------------------------------
+        "agentic.exploratory": (
+            "{pct} of questions are ambiguous, multi-step research, where "
+            "letting the model search, read and re-query pays off."
+        ),
+        "agentic.single_fact": (
+            "Mostly single-fact questions: an agent loop spends ~1.6x tokens "
+            "for answers Classic already gets right."
+        ),
+        "agentic.relational": (
+            "On the French business benchmark Agentic answered multi-hop and comparison "
+            "questions best (answer correctness 0.85 vs 0.68 for Classic on multi-hop)."
+        ),
+        "agentic.low_cost": "Low cost sensitivity leaves room for the ~1.6x token spend.",
+        "agentic.cost": (
+            "Agentic used 1.6x the tokens of Classic on the French business benchmark, which "
+            "cuts against "
+            "{level} cost sensitivity."
+        ),
+        "agentic.tight_latency": (
+            "Several sequential model round-trips do not fit a {ms} ms budget reliably."
+        ),
+        "agentic.generous_latency": (
+            "A generous latency budget absorbs multiple tool-use round-trips."
+        ),
+        "agentic.capped": (
+            "Capped: agentic is only justified with a generous cost and latency budget."
+        ),
+        "agentic.tradeoff.tokens": (
+            "~1.6x the tokens of Classic on the French business benchmark, and it refused "
+            "unanswerable questions less reliably (0.60 vs 0.80)."
+        ),
+        "agentic.tradeoff.latency": (
+            "Latency varies with the number of tool calls (up to AGENTIC_MAX_ITERS={iters})."
+        ),
+        "agentic.tradeoff.precision": (
+            "Wins retrieval and context precision: it fetches less, and what it fetches is "
+            "more on-topic."
+        ),
+        # --- suggested configuration ------------------------------------------
+        "config.multilingual": (
+            "Non-English content: use a multilingual embedding model ({embedding} "
+            "or {embedding_alt}) and a multilingual cross-encoder, then re-ingest "
+            "(the vector dimension changes)."
+        ),
+        "config.small_model": (
+            "Mostly single-fact questions under high cost sensitivity: try {model} as "
+            "the generator and confirm on /advise/validate that quality holds."
+        ),
+        "config.rerank_off": (
+            "Rerank off: the CPU cross-encoder is the largest per-query latency cost. "
+            "Re-enable it if accuracy on validation drops."
+        ),
+        "config.graph_top_k": (
+            "Keep RETRIEVAL_TOP_K small so the graph walk contributes chunks dense search "
+            "missed; at 50 an earlier benchmark showed no difference from Classic."
+        ),
+        "config.graph_build": "Run POST /graph/build after ingest, and again after document updates.",
+        "config.graph_cost": "Relative cost excludes the one-off graph extraction at ingest.",
+        "config.agentic_iters": (
+            "Keep AGENTIC_MAX_ITERS low ({iters} today) and watch the "
+            "refusal rate on /advise/validate; on the French benchmark Agentic refused only "
+            "60% of unanswerable questions."
+        ),
+        "config.agentic_latency": (
+            "Latency grows with each tool call. On CPU it was still the fastest on the French "
+            "benchmark, because it skips the cross-encoder rerank."
+        ),
+        # --- hybrid routing -----------------------------------------------------
+        "hybrid.single": (
+            "One question type dominates; a single strategy is simpler to run and evaluate."
+        ),
+        "hybrid.collapsed": (
+            "The question mix is split, but the constraints (corpus size, entities, "
+            "cost, latency) send every type to the same strategy."
+        ),
+        "hybrid.recommended": (
+            "The question mix is split. Classify each question (a cheap classifier call "
+            "or keyword rules) and route it: single-fact to Classic, and the other types to the "
+            "strategy that fits them. Validate each route on its own slice of questions."
+        ),
+        # --- compliance notes -------------------------------------------------
+        "notes.eu_hosting": (
+            "EU residency: self-host Qdrant (vectors) and Postgres (API keys and usage) in an "
+            "EU region or on your own infrastructure; both are open source and run from this "
+            "repo's Docker setup."
+        ),
+        "notes.eu_claude": (
+            "Claude is also offered through cloud providers (for example Amazon Bedrock and "
+            "Google Cloud Vertex AI) that let you pick EU regions. Check the provider's current "
+            "regional availability and data-processing terms for the model you need, and point "
+            "the generator at that deployment."
+        ),
+        "notes.eu_embeddings": (
+            "Embeddings and reranking run locally (sentence-transformers), so document text is "
+            "not sent to a third party to be embedded; question and context text is sent to "
+            "the LLM provider at answer time."
+        ),
+        "notes.gdpr": (
+            "GDPR: you remain responsible for a lawful basis, a data-processing agreement with "
+            "each processor, retention limits and erasure. Make sure deleting a document also "
+            "removes its chunks from Qdrant and its triples from the entity graph."
+        ),
+        "notes.gdpr_tracing": (
+            "Tracing and logging (Langfuse, W&B, structured logs) can capture question and "
+            "answer text: disable them or self-host them in the same region for personal data."
+        ),
+        "notes.sensitive": (
+            "Sensitive data: keep the ACL filter on so each user only retrieves documents "
+            "they may read, and remember that question and context text reaches the LLM "
+            "provider at answer time; pick an EU region or a local generator if that is "
+            "not acceptable."
+        ),
+        "notes.on_prem": (
+            "On-premises: the vector store, database, embeddings and reranker all run on your "
+            "hardware. Claude is a hosted API, so a strict air-gap needs a local generator "
+            "(GENERATOR_PROVIDER=local with Ollama); expect different quality and re-run "
+            "/advise/validate."
+        ),
+        "notes.languages_multilingual": (
+            "Languages ({langs}): the configured {embedding} embedding "
+            "model is multilingual, so questions and documents can be in different "
+            "languages. {better} ranks better at a higher CPU cost; "
+            "switching models requires a re-ingest."
+        ),
+        "notes.languages_english_only": (
+            "Languages ({langs}): the configured {embedding} embedding "
+            "model and {reranker} reranker are English-only. Switch "
+            "EMBEDDING_MODEL to {multi} or {multi_alt} "
+            "and RERANKER_MODEL to a multilingual cross-encoder such as "
+            "{multi_reranker}, then re-ingest."
+        ),
+        "notes.disclaimer": (
+            "These notes are general engineering guidance, not legal advice or a statement "
+            "of certification; confirm requirements with your compliance team."
+        ),
+        # --- next step ----------------------------------------------------------
+        "next_step.summary": (
+            "This ranking is a prior, not a measurement. Ingest a representative "
+            "sample of your documents (POST /ingest), then send 10-20 real user "
+            "questions, ideally with the answer you expect, to POST /advise/validate. "
+            "It runs them through {strategies} and reports refusals, "
+            "latency, tokens and quality, and names the measured winner."
+        ),
+        "next_step.example_question": "<one of your real user questions>",
+        "next_step.and": " and ",
+        # --- measured winner ----------------------------------------------------
+        "winner.none": (
+            "Every run failed; check that documents are ingested and the provider is up."
+        ),
+        "winner.label.judge": "judge score",
+        "winner.label.f1": "answer F1 vs ideal answers",
+        "winner.label.answer_rate": "answer rate (no ideal answers given)",
+        "winner.reason": (
+            "{strategy} has the best {label} ({signal}), "
+            "refusal rate {refusal}, "
+            "{tokens} tokens and {latency} ms per question."
+        ),
+        # --- value labels -------------------------------------------------------
+        "size.tiny": "tiny",
+        "size.small": "small",
+        "size.medium": "medium",
+        "size.large": "large",
+        "size.xlarge": "xlarge",
+        "level.low": "low",
+        "level.medium": "medium",
+        "level.high": "high",
+    },
+    "fr": {
+        # --- classic ---------------------------------------------------------
+        "classic.baseline": (
+            "Sur le benchmark d'entreprise français (40 questions), Classic a utilisé le moins de "
+            "tokens, a le mieux refusé les questions sans réponse (0,80) et a égalé Agentic sur "
+            "les questions factuelles."
+        ),
+        "classic.single_fact": (
+            "{pct} des questions portent sur un fait précis, ce que la recherche dense "
+            "suivie d'un reclassement par cross-encoder traite bien."
+        ),
+        "classic.relational": (
+            "Les questions qui relient plusieurs documents peuvent échapper à une simple "
+            "recherche par similarité top-k."
+        ),
+        "classic.exploratory": (
+            "Les questions de recherche ouvertes n'ont droit qu'à une seule passe de "
+            "recherche, sans possibilité d'affiner la requête."
+        ),
+        "classic.tight_latency": (
+            "Un budget de {ms} ms favorise le chemin unique et prévisible "
+            "recherche, reclassement, génération."
+        ),
+        "classic.high_cost": (
+            "Forte sensibilité au coût : un seul appel de génération par question, "
+            "le moins de tokens possible."
+        ),
+        "classic.small_corpus": (
+            "Sur un corpus de cette taille, la recherche dense en couvre déjà l'essentiel ; "
+            "un benchmark antérieur a montré que Graph n'y apportait rien de plus que Classic."
+        ),
+        "classic.fresh": (
+            "Des mises à jour fréquentes ne demandent que de revectoriser les documents "
+            "modifiés, sans réextraire de graphe."
+        ),
+        "classic.tradeoff.single_pass": (
+            "Une seule passe de recherche : les questions qui demandent des faits issus de "
+            "plusieurs documents peuvent manquer le second saut."
+        ),
+        "classic.tradeoff.rerank": (
+            "Le reclassement par cross-encoder sur CPU est le principal coût de latence par "
+            "requête ; réduisez RETRIEVAL_TOP_K ou désactivez le reclassement pour des "
+            "budgets très serrés."
+        ),
+        # --- graph -----------------------------------------------------------
+        "graph.relational": (
+            "{pct} des questions sont relationnelles ou à plusieurs sauts : parcourir les "
+            "liens entre entités fait remonter des passages que la recherche par similarité "
+            "manque."
+        ),
+        "graph.size_large": (
+            "Un corpus {size} est assez grand pour que le top-k dense ne le couvre plus ; "
+            "le parcours du graphe peut donc ajouter des passages."
+        ),
+        "graph.size_small": (
+            "Un corpus {size} reste petit : sur un benchmark antérieur (107 passages), Graph a obtenu "
+            "exactement le même score que Classic, car la recherche dense renvoyait déjà la "
+            "moitié du corpus."
+        ),
+        "graph.entities_rich": (
+            "Les documents citent beaucoup d'entités nommées (personnes, entreprises, "
+            "produits, clauses), qui sont la matière première du graphe."
+        ),
+        "graph.entities_sparse": (
+            "Peu d'entités structurées : le graphe extrait serait clairsemé."
+        ),
+        "graph.daily": (
+            "Des mises à jour quotidiennes imposent de relancer l'extraction d'entités sur "
+            "les documents modifiés."
+        ),
+        "graph.realtime": (
+            "Des mises à jour en temps réel s'accordent mal avec l'extraction du graphe, "
+            "faite hors ligne."
+        ),
+        "graph.high_cost": (
+            "L'extraction du graphe ajoute une passe de LLM sur tout le corpus lors de "
+            "l'ingestion."
+        ),
+        "graph.capped_small": (
+            "Plafonné sous Classic : sur un petit corpus, Graph RAG revient à Classic avec "
+            "des étapes en plus."
+        ),
+        "graph.tradeoff.extraction": (
+            "L'extraction d'entités hors ligne sur chaque document ({model}) augmente le coût "
+            "d'ingestion et doit être relancée quand les documents changent."
+        ),
+        "graph.tradeoff.top_k": (
+            "Ne se distingue de Classic qu'avec un RETRIEVAL_TOP_K plus petit ; à la valeur "
+            "par défaut de 50, il s'est comporté à l'identique sur un benchmark antérieur."
+        ),
+        "graph.tradeoff.quality": (
+            "La qualité des réponses dépend de celle de l'extraction d'entités ; le parcours "
+            "est limité à un saut."
+        ),
+        # --- agentic ---------------------------------------------------------
+        "agentic.exploratory": (
+            "{pct} des questions sont des recherches ambiguës en plusieurs étapes, où laisser "
+            "le modèle chercher, lire et reformuler est payant."
+        ),
+        "agentic.single_fact": (
+            "Surtout des questions factuelles : une boucle d'agent dépense environ 1,6 fois "
+            "plus de tokens pour des réponses que Classic trouve déjà."
+        ),
+        "agentic.relational": (
+            "Sur le benchmark d'entreprise français, Agentic a le mieux répondu aux questions "
+            "à plusieurs sauts et de comparaison (exactitude 0,85 contre 0,68 pour Classic "
+            "sur les questions à plusieurs sauts)."
+        ),
+        "agentic.low_cost": (
+            "Une faible sensibilité au coût laisse de la marge pour une dépense d'environ "
+            "1,6 fois plus de tokens."
+        ),
+        "agentic.cost": (
+            "Agentic a utilisé 1,6 fois plus de tokens que Classic sur le benchmark d'entreprise "
+            "français, ce qui "
+            "va à l'encontre d'une sensibilité au coût {level}."
+        ),
+        "agentic.tight_latency": (
+            "Plusieurs allers-retours successifs avec le modèle ne tiennent pas de façon "
+            "fiable dans un budget de {ms} ms."
+        ),
+        "agentic.generous_latency": (
+            "Un budget de latence confortable absorbe plusieurs allers-retours d'outils."
+        ),
+        "agentic.capped": (
+            "Plafonné : l'approche agentique ne se justifie qu'avec des budgets de coût et "
+            "de latence confortables."
+        ),
+        "agentic.tradeoff.tokens": (
+            "Environ 1,6 fois plus de tokens que Classic sur le benchmark d'entreprise français, "
+            "et des refus moins fiables sur les questions sans réponse (0,60 contre 0,80)."
+        ),
+        "agentic.tradeoff.latency": (
+            "La latence dépend du nombre d'appels d'outils (jusqu'à "
+            "AGENTIC_MAX_ITERS={iters})."
+        ),
+        "agentic.tradeoff.precision": (
+            "Meilleure précision de recherche et de contexte : il récupère moins, et ce qu'il "
+            "récupère est plus pertinent."
+        ),
+        # --- suggested configuration ------------------------------------------
+        "config.multilingual": (
+            "Contenu non anglais : utilisez un modèle d'embedding multilingue ({embedding} "
+            "ou {embedding_alt}) et un cross-encoder multilingue, puis réingérez les "
+            "documents (la dimension des vecteurs change)."
+        ),
+        "config.small_model": (
+            "Surtout des questions factuelles avec une forte sensibilité au coût : essayez "
+            "{model} comme générateur et vérifiez sur /advise/validate que la qualité tient."
+        ),
+        "config.rerank_off": (
+            "Reclassement désactivé : le cross-encoder sur CPU est le principal coût de "
+            "latence par requête. Réactivez-le si la précision baisse lors de la validation."
+        ),
+        "config.graph_top_k": (
+            "Gardez RETRIEVAL_TOP_K petit pour que le parcours du graphe apporte des passages "
+            "que la recherche dense a manqués ; à 50, un benchmark antérieur ne montrait aucune "
+            "différence avec Classic."
+        ),
+        "config.graph_build": (
+            "Lancez POST /graph/build après l'ingestion, puis à nouveau après chaque mise à "
+            "jour des documents."
+        ),
+        "config.graph_cost": (
+            "Le coût relatif n'inclut pas l'extraction ponctuelle du graphe à l'ingestion."
+        ),
+        "config.agentic_iters": (
+            "Gardez AGENTIC_MAX_ITERS bas ({iters} aujourd'hui) et surveillez le taux de "
+            "refus sur /advise/validate ; sur le benchmark français, Agentic n'a refusé que 60 % "
+            "des questions sans réponse."
+        ),
+        "config.agentic_latency": (
+            "La latence augmente à chaque appel d'outil. Sur CPU, Agentic restait le plus rapide "
+            "sur le benchmark français, car il saute le reclassement par cross-encoder."
+        ),
+        # --- hybrid routing -----------------------------------------------------
+        "hybrid.single": (
+            "Un type de question domine ; une seule stratégie est plus simple à exploiter "
+            "et à évaluer."
+        ),
+        "hybrid.collapsed": (
+            "Les types de questions sont variés, mais les contraintes (taille du corpus, "
+            "entités, coût, latence) envoient chaque type vers la même stratégie."
+        ),
+        "hybrid.recommended": (
+            "Les types de questions sont variés. Classez chaque question (un appel de "
+            "classification peu coûteux ou des règles par mots-clés) et orientez-la : les "
+            "questions factuelles vers Classic, les autres vers la stratégie qui leur "
+            "convient. Validez chaque route sur sa propre part de questions."
+        ),
+        # --- compliance notes -------------------------------------------------
+        "notes.eu_hosting": (
+            "Résidence dans l'UE : hébergez vous-même Qdrant (vecteurs) et Postgres (clés "
+            "d'API et usage) dans une région de l'UE ou sur votre propre infrastructure ; "
+            "les deux sont open source et tournent avec la configuration Docker de ce dépôt."
+        ),
+        "notes.eu_claude": (
+            "Claude est aussi proposé par des fournisseurs cloud (par exemple Amazon Bedrock "
+            "et Google Cloud Vertex AI) qui permettent de choisir une région de l'UE. "
+            "Vérifiez la disponibilité régionale actuelle et les conditions de traitement des "
+            "données pour le modèle dont vous avez besoin, puis pointez le générateur vers "
+            "ce déploiement."
+        ),
+        "notes.eu_embeddings": (
+            "Les embeddings et le reclassement tournent en local (sentence-transformers) : "
+            "le texte des documents n'est pas envoyé à un tiers pour être vectorisé ; le "
+            "texte des questions et du contexte est envoyé au fournisseur du LLM au moment "
+            "de la réponse."
+        ),
+        "notes.gdpr": (
+            "RGPD : vous restez responsable de la base légale, d'un accord de traitement des "
+            "données avec chaque sous-traitant, des durées de conservation et de "
+            "l'effacement. Vérifiez que la suppression d'un document retire aussi ses "
+            "passages de Qdrant et ses triplets du graphe d'entités."
+        ),
+        "notes.gdpr_tracing": (
+            "Le traçage et la journalisation (Langfuse, W&B, logs structurés) peuvent "
+            "enregistrer le texte des questions et des réponses : désactivez-les ou "
+            "hébergez-les dans la même région pour les données personnelles."
+        ),
+        "notes.sensitive": (
+            "Données sensibles : gardez le filtre d'accès (ACL) actif pour que chaque "
+            "utilisateur ne retrouve que les documents qu'il peut lire, et rappelez-vous que "
+            "le texte des questions et du contexte est envoyé au fournisseur du LLM au moment "
+            "de la réponse ; choisissez une région de l'UE ou un générateur local si ce "
+            "n'est pas acceptable."
+        ),
+        "notes.on_prem": (
+            "Sur site : la base vectorielle, la base de données, les embeddings et le "
+            "reclassement tournent tous sur votre matériel. Claude est une API hébergée : un "
+            "isolement strict exige donc un générateur local (GENERATOR_PROVIDER=local avec "
+            "Ollama) ; attendez-vous à une qualité différente et relancez /advise/validate."
+        ),
+        "notes.languages_multilingual": (
+            "Langues ({langs}) : le modèle d'embedding configuré, {embedding}, est "
+            "multilingue, donc questions et documents peuvent être dans des langues "
+            "différentes. {better} classe mieux, pour un coût CPU plus élevé ; changer de "
+            "modèle impose de réingérer les documents."
+        ),
+        "notes.languages_english_only": (
+            "Langues ({langs}) : le modèle d'embedding configuré, {embedding}, et le "
+            "reclasseur {reranker} ne gèrent que l'anglais. Passez EMBEDDING_MODEL à {multi} "
+            "ou {multi_alt} et RERANKER_MODEL à un cross-encoder multilingue comme "
+            "{multi_reranker}, puis réingérez les documents."
+        ),
+        "notes.disclaimer": (
+            "Ces notes sont des conseils d'ingénierie généraux, ni un avis juridique ni une "
+            "certification ; confirmez les exigences avec votre équipe conformité."
+        ),
+        # --- next step ----------------------------------------------------------
+        "next_step.summary": (
+            "Ce classement est une estimation a priori, pas une mesure. Ingérez un "
+            "échantillon représentatif de vos documents (POST /ingest), puis envoyez 10 à 20 "
+            "vraies questions d'utilisateurs, idéalement avec la réponse attendue, à POST "
+            "/advise/validate. Elles passent par {strategies}, et vous obtenez refus, "
+            "latence, tokens et qualité, ainsi que la stratégie gagnante mesurée."
+        ),
+        "next_step.example_question": "<une de vos vraies questions d'utilisateur>",
+        "next_step.and": " et ",
+        # --- measured winner ----------------------------------------------------
+        "winner.none": (
+            "Toutes les exécutions ont échoué ; vérifiez que les documents sont ingérés et "
+            "que le fournisseur répond."
+        ),
+        "winner.label.judge": "score du juge",
+        "winner.label.f1": "F1 par rapport aux réponses attendues",
+        "winner.label.answer_rate": "taux de réponse (aucune réponse attendue fournie)",
+        "winner.reason": (
+            "{strategy} obtient le meilleur {label} ({signal}), un taux de refus de "
+            "{refusal}, {tokens} tokens et {latency} ms par question."
+        ),
+        # --- value labels -------------------------------------------------------
+        "size.tiny": "très petit",
+        "size.small": "petit",
+        "size.medium": "moyen",
+        "size.large": "grand",
+        "size.xlarge": "très grand",
+        "level.low": "faible",
+        "level.medium": "moyenne",
+        "level.high": "élevée",
+    },
+}
+
+
+def normalize(lang: str | None) -> Language:
+    """Map any language tag to a supported one ("fr-FR" -> "fr"), defaulting to English."""
+    code = (lang or "en").strip().lower()[:2]
+    return "fr" if code == "fr" else "en"
+
+
+def msg(key: str, lang: str | None = "en", **kw: object) -> str:
+    """Format message ``key`` in ``lang``, falling back to English."""
+    table = MESSAGES[normalize(lang)]
+    template = table.get(key) or MESSAGES["en"][key]
+    return template.format(**kw)
+
+
+def pct(fraction: float, lang: str | None = "en") -> str:
+    """A whole percentage: "80%" in English, "80 %" in French."""
+    if normalize(lang) == "fr":
+        return f"{fraction * 100:.0f} %"
+    return f"{fraction:.0%}"
+
+
+def decimal(value: float, digits: int, lang: str | None = "en") -> str:
+    """A number with a decimal comma in French."""
+    text = f"{value:.{digits}f}"
+    return text.replace(".", ",") if normalize(lang) == "fr" else text

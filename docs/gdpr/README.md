@@ -1,8 +1,8 @@
-# GDPR guide for EvalRAG deployers
+# GDPR guide for Veritas RAG deployers
 
 > **This is not legal advice.** It describes what the software does so that you, the deployer and data controller, can do your own assessment with your DPO or counsel. The features below help you meet GDPR obligations. They do not make a deployment compliant on their own.
 
-EvalRAG processes whatever you ingest and whatever your users ask. If either can contain personal data (CVs, support tickets, HR policies with names, questions that mention a colleague), the GDPR applies to your deployment and you are the controller.
+Veritas RAG processes whatever you ingest and whatever your users ask. If either can contain personal data (CVs, support tickets, HR policies with names, questions that mention a colleague), the GDPR applies to your deployment and you are the controller.
 
 - [What personal data the system processes](#what-personal-data-the-system-processes)
 - [Where it is stored](#where-it-is-stored)
@@ -31,7 +31,7 @@ EvalRAG processes whatever you ingest and whatever your users ask. If either can
 | Logs | Request ids, paths, error messages | All components |
 | Human ratings | Question, answer, rating, free-text comment | `/eval` rating endpoints |
 
-EvalRAG processes no special-category data (art. 9) on purpose. If your documents contain health, union or other special-category data, you need an art. 9 condition and should seriously consider `PII_MODE_INGEST=reject` for that corpus or leaving it out altogether.
+Veritas RAG processes no special-category data (art. 9) on purpose. If your documents contain health, union or other special-category data, you need an art. 9 condition and should seriously consider `PII_MODE_INGEST=reject` for that corpus or leaving it out altogether.
 
 ## Where it is stored
 
@@ -77,7 +77,7 @@ Where it applies:
 - Detection covers the formats above, mostly French ones. Other national identifiers, postal addresses and dates of birth are not detected.
 - SIREN is a bare 9-digit number with a 1-in-10 check, so `mask` will sometimes mask an unrelated number. That is the conservative failure.
 - **Questions are not masked before they reach the LLM**, only before they are stored in traces and logs. Answering a question needs the question.
-- Masking is irreversible. Keep the originals elsewhere if you need them. EvalRAG does not keep them.
+- Masking is irreversible. Keep the originals elsewhere if you need them. Veritas RAG does not keep them.
 
 ## Lawful basis
 
@@ -180,7 +180,7 @@ curl -H "X-Admin-Key: $ADMIN_KEY" http://localhost:8011/privacy/export/42 > expo
 }
 ```
 
-`complete: false` with `errors` naming the sections means a store could not be read. Retry before you send the export. Answer within one month (art. 12(3)). The export covers what EvalRAG stores. Add what your other systems hold about the person.
+`complete: false` with `errors` naming the sections means a store could not be read. Retry before you send the export. Answer within one month (art. 12(3)). The export covers what Veritas RAG stores. Add what your other systems hold about the person.
 
 ## Subprocessors
 

@@ -46,7 +46,7 @@ FROM base AS dev
 
 # Editable: site-packages only points at /app/app, so the real source copied
 # (and bind-mounted) below is what gets imported.
-RUN pip install -e ".[dev,tracing]"
+RUN pip install -e ".[dev,tracing,ragas]"
 
 COPY app ./app
 COPY tests ./tests

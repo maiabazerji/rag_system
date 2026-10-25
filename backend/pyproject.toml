@@ -41,6 +41,10 @@ openai = ["openai>=1.50,<3.0"]
 # Optional eval dashboards. Langfuse needs no SDK: traces go to its OTLP
 # endpoint over httpx (app/tracing/langfuse_exporter.py).
 tracing = ["wandb>=0.18,<1.0"]
+# RAGAS evaluation (app/eval/ragas_eval.py, `run_eval.py --scorer ragas|both`).
+# ragas 0.4.3 still imports langchain_community.chat_models.vertexai at import
+# time, which langchain-community 0.4 removed, hence the upper pin.
+ragas = ["ragas>=0.4.3,<0.5", "langchain-community>=0.3,<0.4"]
 dev = [
     "pytest>=8.3,<9.0",
     "pytest-asyncio>=0.24,<2.0",

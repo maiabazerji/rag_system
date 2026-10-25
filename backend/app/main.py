@@ -81,7 +81,7 @@ async def lifespan(app: FastAPI):
         langfuse_exporter.shutdown()
 
 
-app = FastAPI(title="EvalRAG", version="0.3.0", lifespan=lifespan)
+app = FastAPI(title="Veritas RAG", version="0.3.0", lifespan=lifespan)
 app.add_exception_handler(StoreUnavailable, store_unavailable_handler)
 
 app.add_middleware(RequestIDMiddleware)

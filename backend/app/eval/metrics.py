@@ -21,6 +21,14 @@ Run accounting. Every example ends in exactly one status:
 ``not_judged``
     Generation succeeded and the judge was disabled (``--no-judge``).
 
+Scorers. ``scorer="judge"`` (the default) scores answers with the project's
+LLM judge, ``"ragas"`` with RAGAS (:mod:`app.eval.ragas_eval`) and ``"both"``
+with both, on the same answers. RAGAS metrics are stored as ``ragas_*`` and
+never replace a judge dimension. With ``"ragas"`` alone, a row is ``scored``
+when at least ``ragas_faithfulness`` was measured; otherwise it counts as
+``judge_failed`` (the scorer failed), with failure stage ``"ragas"``. With
+``"both"`` the judge decides the status and RAGAS errors are kept on the row.
+
 Aggregates (``mean``/``std``/``n`` per metric) are computed only over the
 examples where that metric was measured: judge dimensions over ``scored``
 rows, retrieval metrics over rows that have relevance labels and a successful
@@ -51,7 +59,7 @@ from collections import Counter
 from collections.abc import Iterable, Sequence
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 from app.access import AccessScope
 from app.config import settings
@@ -64,6 +72,7 @@ from app.eval.dataset import (
     question_type_of,
 )
 from app.eval.judge import DIMENSIONS, JudgeOutcome, judge, judge_detailed
+from app.eval.ragas_eval import RAGAS_METRICS, ragas_version, score_with_ragas
 from app.eval.retrieval import (
     DEFAULT_K_VALUES,
     aggregate_retrieval,
@@ -91,6 +100,9 @@ STATUS_SCORED = "scored"
 STATUS_JUDGE_FAILED = "judge_failed"
 STATUS_GENERATION_FAILED = "generation_failed"
 STATUS_NOT_JUDGED = "not_judged"
+
+Scorer = Literal["judge", "ragas", "both"]
+SCORERS: tuple[str, ...] = ("judge", "ragas", "both")
 
 #: Cost metrics reported per question and aggregated like any other metric.
 COST_METRICS = ("latency_ms", "total_tokens")
@@ -275,6 +287,7 @@ async def _run_example(
     judge_answers: bool = True,
     access: AccessScope | None = None,
     k_values: Sequence[int] = DEFAULT_K_VALUES,
+    scorer: Scorer = "judge",
 ) -> dict:
     """Answer one golden example, then score its retrieval and its answer.
 
@@ -302,6 +315,7 @@ async def _run_example(
         "score": None,
         "retrieval": None,
         "judge": None,
+        "ragas": None,
         "error": None,
         "metrics": {},
         "doc_ids": [],
@@ -369,8 +383,30 @@ async def _run_example(
         # even when the judge is unavailable.
         row["retrieval"] = score_example_retrieval(ex, docs, k_values)
 
-        if not judge_answers:
-            row["status"] = STATUS_NOT_JUDGED
+        use_judge = judge_answers and scorer in ("judge", "both")
+        if scorer in ("ragas", "both"):
+            contexts = list(extra.get("context_texts") or [])
+            if not contexts and extra.get("context_text"):
+                contexts = [extra["context_text"]]
+            ragas = await score_with_ragas(
+                row["question"], ans.answer, contexts, reference=row["ideal_answer"]
+            )
+            row["ragas"] = ragas.as_row()
+            if not use_judge:
+                if "ragas_faithfulness" in ragas.scores:
+                    row["status"] = STATUS_SCORED
+                else:
+                    row["status"] = STATUS_JUDGE_FAILED
+                    reason = ragas.error or ragas.errors.get("ragas_faithfulness") or (
+                        ragas.skipped.get("ragas_faithfulness") or "faithfulness not measured"
+                    )
+                    row["error"] = _failure(
+                        row, "ragas", ragas.error_type or "RagasError", reason
+                    )
+
+        if not use_judge:
+            if row["status"] is None:
+                row["status"] = STATUS_NOT_JUDGED
         else:
             outcome = await score_example_detailed(
                 ex, ans.model_dump(), extra.get("context_text")
@@ -402,6 +438,9 @@ def _row_metrics(row: dict) -> dict[str, float]:
     for dim, value in (row.get("score") or {}).items():
         if value is not None:
             out[dim] = float(value)
+    for name, value in ((row.get("ragas") or {}).get("scores") or {}).items():
+        if value is not None:
+            out[name] = float(value)
     retrieval = row.get("retrieval") or {}
     for key, value in retrieval.items():
         if key == "mrr" or "@" in key:
@@ -445,8 +484,14 @@ def percentile(values: Sequence[float], q: float) -> float | None:
 
 
 def metric_order(k_values: Sequence[int] = DEFAULT_K_VALUES) -> list[str]:
-    """Report order: judge dimensions, retrieval metrics, cost."""
-    return [*DIMENSIONS, *ranked_metric_names(k_values), *BEHAVIOUR_METRICS, *COST_METRICS]
+    """Report order: judge dimensions, RAGAS metrics, retrieval metrics, cost."""
+    return [
+        *DIMENSIONS,
+        *RAGAS_METRICS,
+        *ranked_metric_names(k_values),
+        *BEHAVIOUR_METRICS,
+        *COST_METRICS,
+    ]
 
 
 def aggregate_rows(
@@ -525,6 +570,7 @@ async def run_evaluation(
     judge_answers: bool = True,
     access: AccessScope | None = None,
     k_values: Sequence[int] = DEFAULT_K_VALUES,
+    scorer: Scorer = "judge",
 ) -> dict:
     """Run a golden dataset end to end and aggregate the scores.
 
@@ -545,6 +591,7 @@ async def run_evaluation(
         access: Retrieve only documents this scope may read. The API passes
             the caller's; ``None`` (scripts) is unrestricted.
         k_values: Rank cutoffs for the @K retrieval metrics.
+        scorer: ``"judge"``, ``"ragas"`` or ``"both"`` (see the module docstring).
 
     Returns:
         The run record (also saved under ``RUNS_DIR``). Key fields:
@@ -556,6 +603,8 @@ async def run_evaluation(
         ``cost``, and ``per_example`` rows. The legacy ``aggregate`` (judge
         means) and ``retrieval_aggregate`` blocks are kept for older clients.
     """
+    if scorer not in SCORERS:
+        raise ValueError(f"scorer must be one of {SCORERS}, got {scorer!r}")
     k_values = tuple(sorted(set(k_values)))
     examples = load_dataset(dataset)
     if not examples:
@@ -592,6 +641,7 @@ async def run_evaluation(
         "prompt_version": prompt_version,
         "n_examples": len(examples),
         "rubric_version": RUBRIC_VERSION,
+        "scorer": scorer,
     }
 
     semaphore = asyncio.Semaphore(settings.eval_concurrency)
@@ -611,6 +661,7 @@ async def run_evaluation(
                         judge_answers,
                         access,
                         k_values,
+                        scorer,
                     )
                     for i, ex in enumerate(examples)
                 )
@@ -650,6 +701,8 @@ async def run_evaluation(
     mode = _most_common(p.get("retrieval_mode") for p in per_example)
     r_config = retrieval_config(mode)
     judge_rows = [p["judge"] for p in per_example if p.get("judge")]
+    judged = judge_answers and scorer in ("judge", "both")
+    uses_ragas = scorer in ("ragas", "both")
 
     result = {
         "schema_version": RUN_SCHEMA_VERSION,
@@ -660,16 +713,19 @@ async def run_evaluation(
         "requested_provider": provider,
         "requested_model": model,
         "prompt_version": prompt_version,
-        "judge_model": settings.judge_model if judge_answers else None,
-        "rubric_version": RUBRIC_VERSION if judge_answers else None,
-        "rubric_fingerprint": rubric_fingerprint() if judge_answers else None,
+        "judge_model": settings.judge_model if judged else None,
+        "rubric_version": RUBRIC_VERSION if judged else None,
+        "rubric_fingerprint": rubric_fingerprint() if judged else None,
+        "scorer": scorer,
+        "ragas_version": ragas_version() if uses_ragas else None,
+        "ragas_model": settings.judge_model if uses_ragas else None,
         "embedding_model": settings.embedding_model,
         "reranker_model": settings.reranker_model,
         "retrieval_mode": r_config["mode"],
         "retrieval_config": r_config,
         "config_hash": config_hash(r_config),
         "k_values": list(k_values),
-        "judged": judge_answers,
+        "judged": judged,
         "n": len(examples),
         **counts,
         "n_unscored": len(examples) - counts["n_scored"],

@@ -12,6 +12,8 @@
     @apply bg-bg text-zinc-200 font-sans antialiased;
     font-feature-settings: "ss01", "cv11";
   }
+  /* Inter stands in for the old monospace font, so keep figures aligned. */
+  .font-mono { font-variant-numeric: tabular-nums; }
   h1, h2, h3 {
     font-feature-settings: "ss01";
     letter-spacing: -0.01em;
@@ -32,8 +34,11 @@
   .card {
     @apply bg-bg-surface border border-bg-border rounded-xl p-6;
   }
+  /* Disabled is grey, not faded amber, so it never reads as clickable. */
   .btn-primary {
-    @apply btn bg-accent text-bg hover:bg-accent-hover active:scale-[0.98];
+    @apply btn bg-accent text-bg hover:bg-accent-hover active:scale-[0.98]
+           disabled:bg-bg-elevated disabled:text-zinc-500 disabled:opacity-100
+           disabled:hover:bg-bg-elevated disabled:active:scale-100;
   }
   .btn-ghost {
     @apply btn text-zinc-300 hover:bg-bg-elevated hover:text-white border border-bg-border;
@@ -66,7 +71,6 @@
   }
   .display {
     @apply font-display tracking-tight;
-    font-variation-settings: "opsz" 96, "SOFT" 50;
   }
   .answer-content {
     @apply text-sm leading-relaxed space-y-2;

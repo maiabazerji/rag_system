@@ -427,6 +427,8 @@ class GraphRAG(Strategy):
                 "subgraph": subgraph_text,
                 "retrieved_ids": [c.id for c in ranked],
                 "retrieved_docs": [c.metadata.get("filename") for c in ranked],
+                # Passages only: the subgraph summary is not a retrieved chunk.
+                "context_texts": [c.text for c in ranked],
                 "context_text": augmented_ctx,
                 "retrieval": retrieval.diagnostics_for(ranked).model_dump(),
                 **grounding_extra(grounded, raw, cited),

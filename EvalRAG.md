@@ -1,4 +1,4 @@
-# EvalRAG design blueprint
+# Veritas RAG design blueprint
 
 ## Table of Contents
 
@@ -32,7 +32,7 @@
 
 ## A. Project Overview
 
-**EvalRAG** is a full-stack AI platform demonstrating real-world LLM engineering: retrieval, evaluation, prompt regression testing, structured outputs, reranking, and observability. It models the components companies typically deploy when shipping LLM-based assistants.
+**Veritas RAG** is a full-stack AI platform demonstrating real-world LLM engineering: retrieval, evaluation, prompt regression testing, structured outputs, reranking, and observability. It models the components companies typically deploy when shipping LLM-based assistants.
 
 > **Blueprint, not a description of what is built.** This is the design the project grew from. Each section starts with a **Status** line saying what is implemented, what differs and what is not implemented, checked against the code. What ships: hybrid dense + BM25 retrieval fused with RRF, cross-encoder reranking, grounded answers with validated citations, the evaluation harness and regression gate, Qdrant and Postgres under Docker Compose (no Redis, no queue, no Kubernetes manifests), and non-streaming JSON responses. The [README](./README.md) and [LEARN.md](./LEARN.md) describe the running system.
 

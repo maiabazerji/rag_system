@@ -1,12 +1,12 @@
-# EvalRAG — Measuring and Improving Retrieval-Augmented Generation Systems
+# Veritas RAG — Measuring and Improving Retrieval-Augmented Generation Systems
 
-This case study describes how EvalRAG was turned from a working RAG comparison bench into a system whose retrieval and answers can be measured. It covers the audit that started the work, the changes to retrieval, grounding and evaluation, and what could and could not be measured. Every claim refers to code in this repository. The before-state is documented in [ARCHITECTURE_AUDIT.md](ARCHITECTURE_AUDIT.md) (commit `054a182`). The current system is described in the [README](../README.md).
+This case study describes how Veritas RAG was turned from a working RAG comparison bench into a system whose retrieval and answers can be measured. It covers the audit that started the work, the changes to retrieval, grounding and evaluation, and what could and could not be measured. Every claim refers to code in this repository. The before-state is documented in [ARCHITECTURE_AUDIT.md](ARCHITECTURE_AUDIT.md) (commit `054a182`). The current system is described in the [README](../README.md).
 
 ---
 
 ## 1. Problem
 
-EvalRAG answers questions over a private corpus with three strategies (classic, graph, agentic) and was meant to show which strategy works better on a given corpus. The audit of commit `054a182` found that several of its measurements did not measure what they appeared to:
+Veritas RAG answers questions over a private corpus with three strategies (classic, graph, agentic) and was meant to show which strategy works better on a given corpus. The audit of commit `054a182` found that several of its measurements did not measure what they appeared to:
 
 - **Sources did not match citations.** For the classic and graph strategies, `sources` were the first five reranked chunks, whatever the model cited. Inline `[chunk_id]` citations were never checked, so an invented id went unnoticed (audit §3.9).
 - **`confidence` was a constant**: 0.85 by default, 0.9 or 0.6 for the agentic strategy (audit §1).
@@ -107,7 +107,7 @@ The constant confidence was replaced by an evidence score: `0.5·coverage + 0.2�
 
 Only the following have been measured on the current pipeline.
 
-**Test suite.** 1,495 backend tests pass, with 95% line coverage (CI floor: 90%). The frontend has 102 Vitest tests. ruff and mypy are clean. The audit baseline was 928 tests at 92%. The offline end-to-end tests (commit `7b147c2`) run the real parsers, chunker, PII masking, in-memory Qdrant, BM25 and RRF, citation validation, the eval harness and erasure. The embedder and the model are replaced by documented test doubles.
+**Test suite.** 1,553 backend tests pass, with 95% line coverage (CI floor: 90%). The frontend has 197 Vitest tests, 1,750 in total. ruff and mypy are clean. The audit baseline was 928 tests at 92%. The offline end-to-end tests (commit `7b147c2`) run the real parsers, chunker, PII masking, in-memory Qdrant, BM25 and RRF, citation validation, the eval harness and erasure. The embedder and the model are replaced by documented test doubles.
 
 **BM25 retrieval benchmark** (`scripts/benchmark_retrieval.py`, sparse mode, reranking off, commit `ed63154`; files in `data/benchmarks/`):
 

@@ -15,6 +15,8 @@ Usage:
     python scripts/run_eval.py --strategy graph
     python scripts/run_eval.py --all                    # all three, side by side
     python scripts/run_eval.py --all --no-judge         # retrieval only, ~half the cost
+    python scripts/run_eval.py --all --scorer ragas     # score answers with RAGAS instead
+    python scripts/run_eval.py --all --scorer both      # judge and RAGAS on the same answers
     python scripts/run_eval.py --json > run.json
     python scripts/run_eval.py --k 1,5,20               # retrieval cutoffs
     python scripts/run_eval.py --fail-on-regression     # CI gate
@@ -39,7 +41,8 @@ from app.eval import metrics as eval_metrics  # noqa: E402
 from app.eval import regression  # noqa: E402
 from app.eval.dataset import corpus_dir_for, validate_dataset_file  # noqa: E402
 from app.eval.judge import DIMENSIONS  # noqa: E402
-from app.eval.metrics import run_evaluation  # noqa: E402
+from app.eval.metrics import SCORERS, run_evaluation  # noqa: E402
+from app.eval.ragas_eval import INSTALL_HINT, RAGAS_METRICS, ragas_available  # noqa: E402
 from app.eval.retrieval import DEFAULT_K_VALUES  # noqa: E402
 from app.schemas import Strategy  # noqa: E402
 
@@ -82,7 +85,8 @@ def _print_run(result: dict) -> None:
             print(f"  {key:<16} {value:.3f}  {_bar(value)}")
 
     if not result.get("judged", True):
-        print("\nAnswer quality   skipped (--no-judge)")
+        if result.get("scorer", "judge") != "ragas":
+            print("\nAnswer quality   skipped (--no-judge)")
     elif any(d in aggregates for d in DIMENSIONS):
         print(f"\nAnswer quality (LLM judge, {result['n_scored']} scored examples):")
         width = max(len(d) for d in DIMENSIONS)
@@ -125,6 +129,26 @@ def _print_run(result: dict) -> None:
                 if m in agg
             ]
             print(f"  {name:<20} n={block['n_examples']:<4} {'  '.join(parts)}")
+
+    if result.get("scorer") in ("ragas", "both"):
+        measured = [m for m in RAGAS_METRICS if m in aggregates]
+        version = result.get("ragas_version") or "?"
+        if measured:
+            print(f"\nRAGAS {version} (model {result.get('ragas_model')}):")
+            width = max(len(m) for m in RAGAS_METRICS)
+            for metric in RAGAS_METRICS:
+                block = aggregates.get(metric)
+                if block is None:
+                    # Reference-based metrics need ideal answers in the dataset.
+                    print(f"  {metric:<{width}}   -    (not scored)")
+                    continue
+                std = f"sd {block['std']:.3f}" if block.get("std") is not None else "sd -"
+                print(
+                    f"  {metric:<{width}} {block['mean']:.3f}  {std}  n={block['n']:<4}"
+                    f" {_bar(block['mean'])}"
+                )
+        else:
+            print(f"\nRAGAS {version}: nothing measured (see the failures below).")
 
     cost = result.get("cost") or {}
     if cost:
@@ -208,6 +232,10 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--no-judge", action="store_true",
         help="Skip the LLM judge. Retrieval is still scored; roughly halves cost.",
+    )
+    parser.add_argument(
+        "--scorer", default="judge", choices=SCORERS,
+        help="Answer scorer: the project's LLM judge (default), RAGAS, or both on the same answers",
     )
     parser.add_argument(
         "--k", type=_parse_k, default=list(DEFAULT_K_VALUES), metavar="K1,K2,...",
@@ -340,6 +368,10 @@ async def run(args: argparse.Namespace) -> int:
         print(f"Invalid regression thresholds: {e}", file=sys.stderr)
         return EXIT_ERROR
 
+    if args.scorer in ("ragas", "both") and not ragas_available():
+        print(INSTALL_HINT, file=sys.stderr)
+        return EXIT_ERROR
+
     targets: list[Strategy] = STRATEGIES if args.all else [args.strategy]
     results: list[dict] = []
     reports: list[dict] = []
@@ -355,6 +387,7 @@ async def run(args: argparse.Namespace) -> int:
             prompt_version=args.prompt_version,
             judge_answers=not args.no_judge,
             k_values=args.k,
+            scorer=args.scorer,
         )
         if result.get("error"):
             print(result["error"], file=sys.stderr)

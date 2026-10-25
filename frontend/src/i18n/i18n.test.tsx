@@ -43,15 +43,15 @@ describe("dictionaries", () => {
 describe("translate", () => {
   it("fills placeholders and leaves unknown ones alone", () => {
     expect(translate("en", "common.sources", { count: 3 })).toBe("Sources (3)");
-    expect(translate("fr", "ask.traceTitle")).toContain("GET /traces/{id}");
+    expect(translate("fr", "graph.triples")).toBe("{count} triplets");
   });
 
   it("uses each language's plural rules", () => {
-    expect(translatePlural("en", "ask.stars", 1)).toBe("1 star");
-    expect(translatePlural("en", "ask.stars", 0)).toBe("0 stars");
+    expect(translatePlural("en", "advisor.confOpen", 1)).toBe("1 unanswered question could change it.");
+    expect(translatePlural("en", "advisor.confOpen", 0)).toBe("0 unanswered questions could change it.");
     // French treats 0 as singular.
-    expect(translatePlural("fr", "ask.stars", 0)).toBe("0 étoile");
-    expect(translatePlural("fr", "ask.stars", 2)).toBe("2 étoiles");
+    expect(translatePlural("fr", "advisor.confOpen", 0)).toBe("0 question sans réponse pourrait la changer.");
+    expect(translatePlural("fr", "advisor.confOpen", 2)).toBe("2 questions sans réponse pourraient la changer.");
   });
 });
 

@@ -1,0 +1,151 @@
+{
+ "settings": {
+  "embedding_model": "intfloat/multilingual-e5-small",
+  "reranker_model": "cross-encoder/mmarco-mMiniLMv2-L12-H384-v1",
+  "generator_model": "claude-sonnet-5",
+  "graph_extraction_model": "claude-haiku-4-5-20251001",
+  "agentic_model": "claude-sonnet-5",
+  "agentic_max_iters": 15
+ },
+ "embedding_is_multilingual": true,
+ "byok": {
+  "model": "claude-haiku-4-5",
+  "tool": {
+   "name": "record_project_profile",
+   "description": "Record the structured profile of a retrieval-augmented generation (RAG) project described by a customer. Call this exactly once.",
+   "input_schema": {
+    "type": "object",
+    "properties": {
+     "corpus_size_docs": {
+      "type": [
+       "integer",
+       "null"
+      ],
+      "description": "Approximate number of documents, or null if not stated."
+     },
+     "corpus_size": {
+      "type": "string",
+      "enum": [
+       "tiny",
+       "small",
+       "medium",
+       "large",
+       "xlarge"
+      ],
+      "description": "tiny <100 docs, small <1k, medium <10k, large <100k, xlarge >=100k. Best guess when not stated."
+     },
+     "document_types": {
+      "type": "array",
+      "items": {
+       "type": "string"
+      },
+      "description": "Short English labels, e.g. contracts, support tickets, manuals."
+     },
+     "languages": {
+      "type": "array",
+      "items": {
+       "type": "string"
+      },
+      "description": "ISO 639-1 codes of the document and question languages."
+     },
+     "question_mix": {
+      "type": "object",
+      "properties": {
+       "single_fact": {
+        "type": "number"
+       },
+       "relational_multi_hop": {
+        "type": "number"
+       },
+       "exploratory_multi_step": {
+        "type": "number"
+       }
+      },
+      "required": [
+       "single_fact",
+       "relational_multi_hop",
+       "exploratory_multi_step"
+      ],
+      "description": "Estimated percentages summing to 100. single_fact: one lookup answers it. relational_multi_hop: connects entities across documents. exploratory_multi_step: open-ended research needing several searches."
+     },
+     "latency_budget_ms": {
+      "type": [
+       "integer",
+       "null"
+      ],
+      "description": "Acceptable time to answer in ms, or null if not stated. Use 60000 when the description says latency does not matter."
+     },
+     "cost_sensitivity": {
+      "type": "string",
+      "enum": [
+       "low",
+       "medium",
+       "high"
+      ]
+     },
+     "data_freshness": {
+      "type": "string",
+      "enum": [
+       "static",
+       "monthly",
+       "weekly",
+       "daily",
+       "realtime"
+      ]
+     },
+     "compliance": {
+      "type": "array",
+      "items": {
+       "type": "string"
+      },
+      "description": "Stated compliance or residency needs, e.g. 'EU only', 'GDPR', 'on-prem', and 'sensitive data' when the description says the data is sensitive or confidential. Empty if none stated. Do not invent any."
+     },
+     "data_residency": {
+      "type": [
+       "string",
+       "null"
+      ],
+      "description": "Required hosting region, e.g. 'EU', or null."
+     },
+     "entity_richness": {
+      "type": "string",
+      "enum": [
+       "low",
+       "medium",
+       "high"
+      ],
+      "description": "How much the documents revolve around named entities (people, companies, products, clauses) and their relationships."
+     },
+     "example_questions": {
+      "type": "array",
+      "items": {
+       "type": "string"
+      },
+      "description": "Example user questions, quoted or inferred from the text, in their original language. At most 10."
+     }
+    },
+    "required": [
+     "corpus_size",
+     "document_types",
+     "languages",
+     "question_mix",
+     "cost_sensitivity",
+     "data_freshness",
+     "compliance",
+     "entity_richness",
+     "example_questions"
+    ]
+   }
+  },
+  "tool_name": "record_project_profile",
+  "system": "You analyse descriptions of retrieval-augmented generation projects, written in any language, and record a structured profile by calling the record_project_profile tool. Base every field on the description; where it is silent, choose the most plausible default rather than an extreme. Never invent compliance requirements.",
+  "request_options": {
+   "tool_choice": {
+    "type": "tool",
+    "name": "record_project_profile"
+   },
+   "temperature": 0
+  },
+  "max_tokens": 8000
+ }
+}

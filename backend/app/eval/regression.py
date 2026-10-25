@@ -137,8 +137,12 @@ def _config_key(run: dict) -> tuple:
     embedding and reranker models), so dense and hybrid runs, or runs over
     differently chunked indexes, are never compared as the same configuration.
     Older runs without the last two fields group together as before.
+
+    The scorer joins the key only when it is not the default judge, so RAGAS
+    runs never compare against judge-only runs while every judge run (and
+    every pinned baseline, whose file name hashes this key) keeps its key.
     """
-    return (
+    key: tuple = (
         run.get("dataset"),
         run.get("strategy"),
         run.get("provider"),
@@ -148,6 +152,8 @@ def _config_key(run: dict) -> tuple:
         run.get("rubric_version"),
         run.get("config_hash"),
     )
+    scorer = run.get("scorer") or "judge"
+    return key if scorer == "judge" else (*key, scorer)
 
 
 # ---------------------------------------------------------------------------

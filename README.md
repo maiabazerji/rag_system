@@ -1,6 +1,6 @@
-# EvalRAG
+# Veritas RAG
 
-EvalRAG is a platform for building and **measuring** retrieval-augmented generation (RAG) systems. It runs the same question through three retrieval strategies (classic, graph, agentic) over one corpus. Every answer is grounded in citations that the server validates, and every run is scored with deterministic retrieval metrics and a versioned LLM judge. A regression gate compares each run with a baseline of the same configuration.
+Veritas RAG is a platform for building and **measuring** retrieval-augmented generation (RAG) systems. It runs the same question through three retrieval strategies (classic, graph, agentic) over one corpus. Every answer is grounded in citations that the server validates, and every run is scored with deterministic retrieval metrics and a versioned LLM judge. A regression gate compares each run with a baseline of the same configuration.
 
 Stack: FastAPI backend (`backend/`), React + TypeScript frontend (`frontend/`), Qdrant, Postgres, Docker Compose (`infra/`), Anthropic Claude for generation and judging.
 
@@ -71,9 +71,11 @@ All three return the same `StrategyResult` ([`base.py`](backend/app/rag/strategi
 | **Graph** ([`graph.py`](backend/app/rag/strategies/graph.py)) | Extracts entities from the question, walks the knowledge graph 1 hop, merges those chunks with the fused hybrid candidates, reranks the union, and prepends a text subgraph to the context | 2 (entity extraction on `GRAPH_EXTRACTION_MODEL`, then generation) | Adds an offline build step: `POST /graph/build` runs one extraction call per chunk. The graph is **not** built at ingest |
 | **Agentic** ([`agentic.py`](backend/app/rag/strategies/agentic.py)) | Claude drives `search` (fused hybrid results, not reranked, k ≤ 12), `fetch_chunk` and `finish` tools | Up to `AGENTIC_MAX_ITERS` (15) | Highest and variable. Anthropic only |
 
-Entity linking in the graph is exact matching on normalised strings. The call counts above come from the code. No token or latency ratio between the strategies has been measured on the current pipeline (see [Current benchmark](#current-benchmark)).
+Entity linking in the graph is exact matching on normalised strings. The call counts above come from the code. Token and latency ratios on the current pipeline were measured on one French corpus (see [Strategies on the current pipeline](#strategies-on-the-current-pipeline)).
 
 The **Advisor** (`POST /advise`) ranks the strategies from a project description. Its scoring weights ([`advisor/scoring.py`](backend/app/advisor/scoring.py)) are still derived from the historical baseline below, so treat its ranking as a prior. `POST /advise/validate` measures the strategies on your own questions.
+
+**Why the Advisor exists twice.** The public demo ([`netlify.toml`](netlify.toml)) is a static site with no backend, so the Advisor also runs in the browser ([`frontend/src/advisor-engine/`](frontend/src/advisor-engine/)), a TypeScript port of `backend/app/advisor/`. Python stays the source of truth: [`scripts/export_advisor_fixtures.py`](scripts/export_advisor_fixtures.py) exports its message catalog and 58 real `/advise` responses, and a Vitest test fails if the browser engine answers any of them differently.
 
 ---
 
@@ -147,6 +149,14 @@ Documented in [data/golden/README.md](data/golden/README.md). The questions and 
 
 - **Deterministic retrieval metrics** ([`eval/retrieval.py`](backend/app/eval/retrieval.py)), at document level with binary relevance: Recall@K, Precision@K (denominator K, trec_eval convention), HitRate@K, MRR and nDCG@K, at K = 1, 3, 5, 10 by default (`--k`). They are scored on each strategy's ranked context, so the agentic strategy's longer list is compared at the same K. Examples with no relevant documents are excluded and counted separately, not scored as zero.
 - **LLM judge** ([`eval/judge.py`](backend/app/eval/judge.py), rubric in [`eval/rubric.py`](backend/app/eval/rubric.py)): faithfulness, answer relevance, context precision, context recall, and answer correctness when an ideal answer exists. The rubric is versioned (`RUBRIC_VERSION = "2026-09.v2"`), with anchors at 0 / 0.25 / 0.5 / 0.75 / 1, and each run records its version and fingerprint. The reply must validate against a Pydantic model: every score must be a float in [0, 1] (out-of-range values are rejected, not clamped), and every reasoning string must be non-empty. An invalid reply gets exactly one repair retry. The judge runs at temperature 0 where the model accepts it.
+- **RAGAS** ([`eval/ragas_eval.py`](backend/app/eval/ragas_eval.py)), optional: `run_eval.py --scorer ragas` scores answers with [RAGAS](https://github.com/explodinggradients/ragas) 0.4 instead of the judge, and `--scorer both` runs both on the same answers so they can be compared. RAGAS uses the configured judge model through the Anthropic API (so it needs Anthropic credits) and the pipeline's own local embedding model. Its metrics are stored as `ragas_*` and never replace a judge score:
+  - `ragas_faithfulness`: share of the answer's claims supported by the retrieved chunks.
+  - `ragas_answer_relevancy`: how directly the answer addresses the question.
+  - `ragas_context_precision`: whether the useful chunks are ranked first (needs an ideal answer).
+  - `ragas_context_recall`: share of the ideal answer found in the chunks (needs an ideal answer).
+  - `ragas_answer_correctness`: factual overlap with the ideal answer (needs an ideal answer).
+
+  Install it with `pip install -e "backend[ragas]"` (the dev Docker image already has it). One failing RAGAS metric is recorded on the row and does not drop the others; with `--scorer ragas` an example counts as `scored` once RAGAS faithfulness was measured.
 - **Failure accounting** ([`eval/metrics.py`](backend/app/eval/metrics.py)). Every example ends as `scored`, `judge_failed`, `generation_failed` or `not_judged`. Each aggregate reports `mean`/`std`/`n` over the examples where that metric was actually measured, and the run lists its `failures`. No score is invented for a failed judge call.
 - **Refusal scoring.** Examples with `expected_behavior: "refuse"` (the unanswerable ones) are not judged. They are scored with `correct_refusal` (1 when the system declined). Answerable examples get `false_refusal`.
 - Results are also broken down by `question_type` and `difficulty`, with p50/p95 latency, tokens per question and judge tokens.
@@ -154,7 +164,7 @@ Documented in [data/golden/README.md](data/golden/README.md). The questions and 
 ## Regression testing
 
 - **Thresholds** are set in [`eval/regression_thresholds.toml`](eval/regression_thresholds.toml): faithfulness, answer relevance, `recall@5` and MRR may drop by at most 0.03; `latency_p50_ms` may rise by at most 20%; `tokens_per_question` by at most 15%. A metric measured on fewer than `min_examples = 5` examples is `SKIPPED`, not passed.
-- **Configuration fingerprint.** Runs are grouped by dataset, strategy, provider, model, prompt version, judge model, rubric version and `config_hash`. The hash covers the retrieval settings whose names start with `retrieval_`, `rerank_`, `bm25_`, `rrf_` or `chunk`, plus the embedding model, the reranker model and the retrieval mode the strategies reported ([`eval/metrics.py:retrieval_config`](backend/app/eval/metrics.py)).
+- **Configuration fingerprint.** Runs are grouped by dataset, strategy, provider, model, prompt version, judge model, rubric version, `config_hash` and, for RAGAS runs, the scorer. The hash covers the retrieval settings whose names start with `retrieval_`, `rerank_`, `bm25_`, `rrf_` or `chunk`, plus the embedding model, the reranker model and the retrieval mode the strategies reported ([`eval/metrics.py:retrieval_config`](backend/app/eval/metrics.py)).
 - **Gate.** After each run, a regression report is saved next to it. The baseline is the pinned baseline for the configuration, or else the previous comparable run. `run_eval.py --fail-on-regression` exits with code 2 on any `FAIL`, and `--set-baseline` pins a run. `GET /eval/runs/{id}/regression` and the Runs tab of the Evaluation page serve the report.
 - **Offline comparison** of two saved runs:
 
@@ -212,9 +222,35 @@ K = 1 and K = 3 are in the per-dataset files. How to read these numbers:
 - **`golden_v1` labels.** They reference only 6 of the 41 documents, because the set was labelled when the corpus had 6. Documents added later on the same topics (for example `reranking_deep_dive.md` next to `reranking.md`) are not labelled relevant, so retrieving them counts as a miss.
 - **Definitions.** Documents are ranked by their best chunk and K counts documents. The script scores them with `app.eval.retrieval.ranked_retrieval_metrics`, the same function as the eval harness, so benchmark and eval-run retrieval numbers share one definition. MRR is over the full ranked list.
 
+### Strategies on the current pipeline
+
+**Measured** on 2026-10-25: `golden_fr_business_v1` (40 questions: 35 answerable across 7 types, 5 unanswerable) over `demo_fr_business` (13 fictional French business documents, 43 chunks), hybrid retrieval with rerank, generator `claude-sonnet-5`, judge `claude-opus-5-5` (rubric `2026-09.v2`), graph built for the corpus. Retrieval was scoped to the corpus's audit workspace. Runs are in `data/eval_runs/` (`20261025T154627…-classic`, `20261025T160647…-graph`, `20261025T155631…-agentic`).
+
+| Metric | Classic | Graph | Agentic |
+|---|---:|---:|---:|
+| Answer correctness | 0.717 | 0.747 | **0.869** |
+| Faithfulness | 0.977 | **0.993** | 0.973 |
+| Answer relevance | 0.787 | 0.809 | **0.921** |
+| Context recall | 0.850 | 0.850 | **0.971** |
+| Retrieval recall@5 / MRR | 0.869 / 0.713 | 0.869 / 0.713 | **0.883 / 0.827** |
+| Correct refusal (5 unanswerable) | **0.80** | 0.60 | 0.60 |
+| False refusal (35 answerable) | 0.200 | 0.171 | **0.057** |
+| Tokens per question | **6,336** | 6,732 | 10,367 |
+| Latency p50 | 27.3 s | 27.4 s | **9.2 s** |
+
+How to read these numbers:
+
+- **One small corpus.** 40 questions over 43 chunks. Differences of a few hundredths are within noise; the Agentic lead on correctness (+0.15) is the only large gap.
+- **Where Agentic wins.** Single-fact questions were a tie (Classic 0.97, Agentic 0.95). Agentic led on multi-hop (0.85 vs 0.68), comparison (0.55 vs 0.37), ambiguous (0.88 vs 0.65) and adversarial (0.95 vs 0.50).
+- **Graph adds little here.** Its retrieval matched Classic's and it refused more answerable questions. A 43-chunk corpus is the case the scorer already predicts Graph cannot help.
+- **Latency is hardware-bound.** Classic and Graph run the cross-encoder on CPU; Agentic does not rerank. On a GPU the order may change.
+- **Comparison questions remain weak for every strategy** (best 0.55): in the probes, either one of the two documents was not retrieved or the generator refused with both in context.
+
+The Advisor's token and latency ratios and its Agentic weights come from this run ([`advisor/scoring.py`](backend/app/advisor/scoring.py)).
+
 ### Not yet measured
 
-The following have **not** been measured on the current pipeline, because no Anthropic API key and no Hugging Face access were available: dense and hybrid retrieval, reranking gains, all generation metrics (faithfulness, relevance, correctness, refusal accuracy), and per-request cost and latency. To produce them:
+Dense-only versus hybrid retrieval, reranking gains, and every strategy on the English datasets have **not** been measured on the current pipeline. To produce them:
 
 ```bash
 python scripts/download_models.py --cache-dir .hf_cache            # embedder + reranker
@@ -267,14 +303,15 @@ python scripts/run_eval.py --dry-run --all-datasets                       # vali
 python scripts/measure_retrieval.py --dataset golden_v3 --show-misses     # dense + rerank on the live index, no LLM
 PYTHONPATH=backend python scripts/benchmark_retrieval.py --modes sparse --dataset golden_v3   # in-process, no Docker
 python scripts/run_eval.py --dataset golden_v3 --all --fail-on-regression
+python scripts/run_eval.py --dataset golden_fr_v1 --all --scorer both     # judge + RAGAS (needs Anthropic credits)
 ```
 
 ## Tests
 
 ```bash
-cd backend && python -m pytest -q --cov=app          # 1,495 tests, 95% line coverage
+cd backend && python -m pytest -q --cov=app          # 1,553 tests, 95% line coverage
 ruff check app tests ../scripts && mypy app
-cd ../frontend && npm ci && npm run lint && npm run typecheck && npm test && npm run build   # 102 Vitest tests
+cd ../frontend && npm ci && npm run lint && npm run typecheck && npm test && npm run build   # 197 Vitest tests
 ```
 
 CI ([`.github/workflows/ci.yml`](.github/workflows/ci.yml)) runs ruff, mypy (app and scripts), pytest with `--cov-fail-under=90`, the frontend lint, typecheck, tests and build, `docker compose config`, image builds, and dependency audits. Qdrant, the embedding model and the cross-encoder are mocked or run in process in the tests. CI does **not** run any evaluation against a model.

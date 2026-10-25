@@ -1,5 +1,5 @@
 #!/bin/bash
-# Probe every EvalRAG service on the ports Compose publishes (127.0.0.1 only).
+# Probe every Veritas RAG service on the ports Compose publishes (127.0.0.1 only).
 
 # Colors for output
 RED='\033[0;31m'
@@ -7,7 +7,7 @@ GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
 NC='\033[0m' # No Color
 
-echo "Checking EvalRAG services..."
+echo "Checking Veritas RAG services..."
 echo ""
 
 # -f makes curl fail on an HTTP error status, so a 500 is not reported as OK.

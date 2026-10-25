@@ -42,8 +42,10 @@ class StrategyResult:
         extra: Dict for strategy-specific metadata and extra information. Defaults to
             empty dict. Every strategy that retrieves sets the same evaluation keys:
             ``retrieved_ids`` (ranked chunk ids of the context it used),
-            ``retrieved_docs`` (the filename behind each of those ids) and
-            ``context_text`` (the context exactly as the generator saw it).
+            ``retrieved_docs`` (the filename behind each of those ids),
+            ``context_texts`` (the text of each of those chunks, same order;
+            RAGAS scores contexts as a ranked list) and ``context_text`` (the
+            context exactly as the generator saw it).
         trace_id: Id of the request trace, retrievable from ``/traces/{id}``.
         grounded: Whether every claim is backed by a valid citation (see
             :func:`app.rag.grounding.validate_citations`).

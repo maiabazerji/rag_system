@@ -4,6 +4,7 @@ import { errorMessage, get, upload } from "../api/client";
 import { UploadIcon } from "../components/Icons";
 import LoadingSpinner from "../components/LoadingSpinner";
 import ErrorAlert from "../components/ErrorAlert";
+import GraphBuilder from "../components/GraphBuilder";
 import { useI18n } from "../i18n";
 
 type IngestResult = {
@@ -11,7 +12,6 @@ type IngestResult = {
   filename: string;
   chunks: number;
   indexed_total: number;
-  acl_groups?: string[];
 };
 type Formats = { extensions: string[] };
 type Item =
@@ -48,7 +48,6 @@ export default function Ingest() {
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
   const [drag, setDrag] = useState(false);
-  const [groups, setGroups] = useState("");
   const fileRef = useRef<HTMLInputElement>(null);
   const nextKey = useRef(0);
   const { data: stats, refetch: refetchStats } = useQuery({
@@ -73,9 +72,8 @@ export default function Ingest() {
       for (const f of list) {
         const key = nextKey.current++;
         try {
-          // Blank: the backend labels the document with the uploader's own groups.
-          const fields = groups.trim() ? { groups: groups.trim() } : undefined;
-          const result = await upload<IngestResult>("/ingest", f, undefined, fields);
+          // No groups sent: the backend labels the document with the uploader's own groups.
+          const result = await upload<IngestResult>("/ingest", f);
           setItems((prev) => [{ key, ok: true, result }, ...prev]);
         } catch (e) {
           failed++;
@@ -99,8 +97,16 @@ export default function Ingest() {
         <div className="space-y-2">
           <h1 className="display text-4xl font-semibold text-white">{t("ingest.title")}</h1>
           <p className="text-zinc-400 max-w-xl">
-            {rich("ingest.intro", { types: <SuffixList locale={locale} suffixes={suffixes} /> })}
+            {rich("ingest.intro", { types: t("ingest.formatsSummary") })}
           </p>
+          <details className="text-xs text-zinc-500">
+            <summary className="cursor-pointer hover:text-zinc-300">
+              {t("ingest.allFormats", { count: suffixes.length })}
+            </summary>
+            <p className="mt-1 max-w-xl">
+              <SuffixList locale={locale} suffixes={suffixes} />
+            </p>
+          </details>
         </div>
         {stats && (
           <div className="chip">
@@ -109,18 +115,6 @@ export default function Ingest() {
           </div>
         )}
       </header>
-
-      <label className="flex flex-col gap-1 max-w-xl">
-        <span className="text-xs uppercase tracking-wider text-zinc-500">{t("ingest.groupsLabel")}</span>
-        <input
-          value={groups}
-          onChange={(e) => setGroups(e.target.value)}
-          placeholder={t("ingest.groupsPlaceholder")}
-          disabled={busy}
-          className="input"
-        />
-        <span className="text-xs text-zinc-500">{t("ingest.groupsHint")}</span>
-      </label>
 
       <div
         onDragOver={(e) => {
@@ -173,6 +167,8 @@ export default function Ingest() {
         )}
       </div>
 
+      <GraphBuilder />
+
       {items.length > 0 && (
         <div>
           <div className="text-xs uppercase tracking-wider text-zinc-500 mb-2">{t("ingest.recent")}</div>
@@ -209,11 +205,6 @@ function UploadedRow({ it }: { it: IngestResult }) {
       <div className="min-w-0 flex-1">
         <div className="text-zinc-100 font-medium truncate">{it.filename}</div>
         <div className="text-xs text-zinc-500 font-mono mt-0.5 truncate">{it.doc_id}</div>
-        {it.acl_groups && it.acl_groups.length > 0 && (
-          <div className="text-xs text-zinc-400 mt-0.5 truncate">
-            {t("ingest.readableBy", { groups: it.acl_groups.join(", ") })}
-          </div>
-        )}
       </div>
       <div className="flex items-center gap-2 shrink-0 flex-wrap sm:flex-nowrap">
         <div className="chip !text-emerald-300 !border-emerald-500/40 !bg-emerald-500/10 min-h-[44px] sm:min-h-auto">

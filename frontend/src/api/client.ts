@@ -225,6 +225,10 @@ export async function post<T>(path: string, body: unknown, opts?: RequestOptions
   );
 }
 
+export async function del<T>(path: string, opts?: RequestOptions): Promise<T> {
+  return request<T>(path, { method: "DELETE", headers: requestHeaders(opts?.admin) }, opts);
+}
+
 export async function get<T>(path: string, opts?: RequestOptions): Promise<T> {
   return request<T>(path, { headers: requestHeaders(opts?.admin) }, opts);
 }

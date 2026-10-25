@@ -1,7 +1,8 @@
 /**
- * Runs tab of the Evaluation page: launch a run on a golden dataset, then read
- * the run history (newest first) with each run's counts, measured aggregates
- * and, on demand, its regression report against the configuration's baseline.
+ * Runs tab of the Evaluation page, laid out like a chat history: the runs are
+ * listed on the side (newest first) with a "New run" entry on top, and the
+ * selected run shows its counts, measured aggregates and, on demand, its
+ * regression report against the configuration's baseline.
  */
 import { useId, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
@@ -28,6 +29,9 @@ import {
 } from "../../utils/evalRuns";
 import { useI18n } from "../../i18n";
 
+/** Selection value that pins the launch form instead of a run. */
+const NEW_RUN = "new";
+
 const DATE_FORMAT: Intl.DateTimeFormatOptions = {
   day: "numeric",
   month: "short",
@@ -52,94 +56,45 @@ export default function EvalRuns() {
 
   const runs = useQuery({ queryKey: ["runs"], queryFn: listEvalRuns });
 
+  // null follows the newest run (or the launch form when there is none); NEW_RUN pins the form.
+  const [selected, setSelected] = useState<string | null>(null);
+
   const run = useMutation({
     mutationFn: runEvaluation,
-    onSuccess: () => {
+    onSuccess: (created) => {
       queryClient.invalidateQueries({ queryKey: ["runs"] });
       queryClient.invalidateQueries({ queryKey: ["regression"] });
+      setSelected(created?.id ?? null);
     },
   });
   const launch = (req: EvalRunRequest) => run.mutate(req);
 
   const history = newestFirst(runs.data ?? []);
+  const current =
+    selected === NEW_RUN ? null : (history.find((r) => r.id === selected) ?? (selected ? null : history[0]) ?? null);
+  const showForm = !current;
 
   return (
-    <div className="flex flex-col gap-6">
-      <section className="card !p-5 flex flex-col gap-4" aria-labelledby="eval-launch-title">
-        <div>
-          <h2 id="eval-launch-title" className="text-lg font-semibold text-white">{t("eval.launch")}</h2>
-          <p className="text-sm text-zinc-400 mt-1">{t("eval.launchHelp")}</p>
-        </div>
-
-        {golden.error ? (
-          <ErrorAlert
-            error={t("eval.datasetsFailed", { error: errorMessage(golden.error) })}
-            onRetry={() => golden.refetch()}
-          />
-        ) : golden.isLoading ? (
-          <LoadingSpinner message={t("eval.datasetsLoading")} />
-        ) : datasets.length === 0 ? (
-          <p className="text-sm text-zinc-400">{t("eval.datasetsEmpty")}</p>
-        ) : (
-          <div className="flex flex-wrap items-end gap-3">
-            <label htmlFor={ids.dataset} className="flex flex-col gap-1 text-xs text-zinc-400">
-              {t("eval.dataset")}
-              <select
-                id={ids.dataset}
-                value={dataset}
-                onChange={(e) => setPicked(e.target.value)}
-                aria-describedby={needsDemoCorpus ? ids.note : undefined}
-                className="input !py-2 text-sm"
-              >
-                {datasets.map((d) => (
-                  <option key={d} value={d}>{d}</option>
-                ))}
-              </select>
-            </label>
-            <label htmlFor={ids.strategy} className="flex flex-col gap-1 text-xs text-zinc-400">
-              {t("eval.strategy")}
-              <select
-                id={ids.strategy}
-                value={strategy}
-                onChange={(e) => setStrategy(e.target.value as StrategyName)}
-                className="input !py-2 text-sm"
-              >
-                {STRATEGY_NAMES.map((s) => (
-                  <option key={s} value={s}>{t(`strategy.${s}`)}</option>
-                ))}
-              </select>
-            </label>
-            <button
-              type="button"
-              onClick={() => launch({ dataset, strategy })}
-              disabled={run.isPending || !dataset}
-              className="btn-primary text-sm px-4 py-2 min-h-[44px]"
-            >
-              {run.isPending ? t("common.running") : t("eval.run")}
-            </button>
-          </div>
-        )}
-
-        {needsDemoCorpus && (
-          <p id={ids.note} role="note" className="text-xs text-amber-200 border-l-2 border-amber-500/50 pl-3">
-            {t("eval.demoCorpusNote", { dataset })}
-          </p>
-        )}
-
-        {run.isPending && <LoadingSpinner message={t("eval.running")} />}
-        {run.error && (
-          <ErrorAlert
-            error={t("eval.runFailed", { error: errorMessage(run.error) })}
-            onRetry={() => run.variables && launch(run.variables)}
-            onDismiss={() => run.reset()}
-          />
-        )}
-      </section>
-
-      <section className="flex flex-col gap-3" aria-labelledby="eval-history-title">
-        <div className="flex items-baseline justify-between gap-2">
-          <h2 id="eval-history-title" className="text-lg font-semibold text-white">{t("eval.history")}</h2>
-          <span className="text-xs text-zinc-500">{t("eval.historyOrder")}</span>
+    <div className="grid gap-4 md:grid-cols-[15rem_minmax(0,1fr)] items-start">
+      <aside
+        className="card !p-2 flex flex-col gap-1 md:sticky md:top-6 md:max-h-[calc(100vh-4rem)] overflow-y-auto"
+        aria-labelledby="eval-history-title"
+      >
+        <button
+          type="button"
+          onClick={() => setSelected(NEW_RUN)}
+          aria-current={showForm ? "page" : undefined}
+          className={`text-left text-sm rounded-md px-3 py-2 min-h-[40px] border transition-colors ${
+            showForm
+              ? "border-accent/60 text-white bg-accent/10"
+              : "border-bg-border text-zinc-300 hover:text-white hover:border-accent/40"
+          }`}
+        >
+          + {t("eval.newRun")}
+        </button>
+        <div className="flex items-baseline justify-between gap-2 px-2 pt-3 pb-1">
+          <h2 id="eval-history-title" className="text-xs uppercase tracking-wider text-zinc-500">{t("eval.history")}</h2>
+          <span className="text-[10px] text-zinc-600">{t("eval.historyOrder")}</span>
         </div>
 
         {runs.isLoading ? (
@@ -150,21 +105,125 @@ export default function EvalRuns() {
             onRetry={() => runs.refetch()}
           />
         ) : history.length === 0 ? (
-          <div className="card text-center py-8">
-            <h3 className="text-white font-semibold">{t("eval.empty")}</h3>
-            <p className="text-sm text-zinc-400 mt-1">{t("eval.emptyHelp")}</p>
-          </div>
+          <p className="text-xs text-zinc-500 px-2 py-2">{t("eval.empty")}</p>
         ) : (
-          <ul className="flex flex-col gap-3">
+          <ul className="flex flex-col gap-0.5">
             {history.map((r) => (
               <li key={r.id}>
-                <RunCard run={r} busy={run.isPending} onRerun={launch} />
+                <HistoryItem run={r} active={current?.id === r.id} onSelect={() => setSelected(r.id)} />
               </li>
             ))}
           </ul>
         )}
-      </section>
+      </aside>
+
+      <div className="min-w-0">
+        {current ? (
+          <RunCard run={current} busy={run.isPending} onRerun={launch} />
+        ) : (
+          <section className="card !p-5 flex flex-col gap-4" aria-labelledby="eval-launch-title">
+            <div>
+              <h2 id="eval-launch-title" className="text-lg font-semibold text-white">{t("eval.launch")}</h2>
+              <p className="text-sm text-zinc-400 mt-1">{t("eval.launchHelp")}</p>
+            </div>
+
+            {golden.error ? (
+              <ErrorAlert
+                error={t("eval.datasetsFailed", { error: errorMessage(golden.error) })}
+                onRetry={() => golden.refetch()}
+              />
+            ) : golden.isLoading ? (
+              <LoadingSpinner message={t("eval.datasetsLoading")} />
+            ) : datasets.length === 0 ? (
+              <p className="text-sm text-zinc-400">{t("eval.datasetsEmpty")}</p>
+            ) : (
+              <div className="flex flex-wrap items-end gap-3">
+                <label htmlFor={ids.dataset} className="flex flex-col gap-1 text-xs text-zinc-400">
+                  {t("eval.dataset")}
+                  <select
+                    id={ids.dataset}
+                    value={dataset}
+                    onChange={(e) => setPicked(e.target.value)}
+                    aria-describedby={needsDemoCorpus ? ids.note : undefined}
+                    className="input !py-2 text-sm"
+                  >
+                    {datasets.map((d) => (
+                      <option key={d} value={d}>{d}</option>
+                    ))}
+                  </select>
+                </label>
+                <label htmlFor={ids.strategy} className="flex flex-col gap-1 text-xs text-zinc-400">
+                  {t("eval.strategy")}
+                  <select
+                    id={ids.strategy}
+                    value={strategy}
+                    onChange={(e) => setStrategy(e.target.value as StrategyName)}
+                    className="input !py-2 text-sm"
+                  >
+                    {STRATEGY_NAMES.map((s) => (
+                      <option key={s} value={s}>{t(`strategy.${s}`)}</option>
+                    ))}
+                  </select>
+                </label>
+                <button
+                  type="button"
+                  onClick={() => launch({ dataset, strategy })}
+                  disabled={run.isPending || !dataset}
+                  className="btn-primary text-sm px-4 py-2 min-h-[44px]"
+                >
+                  {run.isPending ? t("common.running") : t("eval.run")}
+                </button>
+              </div>
+            )}
+
+            {needsDemoCorpus && (
+              <p id={ids.note} role="note" className="text-xs text-amber-200 border-l-2 border-amber-500/50 pl-3">
+                {t("eval.demoCorpusNote", { dataset })}
+              </p>
+            )}
+
+            {history.length === 0 && runs.isSuccess && (
+              <p className="text-xs text-zinc-500">{t("eval.emptyHelp")}</p>
+            )}
+          </section>
+        )}
+
+        {run.isPending && <LoadingSpinner message={t("eval.running")} />}
+        {run.error && (
+          <ErrorAlert
+            error={t("eval.runFailed", { error: errorMessage(run.error) })}
+            onRetry={() => run.variables && launch(run.variables)}
+            onDismiss={() => run.reset()}
+          />
+        )}
+      </div>
     </div>
+  );
+}
+
+/** One entry of the side list: dataset, strategy and date, like a chat history. */
+function HistoryItem({ run, active, onSelect }: { run: EvalRunSummary; active: boolean; onSelect: () => void }) {
+  const { formatDate } = useI18n();
+  const date = run.created_at ? formatDate(run.created_at, DATE_FORMAT) : "";
+  const strategy = run.strategy ?? "?";
+  return (
+    <button
+      type="button"
+      onClick={onSelect}
+      aria-current={active ? "page" : undefined}
+      className={`w-full text-left rounded-md px-3 py-2 flex flex-col gap-1 transition-colors ${
+        active ? "bg-bg-elevated text-white" : "text-zinc-300 hover:bg-bg-elevated/60 hover:text-white"
+      }`}
+    >
+      <span className="flex items-center justify-between gap-2">
+        <span className="text-sm font-medium truncate">{run.dataset ?? "?"}</span>
+        <RegressionBadge status={run.regression_status} tip={null} />
+      </span>
+      <span className="flex items-center justify-between gap-2 text-[11px] text-zinc-500">
+        <StrategyKey strategy={strategy} label={strategy} />
+        {date && <time dateTime={run.created_at ?? undefined}>{date}</time>}
+      </span>
+    </button>
   );
 }
 

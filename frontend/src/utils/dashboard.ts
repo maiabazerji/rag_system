@@ -24,15 +24,7 @@ export const QUALITY_METRICS: { id: QualityMetric; label: MessageKey }[] = [
   { id: "ndcg@5", label: "metric.ndcg5" },
 ];
 
-export type CostAxis = "tokens" | "cost" | "latency";
-
-export const COST_AXES: { id: CostAxis; label: MessageKey }[] = [
-  { id: "tokens", label: "dash.axis.tokens" },
-  { id: "cost", label: "dash.axis.cost" },
-  { id: "latency", label: "dash.axis.latency" },
-];
-
-/** The latest run of one configuration, with what the charts need. */
+/** The latest run of one configuration, with what the tables need. */
 export interface ConfigRow {
   key: string;
   label: string;
@@ -131,54 +123,6 @@ export function latestPerConfig(runs: EvalRunSummary[], dataset: string): Config
     });
   }
   return rows.sort((a, b) => a.strategy.localeCompare(b.strategy) || a.label.localeCompare(b.label));
-}
-
-/** Whether any configuration reports a USD cost, so the cost axis can be offered. */
-export function hasCostData(rows: ConfigRow[]): boolean {
-  return rows.some((r) => r.costPerQuestion != null);
-}
-
-export function axisValue(r: ConfigRow, axis: CostAxis): number | null {
-  if (axis === "tokens") return r.tokensPerQuestion;
-  if (axis === "cost") return r.costPerQuestion;
-  return r.p50LatencyMs;
-}
-
-export interface ScatterPoint {
-  key: string;
-  label: string;
-  strategy: string;
-  x: number;
-  y: number;
-  n: number;
-  std: number | null;
-}
-
-/** Points with both coordinates measured; configurations missing either are listed separately. */
-export function scatterPoints(
-  rows: ConfigRow[],
-  metric: QualityMetric,
-  axis: CostAxis,
-): { points: ScatterPoint[]; missing: string[] } {
-  const points: ScatterPoint[] = [];
-  const missing: string[] = [];
-  for (const r of rows) {
-    const agg = r.metrics[metric];
-    const x = axisValue(r, axis);
-    if (agg?.mean == null || x == null) {
-      missing.push(r.label);
-      continue;
-    }
-    points.push({ key: r.key, label: r.label, strategy: r.strategy, x, y: agg.mean, n: agg.n, std: agg.std });
-  }
-  return { points, missing };
-}
-
-/** Points grouped into one series per strategy, sorted by strategy name. */
-export function seriesByStrategy(points: ScatterPoint[]): [string, ScatterPoint[]][] {
-  const by = new Map<string, ScatterPoint[]>();
-  points.forEach((p) => by.set(p.strategy, [...(by.get(p.strategy) ?? []), p]));
-  return [...by.entries()].sort(([a], [b]) => a.localeCompare(b));
 }
 
 export interface BreakdownTable {

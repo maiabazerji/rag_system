@@ -27,14 +27,6 @@ export const STAGE_COLORS = {
   other: "#d55181",
 } as const;
 
-export const CHART_INK = {
-  grid: "#2a2c33",
-  axis: "#3a3c44",
-  muted: "#898781",
-  secondary: "#c3c2b7",
-  surface: "#16171b",
-} as const;
-
 export function strategyColor(strategy: string): string {
   return STRATEGY_COLORS[strategy] ?? UNKNOWN_SERIES_COLOR;
 }

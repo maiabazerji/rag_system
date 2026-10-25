@@ -234,6 +234,7 @@ class ClassicRAG(Strategy):
                 "context_chunks": [c.id for c in context],
                 "retrieved_ids": [c.id for c in context],
                 "retrieved_docs": [c.metadata.get("filename") for c in context],
+                "context_texts": [c.text for c in context],
                 "context_text": ctx_block,
                 "retrieval": diagnostics,
                 **grounding_extra(grounded, raw, cited),

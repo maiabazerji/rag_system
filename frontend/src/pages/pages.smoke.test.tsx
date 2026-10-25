@@ -15,7 +15,7 @@ import Compare from "./Compare";
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
-// recharts' ResponsiveContainer needs ResizeObserver, which jsdom lacks.
+// jsdom lacks ResizeObserver.
 class NoopResizeObserver {
   observe() {}
   unobserve() {}
@@ -118,11 +118,28 @@ const base = {
 };
 
 describe("routes", () => {
-  it("the navigation lists only the consolidated pages", () => {
-    expect(NAV.map((n) => n.to)).toEqual(["/", "/ingest", "/compare", "/eval", "/advisor"]);
+  it("puts the Advisor first and groups the technical pages under Lab", () => {
+    expect(NAV.map((n) => [n.to, n.group])).toEqual([
+      ["/", "main"],
+      ["/ingest", "lab"],
+      ["/compare", "lab"],
+      ["/eval", "lab"],
+    ]);
   });
 
-  it.each(["/", "/ingest", "/compare", "/eval", "/advisor"])("%s renders a page heading", async (path) => {
+  it("/ask redirects to Compare", async () => {
+    routes["/graph/stats"] = { triples: 0, entities: 0 };
+    await renderAt("/ask");
+    expect(location.pathname).toBe("/compare");
+  });
+
+  it("/advisor redirects to the Advisor home page", async () => {
+    await renderAt("/advisor");
+    expect(location.pathname).toBe("/");
+    expect(container.querySelector("h1")?.textContent).toBe("Find the right RAG for your project");
+  });
+
+  it.each(["/", "/ingest", "/compare", "/eval"])("%s renders a page heading", async (path) => {
     await renderAt(path);
     expect(container.querySelector("h1")).not.toBeNull();
     expect(location.pathname).toBe(path);
@@ -141,7 +158,7 @@ describe("routes", () => {
     expect(tab(selected).getAttribute("aria-selected")).toBe("true");
   });
 
-  it.each(["/", "/ingest", "/compare", "/eval", "/eval?tab=runs", "/advisor"])(
+  it.each(["/", "/ingest", "/compare", "/eval", "/eval?tab=runs"])(
     "%s links to no removed route and invents no figures",
     async (path) => {
       routes["/eval/runs"] = [];
@@ -221,7 +238,7 @@ describe("Evaluation overview", () => {
     expect(text()).toContain("python scripts/run_eval.py --dataset golden_v3 --all");
   });
 
-  it("shows the latest run per configuration with the trade-off caption and no winner", async () => {
+  it("shows the latest run per configuration and no winner", async () => {
     const at = { ...base, created_at: "2026-09-01T00:00:00+00:00" };
     routes["/eval/runs"] = [
       { ...at, id: "c1", strategy: "classic", aggregates: { faithfulness: { mean: 0.8, std: 0.1, n: 10 } }, cost: { mean_tokens_per_question: 1200, p50_latency_ms: 800, p95_latency_ms: 1500 }, regression_status: "PASS" },
@@ -232,7 +249,6 @@ describe("Evaluation overview", () => {
     await renderAt("/eval");
     await until(() => text().includes("single_hop"));
     const t = text();
-    expect(t).toContain("Measurements from recorded runs; which trade-off is best depends on your constraints.");
     expect(t).toContain("classic · claude-sonnet-5");
     expect(t).toContain("agentic · claude-sonnet-5");
     expect(t).toContain("0.80 ± 0.10 (10)");
@@ -317,11 +333,17 @@ describe("Evaluation runs", () => {
       ],
     };
     await renderAt("/eval?tab=runs");
-    const cards = [...container.querySelectorAll("article")];
-    expect(cards.map((c) => c.querySelector("h3")?.textContent)).toEqual(["golden_v3", "golden_v3"]);
-    const [newest, oldest] = cards;
+    // The side list holds every run, newest first; the newest is open by default.
+    const items = [...container.querySelectorAll("aside li button")];
+    expect(items.map((b) => b.textContent)).toEqual([
+      expect.stringContaining("agentic"),
+      expect.stringContaining("classic"),
+    ]);
+    expect(items[0].getAttribute("aria-current")).toBe("page");
+    expect(container.querySelectorAll("article").length).toBe(1);
+    const newest = container.querySelector("article")!;
+    expect(newest.querySelector("h3")?.textContent).toBe("golden_v3");
     expect(newest.textContent).toContain("agentic");
-    expect(oldest.textContent).toContain("classic");
     const t = newest.textContent ?? "";
     expect(t).toContain("model claude-sonnet-5");
     expect(t).toContain("Scored / n8 / 10");
@@ -331,9 +353,6 @@ describe("Evaluation runs", () => {
     expect(t).toContain("Recall@50.75");
     expect(t).toContain("MRR0.50");
     expect(t).toContain("nDCG@50.55");
-    // A legacy run with flat means still shows them, without an invented n.
-    expect(oldest.textContent).toContain("Faithfulness0.70");
-    expect(oldest.textContent).not.toContain("(10)");
 
     const toggle = [...newest.querySelectorAll("button")].find((b) => b.textContent === "Show regression report")!;
     expect(toggle.getAttribute("aria-expanded")).toBe("false");
@@ -349,14 +368,41 @@ describe("Evaluation runs", () => {
     expect(newest.textContent).toContain("Baseline: prev-run (previous run of this configuration)");
     await click(toggle);
     expect(newest.querySelector("table")).toBeNull();
+
+    // Picking the older run in the list opens it instead.
+    await click(items[1]);
+    expect(items[1].getAttribute("aria-current")).toBe("page");
+    const oldest = container.querySelector("article")!;
+    expect(oldest.textContent).toContain("classic");
+    // A legacy run with flat means still shows them, without an invented n.
+    expect(oldest.textContent).toContain("Faithfulness0.70");
+    expect(oldest.textContent).not.toContain("(10)");
+  });
+
+  it("opens the launch form from the New run entry", async () => {
+    routes["/eval/golden"] = ["golden_v3"];
+    routes["/eval/runs"] = [{ ...base, id: "r1", strategy: "classic", created_at: "2026-09-01T00:00:00+00:00" }];
+    await renderAt("/eval?tab=runs");
+    expect(text()).not.toContain("Launch a run");
+    await click([...container.querySelectorAll("aside button")].find((b) => b.textContent?.includes("New run"))!);
+    expect(text()).toContain("Launch a run");
+    expect(container.querySelector("article")).toBeNull();
   });
 });
 
 describe("Compare", () => {
-  it("renders evaluation scores, best-value marks and the why panel", async () => {
+  it("renders best-value marks, the why panel and the graph hint, without judge scoring", async () => {
     routes["/graph/stats"] = { triples: 0, entities: 0 };
-    await render(<Compare />);
-    const row = (strategy: string, faith: number, latency: number) => ({
+    await render(
+      <MemoryRouter>
+        <Compare />
+      </MemoryRouter>,
+    );
+    expect(container.textContent).toContain("The Graph strategy has no knowledge graph yet.");
+    expect(container.querySelector('a[href="/ingest"]')?.textContent).toBe("Ingest");
+    expect(container.textContent).not.toContain("Evaluate");
+    expect(container.textContent).not.toContain("Rebuild");
+    const row = (strategy: string, latency: number, inputTokens: number) => ({
       strategy,
       question: "q",
       answer: "Answer [S1].",
@@ -364,7 +410,7 @@ describe("Compare", () => {
       refusal: false,
       confidence: 0.8,
       latency_ms: latency,
-      input_tokens: 100,
+      input_tokens: inputTokens,
       output_tokens: 10,
       iterations: 1,
       trace: [],
@@ -373,28 +419,11 @@ describe("Compare", () => {
       grounded: true,
       citation_count: 1,
       invalid_citations: [],
-      evaluation: {
-        status: "scored",
-        scores: { faithfulness: faith, answer_relevance: 0.9, context_precision: 1, context_recall: 1, answer_correctness: null },
-        reasoning: {},
-        retrieval: { "recall@5": 1, mrr: 0.5 },
-        retrieved_docs: [],
-        relevant_docs: ["a.md"],
-        has_reference_answer: false,
-        correct_refusal: null,
-        judge_model: "j",
-        rubric_version: "1",
-        judge_attempts: 1,
-        judge_input_tokens: 1,
-        judge_output_tokens: 1,
-        error_type: null,
-        error: null,
-      },
     });
     vi.mocked(globalThis.fetch).mockImplementation(async (input: RequestInfo | URL) => {
       const path = String(input).replace(/^\/api/, "");
       if (path === "/compare/strategies") {
-        return json({ question: "q", results: [row("classic", 0.9, 800), row("graph", 0.7, 1200), row("agentic", 0.7, 3000)] });
+        return json({ question: "q", results: [row("classic", 800, 100), row("graph", 1200, 200), row("agentic", 3000, 300)] });
       }
       return json({ triples: 0, entities: 0 });
     });
@@ -408,14 +437,108 @@ describe("Compare", () => {
     await act(async () => runButton.click());
     for (let i = 0; i < 5; i++) await act(async () => new Promise((r) => setTimeout(r, 0)));
 
+    const call = vi.mocked(globalThis.fetch).mock.calls.find(([u]) => String(u).endsWith("/compare/strategies"))!;
+    expect(JSON.parse(String((call[1] as RequestInit).body))).toEqual({
+      question: "q",
+      strategies: ["classic", "graph", "agentic"],
+    });
+
     const text = container.textContent ?? "";
     expect(text).toContain("Per-metric best values");
     expect(text).toContain("Why this result?");
     expect(text).toContain("The answer cites 1 distinct source(s); its context held 2 chunks.");
     expect(text).toContain("Guide · p. 3");
     expect(text).toContain("relevance 0.91");
-    // Faithfulness: classic is the only best; latency: classic too.
+    // Latency and tokens: classic is the only best on both.
     expect(container.querySelectorAll("table .sr-only").length).toBe(2);
     expect(text.toLowerCase()).not.toContain("winner");
+  });
+});
+
+describe("Ingest", () => {
+  it("hosts the knowledge-graph panel with its triple count and Rebuild button", async () => {
+    routes["/ingest/stats"] = { indexed_chunks: 12 };
+    routes["/graph/stats"] = { triples: 831, entities: 200 };
+    await renderAt("/ingest");
+    expect(text()).toContain("Knowledge graph");
+    expect(text()).toContain("831 triples");
+    expect([...container.querySelectorAll("button")].some((b) => b.textContent === "Rebuild")).toBe(true);
+  });
+});
+
+describe("Advisor flow", () => {
+  const rec = (strategy: string, rank: number, score: number) => ({
+    strategy,
+    rank,
+    score,
+    reasons: [`${strategy} reason`],
+    tradeoffs: [],
+    suggested_config: {
+      retrieval_top_k: 20, rerank_top_k: 8, rerank: true, chunk_size_tokens: 600,
+      chunk_overlap_tokens: 78, embedding_model: "m", models: {}, expected_relative_cost: 1,
+      expected_relative_latency: 1, notes: [],
+    },
+  });
+  const advice = (top: string, followUps: unknown[]) => ({
+    profile: {
+      corpus_size: "small", corpus_size_docs: null, document_types: [], languages: ["fr"],
+      question_mix: { single_fact: 60, relational_multi_hop: 25, exploratory_multi_step: 15 },
+      latency_budget_ms: null, cost_sensitivity: "medium", data_freshness: "weekly", compliance: [],
+      data_residency: null, entity_richness: "medium", example_questions: [], source: "heuristic",
+      overridden_fields: [],
+    },
+    recommendations: top === "graph"
+      ? [rec("graph", 1, 80), rec("classic", 2, 60), rec("agentic", 3, 20)]
+      : [rec("classic", 1, 74), rec("graph", 2, 48), rec("agentic", 3, 23)],
+    top_strategy: top,
+    hybrid_routing: { recommended: false, rationale: "", routes: [] },
+    compliance_notes: [],
+    next_step: { summary: "", validate_endpoint: "/advise/validate", suggested_strategies: [top], example_payload: {} },
+    follow_up_questions: followUps,
+    confidence: { level: followUps.length ? "medium" : "high", margin: 20, open_questions: followUps.length },
+  });
+  const sizeQuestion = {
+    id: "corpus_size_docs",
+    current: null,
+    changes_recommendation: true,
+    options: [
+      { id: "lt100", overrides: { corpus_size_docs: 50 }, top_strategy: "classic" },
+      { id: "more", overrides: { corpus_size_docs: 200000 }, top_strategy: "graph" },
+    ],
+  };
+
+  it("describes, asks the follow-up, then recommends with the answer applied", async () => {
+    const bodies: unknown[] = [];
+    vi.mocked(globalThis.fetch).mockImplementation(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const path = String(input).replace(/^\/api/, "");
+      if (path === "/advise") {
+        const body = JSON.parse(String(init?.body));
+        bodies.push(body);
+        return json(body.overrides.corpus_size_docs ? advice("graph", []) : advice("classic", [sizeQuestion]));
+      }
+      return new Response("not found", { status: 404 });
+    });
+    await renderAt("/");
+    const textarea = container.querySelector("textarea")!;
+    await act(async () => {
+      const setter = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value")!.set!;
+      setter.call(textarea, "Un assistant pour nos 200 000 contrats.");
+      textarea.dispatchEvent(new Event("input", { bubbles: true }));
+    });
+    await click([...container.querySelectorAll("button")].find((b) => b.textContent === "Continue")!);
+
+    // Step 2: only the question that can change the outcome, flagged as such.
+    expect(text()).toContain("A few questions to get it right");
+    expect(text()).toContain("Roughly how many documents?");
+    expect(text()).toContain("can change the result");
+    await click([...container.querySelectorAll("label")].find((l) => l.textContent?.includes("More than 100,000"))!);
+    await click([...container.querySelectorAll("button")].find((b) => b.textContent === "See my recommendation")!);
+
+    // The answer was sent as an override, and the result reflects it.
+    expect(bodies[1]).toMatchObject({ overrides: { corpus_size_docs: 200000 } });
+    expect(text()).toContain("We recommend");
+    expect(container.querySelector("h2")?.textContent).toBe("Graph RAG");
+    expect(text()).toContain("High confidence");
+    expect(container.querySelector('ol[aria-label="Steps"] [aria-current="step"]')?.textContent).toContain("Recommendation");
   });
 });

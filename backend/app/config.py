@@ -97,7 +97,7 @@ def _warn_unknown_model(value: str, name: str, known: set[str]) -> str:
 
 
 class Settings(BaseSettings):
-    """EvalRAG configuration.
+    """Veritas RAG configuration.
 
     All settings can be overridden by environment variables or a `.env` file.
     Field validation runs at construction time; cross-field runtime checks live
